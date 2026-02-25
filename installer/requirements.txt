@@ -1,0 +1,8 @@
+pdfplumber
+PySide6
+Pillow
+greenlet==3.1.1
+playwright==1.49.1
+toml
+beautifulsoup4
+httpx

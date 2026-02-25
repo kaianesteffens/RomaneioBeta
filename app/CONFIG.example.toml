@@ -1,0 +1,77 @@
+[fretebot]
+fator_cubagem = 6000
+cache_dir = "cache"
+github_repo = ""  # Ex: "meu-usuario/FreteBot" — deixe vazio para desabilitar auto-update
+
+[romaneio]
+cep_origem = "99740000"
+
+[transportadoras.braspress]
+habilitado = true
+cnpj = "00000000000000"
+senha = "SENHA_BRASPRESS"
+# ufs_atendidas = ["RS", "SC", "PR", "SP"]  # deixe vazio ou remova para atender todas
+
+[transportadoras.bauer]
+habilitado = true
+cotacao_url = "https://SEU_PORTAL_BAUER/cotacao"
+cnpj_pagador = "00000000000000"
+cnpj_remetente = "00000000000000"
+cnpj_destinatario = ""
+headless = true
+quantidade = 1
+# ufs_atendidas = ["RS", "SC", "PR"]
+
+[transportadoras.trd]
+habilitado = true
+email = "seu-email@empresa.com"
+senha = "SENHA_TRD"
+headless = true
+volumes = 1
+altura = 0.1
+largura = 0.1
+comprimento = 0.1
+ufs_atendidas = ["RS", "SC", "PR", "SP", "MG", "ES", "RJ"]
+
+[transportadoras.agex]
+habilitado = true
+cnpj = "00.000.000/0000-00"
+senha = "SENHA_AGEX"
+cnpj_remetente = "00.000.000/0000-00"
+cnpj_destinatario = ""
+descricao_mercadoria = "Mercadoria"
+tipo_produto = "Artigos Esportivos"
+volumes = 1
+altura_m = 0.13
+largura_m = 0.31
+comprimento_m = 0.51
+headless = true
+ufs_atendidas = ["PR", "SP", "GO", "DF", "TO", "PA", "MT", "MS"]
+
+[transportadoras.eucatur]
+habilitado = true
+dominio = "EUC"
+usuario = "SEU_USUARIO"
+senha = "SENHA_EUCATUR"
+ufs_atendidas = ["RR", "AM", "AC", "RO", "MT", "MS"]
+
+[transportadoras.rodonaves]
+habilitado = false
+dominio = "RTE"
+usuario = "SEU_USUARIO"
+senha = "SENHA_RODONAVES"
+cnpj_pagador = "00.000.000/0000-00"
+login_url = "https://cliente.rte.com.br/?showLogin=true"
+cotacao_url = "https://sistema.rte.com.br/bin/ssw1608"
+headless = true
+ufs_atendidas = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
+
+[transportadoras.alfa]
+habilitado = false
+login = "SEU_LOGIN"
+senha = "SENHA_ALFA"
+cnpj_remetente = "00.000.000/0000-00"
+login_url = "https://arearestrita.alfatransportes.com.br/login/"
+cotacao_url = "https://arearestrita.alfatransportes.com.br/cotacao/api/"
+headless = false
+ufs_atendidas = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]

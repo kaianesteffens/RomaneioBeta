@@ -1,0 +1,165 @@
+@echo off
+setlocal EnableDelayedExpansion
+
+REM ============================================================
+REM FreteBot — Build do Instalador Windows
+REM NAO precisa instalar Python no sistema!
+REM Baixa Python 3.12 embutido automaticamente.
+REM Unico requisito: Inno Setup 6 (opcional, para gerar .exe)
+REM ============================================================
+
+echo.
+echo ============================================================
+echo  FreteBot - Build do Instalador Windows
+echo ============================================================
+echo.
+
+set "PYDIR=%~dp0python-3.12"
+set "PY=%PYDIR%\python.exe"
+
+REM ── 1. Baixar Python embutido se nao existir ─────────────────
+if not exist "%PY%" (
+    echo [1/5] Baixando Python 3.12 embutido...
+
+    REM Baixar via curl (disponivel no Win10+)
+    curl -L -o "%~dp0python312.zip" "https://www.python.org/ftp/python/3.12.8/python-3.12.8-embed-amd64.zip"
+    if %ERRORLEVEL% neq 0 (
+        echo ERRO: Falha ao baixar Python. Verifique sua conexao.
+        pause
+        exit /b 1
+    )
+
+    REM Extrair
+    mkdir "%PYDIR%" 2>nul
+    powershell -Command "Expand-Archive -Path '%~dp0python312.zip' -DestinationPath '%PYDIR%' -Force"
+    del "%~dp0python312.zip"
+
+    REM Habilitar pip no Python embutido
+    REM Remover limite de import do _pth file
+    for %%f in ("%PYDIR%\python312._pth") do (
+        powershell -Command "(Get-Content '%%f') -replace '#import site','import site' | Set-Content '%%f'"
+    )
+
+    REM Instalar pip
+    curl -L -o "%PYDIR%\get-pip.py" "https://bootstrap.pypa.io/get-pip.py"
+    "%PY%" "%PYDIR%\get-pip.py" --quiet
+    del "%PYDIR%\get-pip.py"
+
+    echo [OK] Python 3.12 pronto em: %PYDIR%
+) else (
+    echo [OK] Python 3.12 encontrado em: %PYDIR%
+)
+
+for /f "tokens=2" %%v in ('"%PY%" --version 2^>^&1') do set PYVER=%%v
+echo      Versao: %PYVER%
+
+REM ── 2. Instalar dependencias ─────────────────────────────────
+echo.
+echo [2/5] Instalando dependencias Python...
+"%PY%" -m pip install --upgrade pip --quiet 2>nul
+"%PY%" -m pip install -r requirements.txt --quiet
+if %ERRORLEVEL% neq 0 (
+    echo ERRO: Falha ao instalar dependencias!
+    pause
+    exit /b 1
+)
+"%PY%" -m pip install pyinstaller --quiet
+echo [OK] Dependencias instaladas
+
+REM ── 2.5. Definir versão do build (1.0, 1.1, 1.2, ...) ───────
+set "VERSION_FILE=%~dp0..\app\version.txt"
+for /f "usebackq tokens=*" %%v in ("%VERSION_FILE%") do set "CUR_VER=%%v"
+if not defined CUR_VER set "CUR_VER=1.0"
+for /f %%v in ('powershell -NoProfile -Command "$v='%CUR_VER%'.Trim(); $parts=$v.Split('.'); $major=$parts[0]; $minor=[int]$parts[1]+1; Write-Output \"$major.$minor\""') do set APP_VERSION=%%v
+if not defined APP_VERSION (
+    echo ERRO: Falha ao calcular a versão do build.
+    pause
+    exit /b 1
+)
+>"%VERSION_FILE%" echo !APP_VERSION!
+set "APP_NAME=Romaneio Beta"
+set "OUTPUT_BASENAME=Romaneio-Beta-Setup-!APP_VERSION!"
+echo [OK] Versao deste build: !APP_VERSION!
+
+REM ── 3. Fechar FreteBot se estiver rodando ──────────────────────────────
+echo.
+tasklist /FI "IMAGENAME eq FreteBot.exe" 2>nul | find /I "FreteBot.exe" >nul
+if %ERRORLEVEL% == 0 (
+    echo [AVISO] FreteBot.exe esta rodando. Fechando...
+    taskkill /IM FreteBot.exe /F >nul 2>&1
+    timeout /t 3 /nobreak >nul
+)
+REM Limpar dist anterior
+if exist "dist\FreteBot" (
+    rmdir /S /Q "dist\FreteBot" 2>nul
+    timeout /t 2 /nobreak >nul
+)
+
+REM ── 4. Gerar executavel com PyInstaller ──────────────────────
+echo.
+echo [4/5] Gerando executavel com PyInstaller...
+"%PY%" -m PyInstaller --clean --noconfirm FreteBot.spec
+if %ERRORLEVEL% neq 0 (
+    echo ERRO: PyInstaller falhou!
+    pause
+    exit /b 1
+)
+echo [OK] Executavel gerado em dist\FreteBot\
+
+REM ── 5. Copiar CONFIG.example.toml para dist (se necessário) ──
+if not exist "dist\\FreteBot\\_internal\\CONFIG.example.toml" (
+    if exist \"%~dp0..\\app\\CONFIG.example.toml\" (
+        copy /Y \"%~dp0..\\app\\CONFIG.example.toml\" \"dist\\FreteBot\\_internal\\CONFIG.example.toml\" >nul
+        echo [OK] CONFIG.example.toml copiado para dist\\_internal
+    )
+) else (
+    echo [OK] CONFIG.example.toml ja presente em dist\\_internal
+)
+
+REM ── 6. Compilar instalador com Inno Setup ────────────────────
+echo.
+echo [5/5] Compilando instalador (Inno Setup)...
+
+set ISCC=
+if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" (
+    set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
+) else if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" (
+    set "ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe"
+) else (
+    echo.
+    echo ============================================================
+    echo  AVISO: Inno Setup 6 nao encontrado.
+    echo  O executavel foi gerado em: dist\FreteBot\FreteBot.exe
+    echo  Voce pode rodar direto daqui!
+    echo.
+    echo  Para criar o instalador .exe, instale o Inno Setup:
+    echo  https://jrsoftware.org/isdl.php
+    echo  Depois execute: build.bat novamente
+    echo ============================================================
+    goto :skip_inno
+)
+
+"%ISCC%" /DMyAppName="!APP_NAME!" /DMyAppVersion=!APP_VERSION! /DMyOutputBaseFilename="!OUTPUT_BASENAME!" /DMySetupIconFile="%~dp0assets\romaneio.ico" FreteBot-installer.iss
+if %ERRORLEVEL% neq 0 (
+    echo ERRO: Inno Setup falhou!
+    pause
+    exit /b 1
+)
+echo [OK] Instalador gerado!
+set "INSTALLER_PATH=installer\!OUTPUT_BASENAME!.exe"
+
+:skip_inno
+echo.
+echo ============================================================
+echo  BUILD CONCLUIDO!
+echo.
+echo  App:         !APP_NAME! !APP_VERSION!
+echo  Executavel:  dist\FreteBot\FreteBot.exe
+if exist "!INSTALLER_PATH!" (
+    echo  Instalador:  !INSTALLER_PATH!
+)
+echo ============================================================
+echo.
+pause
+
+endlocal
