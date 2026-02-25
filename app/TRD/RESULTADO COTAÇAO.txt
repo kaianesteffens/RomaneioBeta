@@ -1,0 +1,59 @@
+<div class="portlet light no-box">
+                            <div ng-show="true" class="row fade-out">
+                                <div class="col-md-4 col-sm-4">
+                                    <status-card-js color-class="card-green-money" icon="fa fa-usd" title="Valor da prestação" ng-model="vm.cotacao.valorFreteDesc" class="ng-pristine ng-untouched ng-valid ng-isolate-scope ng-not-empty" style=""><!-- -->
+<div id="" class="status-card" ng-class="{'status-card-half': vm.half}">
+  <div id="" class="status-card-bar card-green-money status-card-square" ng-class="{'status-card-square': vm.icon}">
+    <i class="fa fa-usd"></i>
+  </div>
+  <div class="status-card-key">
+    <label class="ng-binding">
+      Valor da prestação
+    </label>
+  </div>
+
+  <div class="status-card-value">
+    <label class="ng-binding">
+      
+      R$&nbsp;156,94
+    </label>
+  </div>
+</div>
+<!-- 
+<status-card-js id-bar="barra-vermelha" title="Titulo" value="Valor"> //Padrão
+</status-card-js>
+<status-card-js title="Titulo" value="Valor" half="true"> //Pequeno
+</status-card-js>
+<status-card-js icon="fa fa-usd"  title="Titulo" value="Valor" > //com icone
+</status-card-js> --></status-card-js>
+                                </div>
+
+                                <div class="col-md-4 col-sm-4" ng-show="vm.stepSelected(vm.libs.stepsCotacao.SIMULADO)" style="">
+                                    <status-card-js color-class="card-calendario" icon="fa fa-calendar" title="Validade" ng-model="vm.cotacao.dataValidadeDesc" class="ng-pristine ng-untouched ng-valid ng-isolate-scope ng-not-empty" style=""><!-- -->
+<div id="" class="status-card" ng-class="{'status-card-half': vm.half}">
+  <div id="" class="status-card-bar card-calendario status-card-square" ng-class="{'status-card-square': vm.icon}">
+    <i class="fa fa-calendar"></i>
+  </div>
+  <div class="status-card-key">
+    <label class="ng-binding">
+      Validade
+    </label>
+  </div>
+
+  <div class="status-card-value">
+    <label class="ng-binding">
+      
+      23/03/2026
+    </label>
+  </div>
+</div>
+<!-- 
+<status-card-js id-bar="barra-vermelha" title="Titulo" value="Valor"> //Padrão
+</status-card-js>
+<status-card-js title="Titulo" value="Valor" half="true"> //Pequeno
+</status-card-js>
+<status-card-js icon="fa fa-usd"  title="Titulo" value="Valor" > //com icone
+</status-card-js> --></status-card-js>
+                                </div>
+                            </div>
+                        </div>

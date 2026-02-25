@@ -1,0 +1,79 @@
+<form id="kc-form-login" action="https://sso.senior.com.br/realms/senior-x/login-actions/authenticate?session_code=6i4GZhUWodzfHUXFz5fx-vem8gK5uQN7u1euMw9T99I&amp;execution=ff34f4f1-1f18-472e-906b-d1d830257b53&amp;client_id=senior-x&amp;tab_id=xY-LrjTxOL8&amp;client_data=eyJydSI6Imh0dHBzOi8vcGxhdGZvcm0uc2VuaW9yLmNvbS5ici9hdXRoL2xvZ2luLXdpdGgtaWRwIiwicnQiOiJjb2RlIiwic3QiOiJtTU5WbFYxMzdoZHpwYkNGSUZOdGNnIn0" method="post">
+              <div class="label label-title" style="color: rgb(51, 51, 51);">
+                <span>Acesse a sua conta</span>
+              </div>
+              <div class="alert alert-warning hidden" id="message-container" role="alert" aria-live="polite" aria-atomic="true">
+                <button type="button" id="message-container-close-button" class="close" aria-label="Fechar" title="Fechar">×</button>
+                <span class="hidden" id="message"></span>
+                <span class="hidden" id="invalidTenantSettings">Não foi possível obter o domínio do tenant.</span>
+              </div>
+                  <div class="form-group">
+                    <label for="username-input-field" class="sr-only">Insira o nome de usuário:</label>
+                    <div class="input-group hidden" id="input_group_username" aria-hidden="true">
+                        <span class="input-group-addon" aria-hidden="true">
+                            <i class="fa fa-user" aria-hidden="true"></i>
+                        </span>
+                        <input id="username-input-field" placeholder="usuario@dominio.com.br" class="form-control" name="username" value="" autofocus="" type="text" autocomplete="username" aria-label="Insira o nome de usuário:" aria-required="true" aria-invalid="">
+                    </div>
+                    <div id="username_readonly_container" aria-live="polite">
+                      <span>Nome do usuário:</span>
+                      <span id="username_readonly" aria-label="Usuário atual"><span><br> darlu@trdtransportes.com</span></span>
+                    </div>
+
+
+                  </div>
+
+
+              <div class="form-group" id="password-container">
+                  <div class="">
+                    <label for="password-input-field" class="sr-only">Insira a senha:</label>
+                    <div class="input-group">
+                        <span class="input-group-addon" aria-hidden="true">
+                            <i class="fa fa-lock" aria-hidden="true"></i>
+                        </span>
+                        <input id="password-input-field" placeholder="Senha" class="form-control" name="password" type="password" autocomplete="current-password" aria-label="Insira a senha:" aria-required="true" aria-invalid="">
+                        <span class="input-group-btn">
+                            <button type="button" class="btn" id="spy-pass" aria-label="Mostrar senha" title="Mostrar senha" tabindex="-1" aria-hidden="true">
+                                <i class="fa fa-eye" aria-hidden="true"></i>
+                            </button>
+                        </span>
+                    </div>
+                  </div>
+
+
+              </div>
+
+            <div class="form-group login-pf-settings">
+                <div id="kc-form-options">
+                    <div class="checkbox hidden" id="remember-me">
+                        <label class="mt-checkbox mt-checkbox-outline" for="rememberMe">
+                                <input id="rememberMe" name="rememberMe" type="checkbox" aria-label="Mantenha-me conectado" aria-checked="false"> Mantenha-me conectado
+                                <span aria-hidden="true"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div id="kc-form-buttons" class="form-group" role="group" aria-label="Ações do formulário">
+                    <input type="hidden" id="id-hidden-input" name="credentialId">
+                    <button class="hidden btn btn-primary btn-block btn-lg" name="next" id="nextBtn" type="button" aria-label="Próximo" aria-busy="false" aria-hidden="true">
+                      <span class="spinner hidden" aria-hidden="true"></span>
+                      <span class="button-text">Próximo</span>
+                    </button>
+                    <button class="btn btn-primary btn-block btn-lg" name="login" id="loginbtn" type="button" aria-label="Autenticar" aria-busy="false">
+                      <span class="spinner hidden" role="status" aria-hidden="true"></span>
+                      <span class="button-text">Autenticar</span>
+                    </button>
+                    <button class="btn btn-secondary btn-block btn-lg" name="cancel" id="previousBtn" type="button" aria-label="Voltar" style="background-color: rgb(255, 255, 255); border-color: rgb(204, 204, 204);">
+                      Voltar
+                    </button>
+                </div>
+                <div class="forget-password">
+                    <p><a id="forgot-password" aria-label="Esqueceu a senha?" href="https://platform.senior.com.br/tecnologia/platform/login/forgot.html?redirectTo=https%3A%2F%2Fplatform-arquitetura.senior.com.br%2Ftecnologia%2Fplatform%2Fsenior-x%2F%23%2F">Esqueceu a senha?</a></p>
+                </div>
+            
+            <div class="privacy-policy">
+              <div>
+                 <a href="https://www.senior.com.br/politica-de-privacidade" class="policy" aria-label="Política de Privacidade" target="_blank">Política de Privacidade</a>
+              </div>
+          </div>
+          </div></form>

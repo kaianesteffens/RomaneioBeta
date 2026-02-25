@@ -1,7 +1,7 @@
 [fretebot]
 fator_cubagem = 6000
 cache_dir = "cache"
-github_repo = ""  # Ex: "meu-usuario/FreteBot" — deixe vazio para desabilitar auto-update
+github_repo = "kaianesteffens/FreteBot"  # Repositório GitHub para auto-update
 
 [romaneio]
 cep_origem = "99740000"

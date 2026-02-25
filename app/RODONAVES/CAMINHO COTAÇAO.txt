@@ -1,0 +1,10 @@
+<li id="dropdownQuotation" class="dropdown open">
+                                <a href="#" class="dropdown-toggle" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="true">
+                                    Cotação
+                                </a>
+                                <ul class="dropdown-menu">
+                                    <li><a href="/Quotation">Calcule seu Frete</a></li>
+                                    <li><a href="/Quotation/QuotationSimulation">Simule seu Frete</a></li>
+                                    <li><a href="/Quotation/MyQuotation">Minhas cotações</a></li>
+                                </ul>
+                            </li>

@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+*.egg
+
+# Logs
+*.log
+romaneio_cotacao.log
+
+# Cache
+cache/
+*.sqlite
+*.db
+
+# Build artifacts
+build/output/
+*.exe
+*.msi
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temp
+*.tmp
+*.bak
+
+# Config with secrets (user-specific)
+fretebot/CONFIG.toml
+CONFIG.toml

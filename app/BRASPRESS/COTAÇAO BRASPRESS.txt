@@ -1,0 +1,247 @@
+<form id="formCotacao" data-toggle="validator" action="w/cotacao/calcular" method="post" novalidate="novalidate" class="fv-form fv-form-bootstrap"><button type="submit" class="fv-hidden-submit" style="display: none; width: 0px; height: 0px;"></button>
+
+					<input id="cnpjLogado" type="hidden" value="40223106000179">
+					<input id="tipoCliente" type="hidden" value="J">
+					<input type="hidden" name="email" id="email" value="darlu@darlu.com.br">
+					
+
+
+					<!-- SESSION ONE -->
+					<div id="step1" class="panel panel-default">
+								<div class="panel-heading" style="font-size: 10px;">Informe os dados:</div>
+								<div class="panel-body">
+							<fieldset>
+							
+								<div class="col-lg-6 form-group">
+									<label for="modal" class="col-lg-6 control-label">Modal(*):</label>
+									<div class="col-lg-12">
+										<select class="form-control" id="modal" name="modal" required="" data-fv-field="modal">
+										    <option value="R">Rodoviário</option>
+										    <option value="A">Aéreo</option>
+										</select>
+									<small class="help-block" data-fv-validator="notEmpty" data-fv-for="modal" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor</small></div>	
+								</div>
+								
+								<div class="col-lg-6 form-group has-success">
+									<label for="modal" class="col-lg-6 control-label">Tipo de Frete(*):</label>
+									<div class="col-lg-12">
+										<select class="form-control" id="tipoFrete" name="tipoFrete" required="" data-fv-field="tipoFrete">
+											<option value="1">CIF (pagante é o Remetente)</option>
+											<option value="2">FOB (pagante é o Destinatário)</option>
+											<option value="3">Consignado (pagante é um Terceiro)</option>
+										</select>
+									<small class="help-block" data-fv-validator="notEmpty" data-fv-for="tipoFrete" data-fv-result="VALID" style="display: none;">Por favor insira um valor</small></div>
+								</div>		
+							</fieldset>
+							<fieldset>
+								<div class="col-lg-4 form-group has-success">
+							    	<label for="cnpjRemetente" class="col-lg-12 control-label">CNPJ/ CPF Remetente(*):</label>
+							    	<div class="col-lg-12">
+							    		<input type="text" class="form-control cnpj-mask" id="cnpjRemetente" name="cnpjRemetenteStr" placeholder="CNPJ/ CPF Remetente" maxlength="18" required="" data-fv-field="cnpjRemetenteStr" readonly="readonly" tabindex="-1">
+							    	<small class="help-block" data-fv-validator="callback" data-fv-for="cnpjRemetenteStr" data-fv-result="VALID" style="display: none;">CPF/CNPJ inválido!</small><small class="help-block" data-fv-validator="notEmpty" data-fv-for="cnpjRemetenteStr" data-fv-result="VALID" style="display: none;">Por favor insira um valor</small><small class="help-block" data-fv-validator="stringLength" data-fv-for="cnpjRemetenteStr" data-fv-result="VALID" style="display: none;">Por favor insira menos de 18 caracteres</small></div>	
+								</div>
+								<div class="col-lg-8 form-group">
+							    	<label for="razaoSocialRemetente" class="col-lg-12 control-label">Razão Social/ Nome Remetente:</label>
+							    	<div class="col-lg-12">
+							    		<input type="text" class="form-control" id="razaoSocialRemetente" name="razaoSocialRemetente" placeholder="Razão Social/ Nome Remetente" maxlength="60" readonly="" tabindex="-1" data-fv-field="razaoSocialRemetente">
+							    	<small class="help-block" data-fv-validator="stringLength" data-fv-for="razaoSocialRemetente" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor com comprimento válido</small></div>	
+								</div>
+							</fieldset>
+							<fieldset>	
+								<div class="col-lg-4 form-group">
+							    	<label for="cnpjDestinatario" class="col-lg-12 control-label">CNPJ/ CPF Destinatário(*):</label>
+							    	<div class="col-lg-12">
+							    		<input type="text" class="form-control cnpj-mask" id="cnpjDestinatario" name="cnpjDestinatarioStr" placeholder="CNPJ/ CPF Destinatário" maxlength="18" required="" data-fv-field="cnpjDestinatarioStr">
+							    	<small class="help-block" data-fv-validator="callback" data-fv-for="cnpjDestinatarioStr" data-fv-result="NOT_VALIDATED" style="display: none;">CPF/CNPJ inválido!</small><small class="help-block" data-fv-validator="notEmpty" data-fv-for="cnpjDestinatarioStr" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor</small><small class="help-block" data-fv-validator="stringLength" data-fv-for="cnpjDestinatarioStr" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor com comprimento válido</small></div>	
+								</div>
+								<div class="col-lg-8 form-group">
+							    	<label for="razaoSocialDestinatario" class="col-lg-12 control-label">Razão Social/ Nome Destinatário:</label>
+							    	<div class="col-lg-12">
+							    		<input type="text" class="form-control" id="razaoSocialDestinatario" name="razaoSocialDestinatario" placeholder="Razão Social/ Nome Destinatário" maxlength="60" readonly="" tabindex="-1" data-fv-field="razaoSocialDestinatario">
+							    	<small class="help-block" data-fv-validator="stringLength" data-fv-for="razaoSocialDestinatario" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor com comprimento válido</small></div>	
+								</div>
+							</fieldset>
+					/w/bi/PERFORMANCE_ENTREGA		
+							<fieldset id="fsConsignado" style="display:none;">	
+								<div class="col-lg-4 form-group">
+							    	<label for="cnpjConsignado" class="col-lg-12 control-label">CNPJ/ CPF Consignado(*):</label>
+							    	<div class="col-lg-12">
+							    		<input type="text" class="form-control cnpj-mask" id="cnpjConsignado" name="cnpjConsignadoStr" placeholder="Cnpj Consignado" maxlength="18" data-fv-field="cnpjConsignadoStr">
+							    	<small class="help-block" data-fv-validator="callback" data-fv-for="cnpjConsignadoStr" data-fv-result="NOT_VALIDATED" style="display: none;">CPF/CNPJ não cadastrado, contatar sua filial de atendimento para maiores informações.</small><small class="help-block" data-fv-validator="notEmpty" data-fv-for="cnpjConsignadoStr" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor</small><small class="help-block" data-fv-validator="stringLength" data-fv-for="cnpjConsignadoStr" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor com comprimento válido</small></div>	
+								</div>
+								<div class="col-lg-8 form-group">
+							    	<label for="razaoSocialConsignado" class="col-lg-12 control-label">Razão Social/ Nome Consignado:</label>
+							    	<div class="col-lg-12">
+							    		<input type="text" class="form-control" id="razaoSocialConsignado" name="razaoSocialConsignado" placeholder="Razão Social Consignado" maxlength="60" readonly="" tabindex="-1" data-fv-field="razaoSocialConsignado">
+							    	<small class="help-block" data-fv-validator="stringLength" data-fv-for="razaoSocialConsignado" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor com comprimento válido</small></div>	
+								</div>
+							</fieldset>
+
+							<fieldset class="session-two">
+
+                                <div class="col-lg-4 form-group has-success">
+                                    <label for="cep" class="col-lg-12 control-label">CEP Origem(*):</label>
+                                    <div class="col-lg-12">
+                                        <input type="text" class="form-control hint tooltipstered" id="cepOrigem" name="cepOrigem" maxlength="8" required="" data-fv-field="cepOrigem">
+                                    <small class="help-block" data-fv-validator="notEmpty" data-fv-for="cepOrigem" data-fv-result="VALID" style="display: none;">Campo CEP Origem é de preenchimento obrigatório!</small><small class="help-block" data-fv-validator="callback" data-fv-for="cepOrigem" data-fv-result="VALID" style="display: none;">Filial não encontrada!</small><small class="help-block" data-fv-validator="stringLength" data-fv-for="cepOrigem" data-fv-result="VALID" style="display: none;">Por favor insira menos de 8 caracteres</small></div>
+                                </div>
+                                <div class="col-lg-4 form-group">
+                                    <label for="filialOrigem" class="col-lg-12 control-label">Filial Origem:</label>
+                                    <div class="col-lg-12">
+                                        <input type="hidden" id="filialOrigem" name="filialOrigem" value="69">
+                                        <input type="text" class="form-control" id="nomeFilialOrigem" name="nomeFilialOrigem" maxlength="60" disabled="" data-fv-field="nomeFilialOrigem">
+                                    <small class="help-block" data-fv-validator="stringLength" data-fv-for="nomeFilialOrigem" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor com comprimento válido</small></div>
+                                </div>
+                            </fieldset>
+                            <fieldset class="session-two">
+                                <div class="col-lg-4 form-group">
+                                    <label for="cep" class="col-lg-12 control-label">CEP Destino(*):</label>
+                                    <div class="col-lg-12">
+                                        <input type="text" class="form-control hint tooltipstered" id="cepDestino" name="cepDestino" maxlength="8" required="" data-fv-field="cepDestino">
+                                    <small class="help-block" data-fv-validator="notEmpty" data-fv-for="cepDestino" data-fv-result="NOT_VALIDATED" style="display: none;">Campo CEP Destino é de preenchimento obrigatório!</small><small class="help-block" data-fv-validator="callback" data-fv-for="cepDestino" data-fv-result="NOT_VALIDATED" style="display: none;">Filial não encontrada!</small><small class="help-block" data-fv-validator="stringLength" data-fv-for="cepDestino" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor com comprimento válido</small></div>
+                                </div>
+                                <div class="col-lg-4 form-group">
+                                    <label for="filialDestino" class="col-lg-12 control-label">Filial Destino:</label>
+                                    <div class="col-lg-12">
+                                        <input type="hidden" id="filialDestino" name="filialDestino" value="">
+                                        <input type="text" class="form-control" id="nomeFilialDestino" name="nomeFilialDestino" maxlength="60" disabled="" data-fv-field="nomeFilialDestino">
+                                    <small class="help-block" data-fv-validator="stringLength" data-fv-for="nomeFilialDestino" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor com comprimento válido</small></div>
+                                </div>
+                            </fieldset>
+
+                            <fieldset class="session-two">
+                                <div class="col-lg-12 form-group">
+                                    <label for="endereco" class="col-lg-12 control-label">Endereço(*):</label>
+                                    <div class="col-lg-12">
+                                        <textarea class="form-control" id="endereco" name="endereco" rows="2" readonly="" tabindex="-1" data-fv-field="endereco"></textarea>
+                                    <small class="help-block" data-fv-validator="callback" data-fv-for="endereco" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor válido</small></div>
+                                </div>
+
+                            </fieldset>
+							
+						</div>
+					</div>		
+					
+					<!-- SESSION TWO -->
+					<div class="panel panel-default">		
+ 							<div class="panel-body">
+ 								<fieldset>
+						            <div class="col-sm-3 form-group">
+					                	<label for="ddd" class="col-lg-12 control-label">Total de volumes(*):</label>
+					                	<div class="col-lg-12">
+					                		<input type="number" class="form-control" id="volumes" name="volumes" max="9999999" maxlength="7" size="5px" placeholder="0" readonly="" tabindex="-1" data-fv-field="volumes">
+					                	<small class="help-block" data-fv-validator="integer" data-fv-for="volumes" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um número inteiro válido</small><small class="help-block" data-fv-validator="lessThan" data-fv-for="volumes" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor menor ou igual a %s</small><small class="help-block" data-fv-validator="stringLength" data-fv-for="volumes" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor com comprimento válido</small></div>	
+						            </div>
+					        		<div class="col-sm-3 form-group">    	
+					                	<label for="ramal" class="col-lg-12 control-label">Peso (*):</label>
+					                	<div class="col-lg-12">
+					                		<input type="text" class="form-control" id="peso" name="peso" maxlength="9" required="" placeholder="0,00" data-fv-field="peso">
+					                	<small class="help-block" data-fv-validator="callback" data-fv-for="peso" data-fv-result="NOT_VALIDATED" style="display: none;">Peso precisa ter um valor maior que zero.</small><small class="help-block" data-fv-validator="notEmpty" data-fv-for="peso" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor</small><small class="help-block" data-fv-validator="stringLength" data-fv-for="peso" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor com comprimento válido</small></div>	
+					                </div>
+					                <div class="col-sm-3 form-group">
+					                	<label for="telefone" class="col-lg-12 control-label">Valor da Mercadoria R$(*):</label>
+					                	<div class="col-lg-12">
+					                		<input type="text" class="form-control" id="vlrMercadoria" maxlength="12" name="vlrMercadoria" placeholder="0,00" required="" data-fv-field="vlrMercadoria">
+					                	<small class="help-block" data-fv-validator="callback" data-fv-for="vlrMercadoria" data-fv-result="NOT_VALIDATED" style="display: none;">Valor da Mercadoria precisa ser maior que zero.</small><small class="help-block" data-fv-validator="notEmpty" data-fv-for="vlrMercadoria" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor</small><small class="help-block" data-fv-validator="stringLength" data-fv-for="vlrMercadoria" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor com comprimento válido</small></div>	
+					            	</div>	
+								</fieldset>	    
+ 							
+ 								<fieldset>
+ 									
+ 									<div style="padding:15px; border: solid 1px #ccc;">
+ 										
+ 										
+  									<div class="table-responsive">
+										<table id="tableItems" class="table table-striped table-bordered font11">
+											<thead>
+												<tr>
+													<th>Comprimento (m)</th>
+													<th>Largura (m)</th>
+													<th>Altura (m)</th>
+													<th>Nº de Volumes</th>
+													<th>Volumetria</th>
+													<th>Ação</th>
+												</tr>
+											</thead>
+											<tbody>
+												<tr>
+													<td><div class="col-lg-12 form-group"><input type="text" class="form-control maskmoney calculado" id="cubagem0comprimento" name="cubagem[0].comprimento" maxlength="5" placeholder="0,00" required="" data-fv-field="cubagem[0].comprimento"><small class="help-block" data-fv-validator="notEmpty" data-fv-for="cubagem[0].comprimento" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor</small><small class="help-block" data-fv-validator="stringLength" data-fv-for="cubagem[0].comprimento" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor com comprimento válido</small></div></td>
+													<td><div class="col-lg-12 form-group"><input type="text" class="form-control maskmoney calculado" id="cubagem0largura" name="cubagem[0].largura" maxlength="5" placeholder="0,00" required="" data-fv-field="cubagem[0].largura"><small class="help-block" data-fv-validator="notEmpty" data-fv-for="cubagem[0].largura" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor</small><small class="help-block" data-fv-validator="stringLength" data-fv-for="cubagem[0].largura" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor com comprimento válido</small></div></td>
+													<td><div class="col-lg-12 form-group"><input type="text" class="form-control maskmoney calculado" id="cubagem0altura" name="cubagem[0].altura" maxlength="5" placeholder="0,00" required="" data-fv-field="cubagem[0].altura"><small class="help-block" data-fv-validator="notEmpty" data-fv-for="cubagem[0].altura" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor</small><small class="help-block" data-fv-validator="stringLength" data-fv-for="cubagem[0].altura" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor com comprimento válido</small></div></td>
+													<td><div class="col-lg-12 form-group"><input type="text" class="form-control volumes calculado" id="cubagem0volumes" name="cubagem[0].volumes" maxlength="4" max="9999" placeholder="0" required="" data-fv-field="cubagem[0].volumes"><small class="help-block" data-fv-validator="callback" data-fv-for="cubagem[0].volumes" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor maior que zero.</small><small class="help-block" data-fv-validator="regexp" data-fv-for="cubagem[0].volumes" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um número válido.</small><small class="help-block" data-fv-validator="lessThan" data-fv-for="cubagem[0].volumes" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor menor ou igual a %s</small><small class="help-block" data-fv-validator="notEmpty" data-fv-for="cubagem[0].volumes" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor</small><small class="help-block" data-fv-validator="stringLength" data-fv-for="cubagem[0].volumes" data-fv-result="NOT_VALIDATED" style="display: none;">Por favor insira um valor com comprimento válido</small></div></td>
+													<td><div class="col-lg-12 form-group"><input type="text" class="form-control maskmoney calculado" id="cubagem0total" name="cubagem[0].total" placeholder="0,00" disabled="" data-fv-field="cubagem[0].total"><small class="help-block" data-fv-validator="callback" data-fv-for="cubagem[0].total" data-fv-result="NOT_VALIDATED" style="display: none;">As medidas informadas são muito grandes, contatar sua filial de atendimento para maiores informações.</small></div></td>
+													<td> 
+														&nbsp;
+							  						</td>
+												</tr>
+												
+											</tbody>
+										</table>
+									</div>
+									<div class="col-lg-12 visible-xs" style="text-align: center;margin-top: -9px;">
+										<img src="static/img/finger-slider.png" height="70px">
+									</div>		
+									<label class="col-lg-12 control-label visible-xs" style="color:red; font-size: 12px;">Deslize para a esquerda para visualizar e preencher os campos.</label>
+									
+									<div id="divAdd" class="col-lg-12">
+										<button id="btnAdd" type="button" class="hint btn btn-default btn-icon tooltipstered">
+			  								<i class="fa fa-plus-circle"></i>
+			  						</button>
+							</div>
+									
+								</div>
+							</fieldset>
+							
+ 						</div>
+					</div>
+
+                    <!-- SESSION THREE -->
+					<div class="panel panel-default">
+					    <div class="panel-body">
+
+					        <fieldset>
+					            <div class="col-lg-12 form-group">
+					                <label for="recipient-name" class="col-lg-12 control-label">Email para envio:</label>
+					                <div class="col-lg-8">
+                                        <input type="text" class="form-control" value="darlu@darlu.com.br" readonly="" tabindex="-1">
+                                    </div>
+					            </div>
+					        </fieldset>
+
+					        <fieldset>
+					            <div class="col-sm-12 form-group">
+                                    <label for="recipient-name" class="col-lg-12 control-label">Informe outro email para receber o comprovante:</label>
+                                    <div class="col-lg-8">
+                                        <input id="altEmail" type="text" class="form-control" placeholder="@">
+                                    </div>
+                                </div>
+                            </fieldset>
+
+                            <fieldset>
+                                <div class="form-group" style="float: right; margin-bottom: 15px;">
+                                    <input class="btn btn-success" type="submit" id="btnCalcular" value="Calcular">
+                                </div>
+                            </fieldset>
+
+					    </div>
+
+					</div>
+						
+					
+					<!-- SESSION FOUR -->
+					<div id="step4" class="panel panel-default result-cotacao" style="display: none;">
+						<div class="panel-heading" style="font-size: 10px;">Resultado da cotação:</div>
+							<div class="panel-body">
+								<div id="step4Result" style="margin:5px;">
+								</div>
+								<div class="form-group" style="float: right; margin-top: 15px;">
+								<a class="btn btn-success" type="button" id="btnNovo">Nova Cotacao</a>
+							</div>
+						</div>
+					</div>
+					
+					<div class="col-xs-12 form-group text-center">    
+					<input id="btnVoltar" class="btn btn-success" type="button" value="Voltar" onclick="window.location.href='/w/cliente/view'">
+					</div>
+
+				</form>

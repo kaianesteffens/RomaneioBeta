@@ -1,0 +1,13 @@
+<div class="modal-content" uib-modal-transclude=""><div class="modal-header modal-warning modal-alert ng-scope">
+  <button type="button" class="close" ng-click="cancel()" aria-hidden="true"></button>
+  <h4 class="modal-title ng-binding">Simular cotação</h4>
+</div>
+
+<div class="modal-body ng-scope">
+  <p class="ng-binding"> Deseja enviar os dados para simulação? </p>
+</div>
+
+<div class="modal-footer ng-scope">
+  <button ng-click="ok()" class="btn btn-primary ng-binding">Enviar</button>
+  <button ng-click="cancel()" class="btn btn-link">Cancelar</button>
+</div></div>
