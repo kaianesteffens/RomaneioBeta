@@ -47,6 +47,7 @@ hiddenimports = [
     "cotacao_transportadoras",
     "updater",
     "license",
+    "error_reporter",
 ]
 
 # ── Data files ────────────────────────────────────────────────────────────

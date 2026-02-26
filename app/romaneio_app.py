@@ -50,6 +50,7 @@ from cotacao_transportadoras import (
 )
 from updater import check_for_update, apply_update, get_repo_from_config, needs_restart, restart_app
 from license import get_saved_license, save_license, validate_license, get_machine_id, LicenseStatus
+from error_reporter import install_global_hooks, report_error, report_error_message
 
 
 # Eventos customizados para comunicação entre threads
@@ -1800,6 +1801,7 @@ def main():
     try:
         _instalar_thread_excepthook()
         setup_global_exception_handler()
+        install_global_hooks()  # DEPOIS dos outros hooks, para envolver todos
 
         # Log de inicialização (diagnóstico: versão, caminhos, etc.)
         try:
@@ -1885,6 +1887,7 @@ def main():
         except SystemExit:
             raise
         except Exception as _lic_err:
+            report_error(context="verificacao_licenca")
             print(f"[FreteBot] Verificação de licença falhou: {_lic_err}", file=sys.stderr, flush=True)
 
         # ── Verificação de atualização via GitHub ──
@@ -1937,6 +1940,7 @@ def main():
                                 "O aplicativo continuará com a versão atual.",
                             )
         except Exception as _upd_err:
+            report_error(context="verificacao_atualizacao")
             print(f"[FreteBot] Verificação de atualização falhou: {_upd_err}", file=sys.stderr, flush=True)
 
         _migrar_config_se_necessario()
@@ -1964,12 +1968,15 @@ def main():
         raise
     except Exception:
         crash_msg = _tb.format_exc()
+        report_error(context="crash_fatal")
         print(f"[FreteBot] CRASH FATAL:\n{crash_msg}", file=sys.stderr, flush=True)
         # Tenta mostrar msgbox para o usuário
         try:
             QMessageBox.critical(None, "FreteBot - Erro Fatal", f"O aplicativo encontrou um erro:\n\n{crash_msg[:800]}")
         except Exception:
             pass
+        # Espera o envio do erro antes de sair
+        import time as _t; _t.sleep(2)
         sys.exit(1)
 
 
