@@ -334,10 +334,12 @@ def restart_app() -> None:
         bat_path = pending_file.read_text(encoding="utf-8").strip()
         if Path(bat_path).exists():
             # Lança o script batch em processo separado (não é filho do app)
+            # CREATE_NO_WINDOW: cria console oculto para cmd.exe rodar o .bat
+            # CREATE_NEW_PROCESS_GROUP: garante que o processo sobrevive ao pai
+            # NÃO usar DETACHED_PROCESS junto, pois bloqueia o console do cmd
             subprocess.Popen(
                 ["cmd", "/c", bat_path],
                 creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
                 | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
                 close_fds=True,
             )
