@@ -1,7 +1,7 @@
 [fretebot]
 fator_cubagem = 6000
 cache_dir = "cache"
-github_repo = "kaianesteffens/RomaneioBeta"  # Repositório GitHub para auto-update
+github_repo = "kaianesteffens/RomaneioBeta-releases"  # Repositório GitHub para auto-update
 license_url = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"  # URL do gist de licenças (administrador configura)
 
 [romaneio]
