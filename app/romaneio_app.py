@@ -49,6 +49,7 @@ from cotacao_transportadoras import (
     ResultadoCotacao,
 )
 from updater import check_for_update, apply_update, get_repo_from_config, needs_restart, restart_app
+from license import get_saved_license, save_license, validate_license, get_machine_id, LicenseStatus
 
 
 # Eventos customizados para comunicação entre threads
@@ -424,7 +425,7 @@ def _escrever_config_toml(config: dict[str, Any], path: Path) -> None:
 def _criar_config_empresa_vazia(nome: str) -> None:
     """Cria CONFIG.toml com todas as transportadoras desabilitadas."""
     config: dict[str, Any] = {
-        "fretebot": {"fator_cubagem": 6000, "cache_dir": "cache", "github_repo": ""},
+        "fretebot": {"fator_cubagem": 6000, "cache_dir": "cache", "github_repo": "", "license_url": ""},
         "romaneio": {"cep_origem": ""},
         "transportadoras": {
             "braspress": {"habilitado": False, "cnpj": "", "senha": "",
@@ -1825,6 +1826,66 @@ def main():
 
         app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(True)
+
+        # ── Verificação de licença ──
+        try:
+            _lic_key = get_saved_license()
+            _machine = get_machine_id()
+
+            if not _lic_key:
+                # Pedir chave de ativação
+                while True:
+                    _lic_key, _ok = QInputDialog.getText(
+                        None,
+                        "Ativação — FreteBot",
+                        "Digite sua chave de licença:\n\n"
+                        "Formato: FBOT-XXXX-XXXX-XXXX-XXXX",
+                    )
+                    if not _ok:
+                        sys.exit(0)
+                    _lic_key = _lic_key.strip().upper()
+                    if not _lic_key:
+                        continue
+                    _lic_status = validate_license(_lic_key, _machine)
+                    if _lic_status.valid:
+                        save_license(_lic_key)
+                        break
+                    else:
+                        QMessageBox.warning(
+                            None, "Licença Inválida",
+                            _lic_status.message or "Chave não reconhecida.",
+                        )
+            else:
+                # Validar licença existente
+                _lic_status = validate_license(_lic_key, _machine)
+                if not _lic_status.valid:
+                    QMessageBox.critical(
+                        None, "Licença Bloqueada",
+                        _lic_status.message or "Sua licença não é mais válida.",
+                    )
+                    # Dar chance de inserir outra chave
+                    _lic_key2, _ok2 = QInputDialog.getText(
+                        None,
+                        "Ativação — FreteBot",
+                        "Sua licença foi revogada.\n"
+                        "Digite uma nova chave de licença:",
+                    )
+                    if _ok2 and _lic_key2.strip():
+                        _lic_status2 = validate_license(_lic_key2.strip().upper(), _machine)
+                        if _lic_status2.valid:
+                            save_license(_lic_key2.strip().upper())
+                        else:
+                            QMessageBox.critical(
+                                None, "Licença Inválida",
+                                _lic_status2.message or "Chave não reconhecida.",
+                            )
+                            sys.exit(1)
+                    else:
+                        sys.exit(1)
+        except SystemExit:
+            raise
+        except Exception as _lic_err:
+            print(f"[FreteBot] Verificação de licença falhou: {_lic_err}", file=sys.stderr, flush=True)
 
         # ── Verificação de atualização via GitHub ──
         try:

@@ -56,6 +56,10 @@ crash.log
 app/CONFIG.toml
 app/fretebot/CONFIG.toml
 
+# Licenças admin (dados sensíveis)
+app/licenses_admin.json
+app/licenses.json
+
 # Cache
 cache/
 app/cache/
