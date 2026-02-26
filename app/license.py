@@ -163,6 +163,21 @@ def _fetch_licenses(gist_url: str) -> dict:
         return json.loads(resp.read())
 
 
+def _fetch_licenses_fresh() -> dict:
+    """Busca licenças via API do GitHub (sem cache CDN, sempre atualizado)."""
+    gist_id, token = _get_gist_config()
+    if not gist_id or not token:
+        raise ValueError("Sem gist_id ou token")
+    api_url = f"https://api.github.com/gists/{gist_id}"
+    req = Request(api_url)
+    req.add_header("Authorization", f"token {token}")
+    req.add_header("Accept", "application/vnd.github+json")
+    with urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+        gist_data = json.loads(resp.read())
+    content = gist_data.get("files", {}).get("licenses.json", {}).get("content", "")
+    return json.loads(content) if content else {}
+
+
 def _get_gist_config() -> tuple[str, str]:
     """Retorna (license_gist_id, token) do CONFIG.toml."""
     try:
@@ -204,8 +219,16 @@ def _register_machine(key: str, machine_id: str, gist_url: str) -> bool:
         return False
 
     try:
-        # 1. Buscar dados atuais
-        data = _fetch_licenses(gist_url)
+        # 1. Buscar dados atuais via API (não CDN, para evitar cache stale)
+        api_url = f"https://api.github.com/gists/{gist_id}"
+        req = Request(api_url)
+        req.add_header("Authorization", f"token {token}")
+        req.add_header("Accept", "application/vnd.github+json")
+        with urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+            gist_data = json.loads(resp.read())
+        content = gist_data.get("files", {}).get("licenses.json", {}).get("content", "")
+        data = json.loads(content) if content else {}
+
         lic_data = data.get("licenses", {}).get(key)
         if not lic_data:
             return False
@@ -296,7 +319,11 @@ def validate_license(key: str, machine_id: str = "") -> LicenseStatus:
 
     # Tentar validação online
     try:
-        data = _fetch_licenses(gist_url)
+        # Usa API (dados frescos) quando possível, fallback para CDN
+        try:
+            data = _fetch_licenses_fresh()
+        except Exception:
+            data = _fetch_licenses(gist_url)
         licenses: dict = data.get("licenses", {})
         blocked_keys: list = data.get("blocked_keys", [])
         blocked_machines: list = data.get("blocked_machines", [])
