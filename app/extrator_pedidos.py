@@ -465,7 +465,10 @@ class ExtratorPedidos:
 
                 # Fallback para casos como "KIT-...CABOMOP" (sem separador).
                 if not esquerda:
-                    m_comp = re.search(r'(MOP|CABO|MOUSE|TECLADO)\s*$', esquerda_raw, re.IGNORECASE)
+                    m_comp = re.search(r'\b(MOP|CABO|MOUSE|TECLADO)\b', esquerda_raw, re.IGNORECASE)
+                    if not m_comp:
+                        # Buscar nome de componente na linha completa
+                        m_comp = re.search(r'\b(MOP|CABO|MOUSE|TECLADO)\b', candidata, re.IGNORECASE)
                     if m_comp:
                         esquerda = m_comp.group(1).upper()
 
@@ -480,6 +483,13 @@ class ExtratorPedidos:
                     else:
                         continue
 
+                # Filtrar nomes invalidos: descricoes longas ou medidas
+                _esq_words = esquerda.split()
+                if len(_esq_words) > 3 or '+' in esquerda or '=' in esquerda or '$' in esquerda:
+                    continue
+                if re.match(r'^[\d.,]+\s*(kg|m[³3]|cm)?$', esquerda, re.IGNORECASE):
+                    continue
+
                 info_comp = _extrair_info_caixa(candidata, None)
                 chave = (_norm(esquerda), _norm(info_comp))
                 if chave in vistos:
@@ -488,6 +498,67 @@ class ExtratorPedidos:
                 comps.append((offset, esquerda, info_comp))
                 if offset > max_offset:
                     max_offset = offset
+
+            # ---------------------------------------------------------------
+            # Detecção inline: componentes (MOUSE/TECLADO/MOP/CABO)
+            # embutidos em linhas pipe-delimited.
+            # Sempre roda; se encontrar resultados mais completos que o loop
+            # principal, substitui `comps`.
+            # Ex: "... | MOUSE | CX/50 | 3,950kg | ... TECLADO | CX/40 | ..."
+            # ---------------------------------------------------------------
+            collected_parts = []
+            inline_max_offset = 0
+            for offset in range(-5, 6):
+                idx = idx_base + offset
+                if idx < 0 or idx >= len(linhas):
+                    continue
+                lr = (linhas[idx] or '').strip()
+                if not lr:
+                    continue
+                if re.search(r'\bUNIDADE\b', lr, re.IGNORECASE) and 'R$' in lr:
+                    continue
+                if (
+                    re.search(r'\b(?:CX|FD|C)\s*/\s*\d+', lr, re.IGNORECASE)
+                    or re.search(r'\d+[xX]\d+[xX]\d+', lr)
+                    or re.search(r'[\d.,]+\s*(?:kg|m[³3])', lr, re.IGNORECASE)
+                ):
+                    collected_parts.append(lr)
+                    if offset > inline_max_offset:
+                        inline_max_offset = offset
+
+            if collected_parts:
+                combined = ' '.join(collected_parts)
+                comp_kw = r'\b(MOUSE|TECLADO|MOP|CABO)\b'
+                segments = re.split(comp_kw, combined, flags=re.IGNORECASE)
+                # segments: [before, kw1, text1, kw2, text2, ...]
+                if len(segments) >= 3:
+                    inline_comps: list[tuple[int, str, str]] = []
+                    for k in range(1, len(segments), 2):
+                        comp_name = segments[k].strip().upper()
+                        comp_text = segments[k + 1] if k + 1 < len(segments) else ''
+                        comp_info = _extrair_info_caixa(comp_text, None)
+                        if comp_info:
+                            inline_comps.append((0, comp_name, comp_info))
+
+                    # Usar resultados inline se encontrou mais componentes OU
+                    # se encontrou info mais completa (com kg/m3)
+                    if inline_comps:
+                        inline_has_full = any(
+                            'kg' in ci.lower() and 'm3' in ci.lower()
+                            for _, _, ci in inline_comps
+                        )
+                        orig_has_full = comps and all(
+                            'kg' in ci.lower() and 'm3' in ci.lower()
+                            for _, _, ci in comps
+                        )
+                        if (
+                            len(inline_comps) > len(comps)
+                            or (inline_has_full and not orig_has_full)
+                            or not comps
+                        ):
+                            comps = inline_comps
+                            max_offset = max(max_offset, inline_max_offset)
+                            vistos = {(_norm(n), _norm(i)) for _, n, i in comps}
 
             if not comps:
                 return 0
