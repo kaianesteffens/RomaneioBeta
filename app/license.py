@@ -163,6 +163,79 @@ def _fetch_licenses(gist_url: str) -> dict:
         return json.loads(resp.read())
 
 
+def _get_gist_config() -> tuple[str, str]:
+    """Retorna (license_gist_id, token) do CONFIG.toml."""
+    try:
+        import toml
+        for candidate in [
+            Path(os.getenv("APPDATA", "")) / "FreteBot" / "CONFIG.toml",
+            Path(getattr(sys, "_MEIPASS", "")) / "CONFIG.toml",
+            Path(__file__).parent / "CONFIG.toml",
+        ]:
+            if candidate.exists():
+                cfg = toml.load(candidate)
+                fb = cfg.get("fretebot", {})
+                # Extrai o gist ID da license_url
+                url = fb.get("license_url", "")
+                gist_id = ""
+                if url and "gist.githubusercontent.com" in url:
+                    # URL: https://gist.githubusercontent.com/USER/GIST_ID/raw/file
+                    parts = url.split("/")
+                    for i, p in enumerate(parts):
+                        if p == "raw" and i >= 1:
+                            gist_id = parts[i - 1]
+                            break
+                token = fb.get("error_report_token", "")
+                if gist_id and token:
+                    return gist_id, token
+    except Exception:
+        pass
+    return "", ""
+
+
+def _register_machine(key: str, machine_id: str, gist_url: str) -> bool:
+    """
+    Registra o machine_id na licença (vincula chave à máquina).
+    Atualiza o gist remoto via API do GitHub.
+    Retorna True se conseguiu registrar.
+    """
+    gist_id, token = _get_gist_config()
+    if not gist_id or not token:
+        return False
+
+    try:
+        # 1. Buscar dados atuais
+        data = _fetch_licenses(gist_url)
+        lic_data = data.get("licenses", {}).get(key)
+        if not lic_data:
+            return False
+
+        # 2. Adicionar máquina
+        machines = lic_data.get("machines", [])
+        if machine_id not in machines:
+            machines.append(machine_id)
+            lic_data["machines"] = machines
+            data["licenses"][key] = lic_data
+
+        # 3. Atualizar o gist via API
+        api_url = f"https://api.github.com/gists/{gist_id}"
+        payload = json.dumps({
+            "files": {
+                "licenses.json": {
+                    "content": json.dumps(data, indent=2, ensure_ascii=False)
+                }
+            }
+        }).encode("utf-8")
+        req = Request(api_url, data=payload, method="PATCH")
+        req.add_header("Authorization", f"token {token}")
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("Content-Type", "application/json")
+        with urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
 def _save_validation_cache(key: str, status: LicenseStatus) -> None:
     """Salva cache da última validação bem-sucedida."""
     data = {
@@ -280,14 +353,21 @@ def validate_license(key: str, machine_id: str = "") -> LicenseStatus:
             except ValueError:
                 pass
 
-        # Verificar binding de máquina (se configurado)
+        # Verificar binding de máquina
         bound_machines = lic_data.get("machines", [])
+        max_machines = lic_data.get("max_machines", 1)
+
         if bound_machines and machine_id not in bound_machines:
-            return LicenseStatus(
-                valid=False,
-                owner=lic_data.get("owner", ""),
-                message="Esta licença não está autorizada para esta máquina.",
-            )
+            if len(bound_machines) >= max_machines:
+                return LicenseStatus(
+                    valid=False,
+                    owner=lic_data.get("owner", ""),
+                    message="Esta licença já está ativada em outro computador.",
+                )
+
+        # Registrar máquina se ainda não vinculada
+        if machine_id not in bound_machines:
+            _register_machine(key, machine_id, gist_url)
 
         # Tudo OK
         status = LicenseStatus(

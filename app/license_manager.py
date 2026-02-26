@@ -6,8 +6,7 @@ Uso:
     python license_manager.py gerar "Nome do Cliente" --expires 2027-01-01
     python license_manager.py listar
     python license_manager.py bloquear FBOT-XXXX-XXXX-XXXX-XXXX
-    python license_manager.py desbloquear FBOT-XXXX-XXXX-XXXX-XXXX
-    python license_manager.py bloquear-maquina <machine_id>
+    python license_manager.py desbloquear FBOT-XXXX-XXXX-XXXX-XXXX    python license_manager.py desvincular FBOT-XXXX-XXXX-XXXX-XXXX  # libera a máquina vinculada    python license_manager.py bloquear-maquina <machine_id>
     python license_manager.py exportar                 # salva licenses.json
     python license_manager.py push                     # atualiza o gist remoto
 """
@@ -79,13 +78,15 @@ def cmd_listar() -> None:
         print("Nenhuma licença cadastrada.")
         return
 
-    print(f"\n{'CHAVE':<30} {'CLIENTE':<25} {'ATIVA':<8} {'EXPIRA':<12}")
-    print("-" * 80)
+    print(f"\n{'CHAVE':<30} {'CLIENTE':<25} {'ATIVA':<8} {'EXPIRA':<12} {'MAQUINAS'}")
+    print("-" * 100)
     for key, data in lics.items():
         active = "SIM" if data.get("active", True) else "NAO"
         expires = data.get("expires", "-")
         owner = data.get("owner", "?")
-        print(f"{key:<30} {owner:<25} {active:<8} {expires:<12}")
+        machines = data.get("machines", [])
+        maq = ", ".join(m[:12] for m in machines) if machines else "(livre)"
+        print(f"{key:<30} {owner:<25} {active:<8} {expires:<12} {maq}")
 
     blocked = db.get("blocked_keys", [])
     if blocked:
@@ -128,6 +129,23 @@ def cmd_bloquear_maquina(machine_id: str) -> None:
         db.setdefault("blocked_machines", []).append(machine_id)
     _save_db(db)
     print(f"[OK] Máquina {machine_id} bloqueada.")
+
+
+def cmd_desvincular(key: str) -> None:
+    """Remove todas as máquinas vinculadas a uma chave (permite reativação em outro PC)."""
+    db = _load_db()
+    key = key.strip().upper()
+    if key in db.get("licenses", {}):
+        machines = db["licenses"][key].get("machines", [])
+        db["licenses"][key]["machines"] = []
+        _save_db(db)
+        if machines:
+            print(f"[OK] Chave {key} desvinculada de {len(machines)} máquina(s).")
+            print("     Lembre de executar 'exportar' e atualizar o gist.")
+        else:
+            print(f"Chave {key} já não tinha máquinas vinculadas.")
+    else:
+        print(f"Chave {key} não encontrada.")
 
 
 def cmd_exportar() -> dict:
@@ -182,6 +200,12 @@ def main():
             print("Uso: python license_manager.py bloquear-maquina <machine_id>")
             sys.exit(1)
         cmd_bloquear_maquina(args[1])
+
+    elif cmd == "desvincular":
+        if len(args) < 2:
+            print("Uso: python license_manager.py desvincular FBOT-XXXX-XXXX-XXXX-XXXX")
+            sys.exit(1)
+        cmd_desvincular(args[1])
 
     elif cmd == "exportar":
         cmd_exportar()
