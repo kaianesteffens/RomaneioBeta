@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -185,26 +186,32 @@ def apply_update(
     """
     Baixa e aplica a atualização.
 
-    O ZIP deve conter a estrutura do _internal/ do PyInstaller.
-    Arquivos do ZIP substituem os existentes no diretório do app.
-    CONFIG.toml do usuário NÃO é sobrescrito.
+    Estratégia para Windows: como o exe e DLLs estão em uso e não podem
+    ser sobrescritos diretamente, o updater:
+    1. Baixa e extrai o ZIP para uma pasta temporária em %APPDATA%
+    2. Cria um script .bat que:
+       - Aguarda o app fechar
+       - Copia os novos arquivos por cima dos antigos
+       - Reinicia o app
+    3. O app fecha e o script .bat assume
 
     Args:
         info: informações da atualização (de check_for_update)
         callback: função para reportar progresso
 
     Returns:
-        True se a atualização foi aplicada com sucesso.
+        True se a atualização foi preparada com sucesso.
     """
     app_dir = _get_app_dir()
-    internal_dir = app_dir / "_internal"
 
     if callback:
         callback(f"Baixando v{info.version}...")
 
-    # Baixa ZIP para pasta temporária
-    tmp_dir = Path(tempfile.mkdtemp(prefix="fretebot_update_"))
-    zip_path = tmp_dir / info.asset_name
+    # Pasta persistente para o update (não temp, senão é apagada)
+    update_dir = _license_dir_update()
+    update_dir.mkdir(parents=True, exist_ok=True)
+
+    zip_path = update_dir / info.asset_name
 
     try:
         _download_with_progress(info.download_url, zip_path, info.asset_size, callback)
@@ -212,13 +219,15 @@ def apply_update(
         if callback:
             callback("Extraindo atualização...")
 
-        # Extrai para subpasta temporária
-        extract_dir = tmp_dir / "extracted"
+        # Extrai para subpasta
+        extract_dir = update_dir / "extracted"
+        if extract_dir.exists():
+            shutil.rmtree(str(extract_dir), ignore_errors=True)
+
         with zipfile.ZipFile(zip_path, "r") as zf:
             zf.extractall(extract_dir)
 
         # Detecta raiz do conteúdo extraído
-        # O ZIP pode ter uma pasta raiz (ex: FreteBot/) ou não
         contents = list(extract_dir.iterdir())
         if len(contents) == 1 and contents[0].is_dir():
             source_dir = contents[0]
@@ -226,76 +235,113 @@ def apply_update(
             source_dir = extract_dir
 
         if callback:
-            callback("Aplicando atualização...")
+            callback("Preparando atualização...")
 
-        # Backup dos arquivos que serão substituídos
-        backup_dir = tmp_dir / "backup"
-        backup_dir.mkdir()
+        # Cria script batch que faz a substituição após o app fechar
+        bat_path = update_dir / "_apply_update.bat"
+        app_exe = Path(sys.executable) if getattr(sys, "frozen", False) else None
+        pid = os.getpid()
 
         # Arquivos/pastas protegidos (não sobrescrever)
-        protected = {"CONFIG.toml", "cache", "crash.log"}
+        bat_content = f'''@echo off
+chcp 65001 >nul 2>&1
+title FreteBot - Atualizando...
+echo Aguardando FreteBot fechar...
 
-        # Copia novos arquivos para o diretório do app
-        updated_count = 0
-        for src_item in source_dir.rglob("*"):
-            if not src_item.is_file():
-                continue
+:wait_loop
+tasklist /FI "PID eq {pid}" 2>nul | find /I "{pid}" >nul
+if %ERRORLEVEL% == 0 (
+    timeout /t 1 /nobreak >nul
+    goto wait_loop
+)
 
-            rel = src_item.relative_to(source_dir)
+echo FreteBot fechou. Aplicando atualizacao v{info.version}...
+timeout /t 2 /nobreak >nul
 
-            # Protege arquivos de configuração do usuário
-            if rel.parts[0] in protected or rel.name in protected:
-                continue
+xcopy /E /Y /I /Q "{source_dir}" "{app_dir}" >nul 2>&1
 
-            dest_file = app_dir / rel
+REM Restaurar CONFIG.toml protegido (xcopy pode ter sobrescrito)
+REM O CONFIG.toml do usuario fica em %APPDATA%, entao nao e afetado
 
-            # Backup do arquivo existente
-            if dest_file.exists():
-                bkp = backup_dir / rel
-                bkp.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    shutil.copy2(str(dest_file), str(bkp))
-                except Exception:
-                    pass
+REM Atualizar version.txt
+echo {info.version}> "{app_dir}\\version.txt"
+echo {info.version}> "{app_dir}\\_internal\\version.txt"
 
-            # Copia novo arquivo
-            dest_file.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(str(src_item), str(dest_file))
-            updated_count += 1
+echo Atualizacao concluida! Reiniciando...
+timeout /t 1 /nobreak >nul
 
-        # Atualiza version.txt
-        for vf in (app_dir / "version.txt", internal_dir / "version.txt"):
-            try:
-                vf.write_text(info.version, encoding="utf-8")
-            except Exception:
-                pass
+REM Limpar arquivos de update
+del /Q "{zip_path}" >nul 2>&1
+rmdir /S /Q "{extract_dir}" >nul 2>&1
+
+REM Reiniciar o app
+'''
+        if app_exe:
+            bat_content += f'start "" "{app_exe}"\n'
+
+        bat_content += 'del "%~f0" >nul 2>&1\n'
+        bat_content += 'exit\n'
+
+        bat_path.write_text(bat_content, encoding="mbcs")
+
+        # Marca que há uma atualização pendente
+        pending_file = update_dir / "_pending_update"
+        pending_file.write_text(str(bat_path), encoding="utf-8")
 
         if callback:
-            callback(f"Atualização v{info.version} aplicada! ({updated_count} arquivos)")
+            callback(f"Atualização v{info.version} preparada! Reiniciando...")
 
         return True
 
     except Exception as e:
         if callback:
             callback(f"Erro na atualização: {e}")
-        return False
-
-    finally:
-        # Limpa arquivos temporários
+        # Limpa em caso de erro
         try:
-            shutil.rmtree(str(tmp_dir), ignore_errors=True)
+            if zip_path.exists():
+                zip_path.unlink()
         except Exception:
             pass
+        return False
+
+
+def _license_dir_update() -> Path:
+    """Diretório para armazenar updates temporários."""
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        d = Path(appdata) / "FreteBot" / "update"
+    else:
+        d = Path.home() / ".fretebot" / "update"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def needs_restart() -> bool:
-    """Verifica se o app precisa ser reiniciado após atualização (sempre True para PyInstaller)."""
-    return getattr(sys, "frozen", False)
+    """Verifica se há uma atualização pendente que precisa de restart."""
+    update_dir = _license_dir_update()
+    return (update_dir / "_pending_update").exists()
 
 
 def restart_app() -> None:
-    """Reinicia o aplicativo."""
-    if getattr(sys, "frozen", False):
-        os.execv(sys.executable, [sys.executable] + sys.argv[1:])
-    else:
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+    """
+    Reinicia o aplicativo executando o script de atualização.
+    O script aguarda o app fechar, copia os novos arquivos e reinicia.
+    """
+    update_dir = _license_dir_update()
+    pending_file = update_dir / "_pending_update"
+
+    if pending_file.exists():
+        bat_path = pending_file.read_text(encoding="utf-8").strip()
+        if Path(bat_path).exists():
+            # Lança o script batch em processo separado (não é filho do app)
+            subprocess.Popen(
+                ["cmd", "/c", bat_path],
+                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+                close_fds=True,
+            )
+        pending_file.unlink(missing_ok=True)
+
+    # Fecha o app
+    sys.exit(0)

@@ -1925,11 +1925,10 @@ def main():
                             QMessageBox.information(
                                 None,
                                 "Atualização Concluída",
-                                f"FreteBot atualizado para v{_update_info.version}!\n"
-                                "O aplicativo será reiniciado.",
+                                f"FreteBot será atualizado para v{_update_info.version}!\n"
+                                "O aplicativo vai fechar e reabrir automaticamente.",
                             )
-                            if needs_restart():
-                                restart_app()
+                            restart_app()  # Lança o .bat e fecha o app
                         else:
                             QMessageBox.warning(
                                 None,
