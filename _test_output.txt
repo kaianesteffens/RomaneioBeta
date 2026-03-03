@@ -1,0 +1,2 @@
+Could not find platform independent libraries <prefix>
+C:\Users\eduar_zgrj9vh\Desktop\FRETEBOT\FreteBot-Installer\.venv\Scripts\python.exe: can't open file 'C:\\Users\\eduar_zgrj9vh\\Desktop\\FRETEBOT\\FreteBot-Installer\\_test_imports.py': [Errno 2] No such file or directory
