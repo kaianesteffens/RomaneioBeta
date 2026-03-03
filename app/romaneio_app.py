@@ -2015,15 +2015,13 @@ def main():
         raise
     except Exception:
         crash_msg = _tb.format_exc()
-        report_error(context="crash_fatal")
+        report_error(context="crash_fatal", wait=True)
         print(f"[FreteBot] CRASH FATAL:\n{crash_msg}", file=sys.stderr, flush=True)
         # Tenta mostrar msgbox para o usuário
         try:
             QMessageBox.critical(None, "FreteBot - Erro Fatal", f"O aplicativo encontrou um erro:\n\n{crash_msg[:800]}")
         except Exception:
             pass
-        # Espera o envio do erro antes de sair
-        import time as _t; _t.sleep(2)
         sys.exit(1)
 
 

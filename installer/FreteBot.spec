@@ -13,7 +13,6 @@ project_root = Path(SPECPATH).parent / "app"  # Diretório do app com romaneio_a
 hiddenimports = [
     # Providers
     "fretebot.providers.braspress_playwright",
-    "fretebot.providers.braspress",
     "fretebot.providers.bauer_auto",
     "fretebot.providers.trd",
     "fretebot.providers.agex",

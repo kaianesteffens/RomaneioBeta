@@ -40,6 +40,13 @@ def _load_config() -> None:
     _initialized = True
     try:
         import toml
+    except ImportError:
+        try:
+            import tomli as toml  # fallback
+        except ImportError:
+            print("[error_reporter] AVISO: módulo toml/tomli não disponível", file=sys.stderr, flush=True)
+            return
+    try:
         # Mesmo esquema de busca que o restante do app
         for candidate in [
             Path(os.getenv("APPDATA", "")) / "FreteBot" / "CONFIG.toml",
@@ -53,8 +60,10 @@ def _load_config() -> None:
                 _token = fb.get("error_report_token", "")
                 if _gist_id and _token:
                     return
-    except Exception:
-        pass
+        if not _gist_id or not _token:
+            print("[error_reporter] AVISO: error_gist_id/error_report_token não encontrados em nenhum CONFIG.toml", file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"[error_reporter] AVISO: falha ao carregar config: {e}", file=sys.stderr, flush=True)
 
 
 def _get_version() -> str:
@@ -147,12 +156,14 @@ def report_error(
     exc_value: BaseException | None = None,
     exc_tb=None,
     context: str = "",
+    wait: bool = False,
 ) -> None:
     """
     Envia um erro para o GitHub Gist.
 
     Pode ser chamado diretamente ou como sys.excepthook.
     Falhas no envio são silenciosas.
+    Se wait=True, bloqueia até o envio completar (para crashes fatais).
     """
     try:
         if exc_type is None and exc_value is None:
@@ -204,15 +215,18 @@ def report_error(
         # Envia em thread separada para não bloquear o app
         t = threading.Thread(target=_send_to_gist, args=(body,), daemon=True)
         t.start()
+        if wait:
+            t.join(timeout=20)
 
     except Exception:
         pass  # Falha silenciosa — error reporting NUNCA deve crashar o app
 
 
-def report_error_message(message: str, context: str = "") -> None:
+def report_error_message(message: str, context: str = "", wait: bool = False) -> None:
     """
     Envia uma mensagem de erro customizada (sem exceção Python).
     Útil para erros de lógica ou condições inesperadas.
+    Se wait=True, bloqueia até o envio completar.
     """
     try:
         fp = sha256(message.encode()).hexdigest()[:16]
@@ -239,6 +253,8 @@ def report_error_message(message: str, context: str = "") -> None:
 
         t = threading.Thread(target=_send_to_gist, args=(body,), daemon=True)
         t.start()
+        if wait:
+            t.join(timeout=20)
 
     except Exception:
         pass
@@ -256,11 +272,15 @@ def install_global_hooks() -> None:
     """
     global _original_excepthook, _original_threading_excepthook
 
+    # Carrega config cedo para detectar problemas
+    _load_config()
+
     # Hook principal (exceções não tratadas no thread principal)
     _original_excepthook = sys.excepthook
 
     def _sys_excepthook(exc_type, exc_value, exc_tb):
-        report_error(exc_type, exc_value, exc_tb, context="sys.excepthook")
+        # wait=True pois após o excepthook o processo pode morrer
+        report_error(exc_type, exc_value, exc_tb, context="sys.excepthook", wait=True)
         if _original_excepthook:
             _original_excepthook(exc_type, exc_value, exc_tb)
 
