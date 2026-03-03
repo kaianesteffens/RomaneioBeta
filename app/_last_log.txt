@@ -1,0 +1,50 @@
+[2026-02-25 12:51:18] Matou Chrome órfão do FreteBot PID=9848
+[2026-02-25 12:51:18] Matou Chrome órfão do FreteBot PID=20968
+[2026-02-25 12:51:18] Matou Chrome órfão do FreteBot PID=19032
+[2026-02-25 12:51:18] Matou Chrome órfão do FreteBot PID=18500
+[2026-02-25 12:51:18] Matou Chrome órfão do FreteBot PID=9688
+[2026-02-25 12:51:18] Matou Chrome órfão do FreteBot PID=8264
+[2026-02-25 12:51:18] BRASPRESS sessão criada com headless=True
+[2026-02-25 12:51:18] TRD sessão criada com headless=True
+[2026-02-25 12:51:18] AGEX sessão criada com headless=True
+[2026-02-25 12:51:18] EUCATUR sessão criada com headless=True
+[2026-02-25 12:51:18] RODONAVES sessão criada com headless=False
+[2026-02-25 12:51:18] ALFA sessão criada com headless=False
+[2026-02-25 12:51:18] Iniciando pre-login em 6 transportadoras...
+[2026-02-25 12:51:18] Pre-login braspress...
+[2026-02-25 12:51:18] Pre-login trd...
+[2026-02-25 12:51:18] Pre-login agex...
+[2026-02-25 12:51:18] Pre-login eucatur...
+[2026-02-25 12:51:18] Pre-login rodonaves...
+[2026-02-25 12:51:18] Pre-login alfa...
+[2026-02-25 12:51:24] Pre-login eucatur OK
+[2026-02-25 12:51:27] Pre-login braspress OK
+[2026-02-25 12:51:30] Pre-login trd OK
+[2026-02-25 12:51:32] Pre-login rodonaves OK
+[2026-02-25 12:51:33] Pre-login alfa OK
+[2026-02-25 12:51:36] Pre-login agex OK
+[2026-02-25 12:51:36] Pre-login concluído: 6/6 OK
+[2026-02-25 12:51:36] Ocultou 4 janela(s) IME residual(is)
+[2026-02-25 12:51:41] Usando CEP origem do romaneio: 99740000
+[2026-02-25 12:51:41] Preparando cotações: origem=99740000, destino=15560007, peso=11.1, valor=475.86, volumes=1, cubagem=0.0430m³, linhas_cubagem=1, UF=SP
+[2026-02-25 12:51:41] BRASPRESS preparada (cnpj=402231..., linhas_cubagem=1, headless=True)
+[2026-02-25 12:51:41] BAUER ignorada (UF SP não atendida)
+[2026-02-25 12:51:41] TRD preparada (headless=True)
+[2026-02-25 12:51:41] AGEX preparada: peso=11.100kg, vol=1, dims=0.45x0.31x0.31m, linhas_cubagem=1, headless=True
+[2026-02-25 12:51:41] Eucatur ignorada (UF SP não atendida)
+[2026-02-25 12:51:41] RODONAVES preparada (headless=False)
+[2026-02-25 12:51:41] ALFA preparada (headless=False)
+[2026-02-25 12:51:41] Executando 5 cotações em paralelo (máx 3): TRD, ALFA, BRASPRESS, RODONAVES, AGEX
+[2026-02-25 12:51:41] Semáforo adquirido: TRD (posição 0)
+[2026-02-25 12:51:41] Semáforo adquirido: BRASPRESS (posição 2)
+[2026-02-25 12:51:41] Semáforo adquirido: RODONAVES (posição 3)
+[2026-02-25 12:51:47] ✅ ALFA: R$ 77.86 - 9 dias
+[2026-02-25 12:51:53] Semáforo adquirido: AGEX (posição 4)
+[2026-02-25 12:51:53] ✅ Braspress: R$ 86.56 - 10 dias
+[2026-02-25 12:52:06] ✅ AGEX: R$ 218.93 - 12 dias
+[2026-02-25 12:52:06] ✅ RODONAVES: R$ 130.94 - 7 dias
+[2026-02-25 12:52:39] ✅ TRD: R$ 150.69 - 5 dias
+[2026-02-25 12:52:39] Cotações válidas: 5 de 5
+[2026-02-26 20:35:49] CONFIG carregado de: C:\Users\eduar_zgrj9vh\Desktop\FRETEBOT\FreteBot-Installer\app\fretebot\CONFIG.toml
+[2026-02-26 20:35:55] CONFIG carregado de: C:\Users\eduar_zgrj9vh\Desktop\FRETEBOT\FreteBot-Installer\app\fretebot\CONFIG.toml
+[2026-03-03 20:46:03] CONFIG carregado de: C:\Users\eduar_zgrj9vh\Desktop\FRETEBOT\FreteBot-Installer\app\fretebot\CONFIG.toml

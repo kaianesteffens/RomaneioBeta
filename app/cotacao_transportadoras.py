@@ -12,6 +12,13 @@ import time
 import re
 import sys
 
+# Error reporting remoto
+try:
+    from error_reporter import report_error, report_error_message
+except Exception:
+    def report_error(*a, **kw): pass
+    def report_error_message(*a, **kw): pass
+
 # Inicializar logging dos providers
 try:
     from fretebot.logging_conf import setup_logging
@@ -1057,6 +1064,7 @@ class TransportadoraSession:
                         await asyncio.sleep(wait)
                         continue
                     _log_diag(f"Pre-login {nome} falhou: {e}")
+                    report_error_message(f"Pre-login {nome} falhou: {e}", context=f"prelogin_{nome}")
                     return nome, False
 
         results = await asyncio.gather(
@@ -1868,6 +1876,7 @@ async def _executar_cotacoes_com_dados(
                 import traceback
                 tb = ''.join(traceback.format_exception(type(erro), erro, erro.__traceback__))
                 _log_diag(f"Erro em cotação {nome_task}: {type(erro).__name__}: {erro}\n{tb}")
+                report_error(type(erro), erro, erro.__traceback__, context=f"cotacao_{nome_task}")
                 resultado_emitir = ResultadoCotacao(
                     transportadora=nome_task,
                     status="erro",
@@ -1925,6 +1934,7 @@ async def _executar_cotacoes_com_dados(
                 else:
                     _log_diag(f"{nome_task} retornou None (sem resultado)")
                     detalhe = "Sem resultado"
+                report_error_message(f"{nome_task} retornou None: {detalhe}", context=f"cotacao_{nome_task}")
                 resultado_emitir = ResultadoCotacao(
                     transportadora=nome_task,
                     status="erro",
