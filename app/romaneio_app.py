@@ -1657,6 +1657,16 @@ class RomaneioWindow(QMainWindow):
                 except Exception:
                     pass
                 finally:
+                    # Fecha o event loop corretamente para evitar warnings
+                    # de "I/O operation on closed pipe" no Windows
+                    try:
+                        self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+                    except Exception:
+                        pass
+                    try:
+                        self._loop.close()
+                    except Exception:
+                        pass
                     self._loop_lock.release()
             # Força encerramento de Chromes órfãos restantes
             try:
@@ -1793,7 +1803,44 @@ def main():
                     _crash_log.write_text("", encoding="utf-8")
             except Exception:
                 pass
-            sys.stderr = open(_crash_log, "a", encoding="utf-8")
+            # Filtro que ignora warnings inofensivos do asyncio/Playwright
+            # (EPIPE, closed pipe, DEP0169) para não assustar o usuário
+            class _FilteredStderr:
+                _IGNORE = (
+                    "I/O operation on closed pipe",
+                    "DEP0169",
+                    "EPIPE: broken pipe",
+                    "Exception ignored in:",
+                    "_ProactorBasePipeTransport.__del__",
+                    "BaseSubprocessTransport.__del__",
+                )
+
+                def __init__(self, stream):
+                    self._stream = stream
+                    self._buf = ""
+
+                def write(self, s):
+                    if not s:
+                        return
+                    self._buf += s
+                    # Processa linhas completas
+                    while "\n" in self._buf:
+                        line, self._buf = self._buf.split("\n", 1)
+                        if any(ign in line for ign in self._IGNORE):
+                            continue
+                        self._stream.write(line + "\n")
+
+                def flush(self):
+                    if self._buf and not any(ign in self._buf for ign in self._IGNORE):
+                        self._stream.write(self._buf)
+                    self._buf = ""
+                    self._stream.flush()
+
+                def __getattr__(self, name):
+                    return getattr(self._stream, name)
+
+            _raw_file = open(_crash_log, "a", encoding="utf-8")
+            sys.stderr = _FilteredStderr(_raw_file)
     except Exception:
         pass
 

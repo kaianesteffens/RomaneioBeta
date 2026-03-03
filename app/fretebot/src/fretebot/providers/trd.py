@@ -159,12 +159,17 @@ class TRDProvider(ProviderBase):
     async def cleanup(self):
         """Fecha o browser."""
         try:
+            if self._page and not self._page.is_closed():
+                await self._page.close()
+        except Exception:
+            pass
+        try:
             if self._context:
                 await self._context.close()
         except Exception:
             pass
         try:
-            if self._browser:
+            if self._browser and self._browser.is_connected():
                 await self._browser.close()
         except Exception:
             pass

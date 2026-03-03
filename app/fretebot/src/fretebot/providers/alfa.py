@@ -721,12 +721,17 @@ class AlfaProvider(ProviderBase):
 
     async def cleanup(self) -> None:
         try:
+            if self._page and not self._page.is_closed():
+                await self._page.close()
+        except Exception:
+            pass
+        try:
             if self._context:
                 await self._context.close()
         except Exception:
             pass
         try:
-            if self._browser:
+            if self._browser and self._browser.is_connected():
                 await self._browser.close()
         except Exception:
             pass
@@ -1190,33 +1195,37 @@ class AlfaProvider(ProviderBase):
         await page.wait_for_timeout(300)
         await page.locator("#cepDestinatario").fill(self._digits(cep_destinatario))
 
-    async def _extrair_resultado(self) -> Optional[Cotacao]:
-        page = self._page
-
-        # Tenta extrair via API
-        resp = None
+    async def _do_submit_click(self, submit_btn) -> None:
+        """Clica no botão submit com fallbacks."""
         try:
-            resp = await page.wait_for_response(
-                lambda r: self.cotacao_api_url in r.url and r.request.method.upper() in {"POST", "GET"},
-                timeout=30000,
-            )
+            await submit_btn.click(timeout=15000)
         except Exception:
-            resp = None
+            logger.warning("[ALFA] Click normal no submit falhou, tentando force click...")
+            try:
+                await submit_btn.click(force=True, timeout=10000)
+            except Exception:
+                logger.warning("[ALFA] Force click falhou, tentando via JS...")
+                await self._page.evaluate("document.querySelector(\"button[type='submit']\")?.click()")
+
+    async def _extrair_resultado(self, api_response=None) -> Optional[Cotacao]:
+        page = self._page
 
         valor_frete = None
         prazo_dias = 0
 
-        if resp is not None and resp.ok:
+        # Tenta extrair da response da API (já capturada durante o click)
+        if api_response is not None and api_response.ok:
             try:
-                data = await resp.json()
+                data = await api_response.json()
                 valor_frete = self._find_json_value(data, ["frete", "valor", "total"])
                 prazo_dias = int(self._find_json_value(data, ["prazo", "dia", "dias"]) or 0)
             except Exception:
                 valor_frete = None
                 prazo_dias = 0
 
+        # Fallback: extrai do DOM (resultado já está renderizado)
         if valor_frete is None:
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(500)
             body_txt = await page.inner_text("body")
             body_txt = (body_txt or "").replace("\xa0", " ")
             m_val = re.search(r"R\$\s*([\d.]+,\d{2})", body_txt)
@@ -1303,16 +1312,23 @@ class AlfaProvider(ProviderBase):
                 await self._page.wait_for_timeout(300)
             except Exception:
                 pass
+
+            # Captura a response da API durante o click para não perder
+            # respostas rápidas (causa raiz do delay de 30s)
+            api_response = None
             try:
-                await submit_btn.click(timeout=15000)
+                async with self._page.expect_response(
+                    lambda r: self.cotacao_api_url in r.url and r.request.method.upper() in {"POST", "GET"},
+                    timeout=30000,
+                ) as response_info:
+                    await self._do_submit_click(submit_btn)
+                api_response = response_info.value
             except Exception:
-                logger.warning("[ALFA] Click normal no submit falhou, tentando force click...")
-                try:
-                    await submit_btn.click(force=True, timeout=10000)
-                except Exception:
-                    logger.warning("[ALFA] Force click falhou, tentando via JS...")
-                    await self._page.evaluate("document.querySelector(\"button[type='submit']\")?.click()")
-            return await self._extrair_resultado()
+                # Se expect_response falhar (timeout ou click falhou antes),
+                # continua sem response — fallback DOM será usado
+                pass
+
+            return await self._extrair_resultado(api_response)
 
         except Exception as e:
             self.last_error = str(e)

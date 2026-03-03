@@ -567,12 +567,17 @@ class RodonavesProvider(ProviderBase):
 
     async def cleanup(self):
         try:
+            if self._page and not self._page.is_closed():
+                await self._page.close()
+        except Exception:
+            pass
+        try:
             if self._context:
                 await self._context.close()
         except Exception:
             pass
         try:
-            if self._browser:
+            if self._browser and self._browser.is_connected():
                 await self._browser.close()
         except Exception:
             pass
@@ -863,8 +868,15 @@ class RodonavesProvider(ProviderBase):
         await page.locator("#destinationNumber").fill("1")
 
         # ─── Valor NF ───
-        nf_txt = str(int(round(float(valor))))
-        await page.locator("#eletronicInvoiceValue").fill(nf_txt)
+        # Campo #eletronicInvoiceValue tem máscara jQuery currency —
+        # fill() seta value diretamente sem acionar a máscara, causando
+        # interpretação incorreta. Usar type() digita char-a-char,
+        # permitindo que a máscara processe corretamente (centavos à direita).
+        nf_loc = page.locator("#eletronicInvoiceValue")
+        nf_centavos = str(int(round(float(valor) * 100)))  # ex: 1500.50 → "150050"
+        await nf_loc.click()
+        await nf_loc.press("Control+a")
+        await nf_loc.type(nf_centavos, delay=30)
 
         # ─── Tipo embalagem ───
         await page.locator("#packageType").select_option("1")
