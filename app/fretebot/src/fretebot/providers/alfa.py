@@ -1214,6 +1214,8 @@ class AlfaProvider(ProviderBase):
         prazo_dias = 0
 
         # Tenta extrair da response da API (já capturada durante o click)
+        if api_response is not None and asyncio.iscoroutine(api_response):
+            api_response = await api_response
         if api_response is not None and api_response.ok:
             try:
                 data = await api_response.json()
@@ -1323,6 +1325,8 @@ class AlfaProvider(ProviderBase):
                 ) as response_info:
                     await self._do_submit_click(submit_btn)
                 api_response = response_info.value
+                if asyncio.iscoroutine(api_response) or asyncio.isfuture(api_response):
+                    api_response = await api_response
             except Exception:
                 # Se expect_response falhar (timeout ou click falhou antes),
                 # continua sem response — fallback DOM será usado
