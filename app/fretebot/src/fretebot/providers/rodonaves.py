@@ -1025,7 +1025,21 @@ class RodonavesProvider(ProviderBase):
             logger.warning(f"[{self.nome}] Não foi possível logar estado do formulário: {e}")
 
         # ─── Calcular ───
-        await page.locator("#calculateQuotationBtn").click()
+        calc_btn = page.locator("#calculateQuotationBtn")
+        try:
+            await calc_btn.wait_for(state="visible", timeout=15000)
+        except Exception:
+            logger.warning(f"[{self.nome}] Botão Calcular não visível, aguardando...")
+            await page.wait_for_timeout(3000)
+        for _click_attempt in range(3):
+            try:
+                await calc_btn.click(timeout=15000)
+                break
+            except Exception as click_err:
+                if _click_attempt == 2:
+                    raise
+                logger.warning(f"[{self.nome}] Click no Calcular falhou (tentativa {_click_attempt+1}): {click_err}")
+                await page.wait_for_timeout(2000)
         logger.info(f"[{self.nome}] Botão Calcular clicado, aguardando resultado...")
 
         # Aguarda resultado: a Rodonaves mostra resultado numa tabela ou seção

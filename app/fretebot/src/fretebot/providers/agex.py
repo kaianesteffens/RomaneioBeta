@@ -506,12 +506,12 @@ class AGEXProvider(ProviderBase):
                         await page.get_by_role("button", name="Continuar").click()
                 except Exception:
                     await page.get_by_role("button", name="Continuar").click()
-                await page.wait_for_timeout(500)
+                await page.wait_for_timeout(1500)
 
                 valor_total_loc = page.locator("input[name='valorTotal']")
                 if await valor_total_loc.count() > 0:
                     try:
-                        await valor_total_loc.first.wait_for(timeout=2500)
+                        await valor_total_loc.first.wait_for(timeout=5000)
                         avancou = True
                         break
                     except Exception:

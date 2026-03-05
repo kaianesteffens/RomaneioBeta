@@ -247,11 +247,11 @@ class BraspressPlaywrightProvider(ProviderBase):
 
             # Aguarda select #modal ficar disponível antes de interagir
             try:
-                await page.locator("#modal").wait_for(state="attached", timeout=15000)
+                await page.locator("#modal").wait_for(state="attached", timeout=30000)
             except Exception:
                 logger.warning("[Braspress] Select #modal não encontrado, tentando reload...")
                 await page.goto(self.COTACAO_URL, wait_until="domcontentloaded", timeout=60000)
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(3000)
                 # Fechar modais/popups pós-reload
                 for _ in range(3):
                     try:
@@ -263,7 +263,16 @@ class BraspressPlaywrightProvider(ProviderBase):
                             break
                     except Exception:
                         break
-                await page.locator("#modal").wait_for(state="attached", timeout=15000)
+                try:
+                    await page.locator("#modal").wait_for(state="attached", timeout=30000)
+                except Exception:
+                    # Último fallback: espera networkidle e tenta novamente
+                    logger.warning("[Braspress] #modal ainda não encontrado, aguardando networkidle...")
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=15000)
+                    except Exception:
+                        pass
+                    await page.locator("#modal").wait_for(state="attached", timeout=15000)
 
             # Selects
             await page.select_option("#modal", "R")
