@@ -493,11 +493,43 @@ class AGEXProvider(ProviderBase):
                 if await cep_dest_loc.count() > 0:
                     await cep_dest_loc.fill(self.cep_destino)
                     await cep_dest_loc.press("Tab")
-                    await page.wait_for_timeout(400)
+                    await page.wait_for_timeout(500)
+                    # Aguardar lookup de CEP completar (cidade/UF populados)
+                    for _cep_wait in range(20):  # até 10s
+                        cep_ok = await page.evaluate(
+                            """() => {
+                                const city = document.querySelector(
+                                    "input[name='enderecoDestino.cidade'],"
+                                    + "input[name='enderecoDestino.municipio'],"
+                                    + "#enderecoDestino input[readonly]"
+                                );
+                                if (city && city.value && city.value.length > 1) return true;
+                                const btn = document.querySelector("#enderecoDestino button[type='submit']");
+                                if (btn && !btn.disabled) return true;
+                                return false;
+                            }"""
+                        )
+                        if cep_ok:
+                            break
+                        await page.wait_for_timeout(500)
+                    logger.info(f"[{self.nome}] CEP destino lookup concluído: {cep_ok}")
 
             # Avançar destino -> carga de forma robusta
             avancou = False
-            for tentativa in range(1, 6):
+            max_tentativas = 8
+            for tentativa in range(1, max_tentativas + 1):
+                # Verificar se botão está habilitado antes de clicar
+                btn_enabled = await page.evaluate(
+                    """() => {
+                        const btn = document.querySelector("#enderecoDestino button[type='submit']");
+                        return btn ? !btn.disabled : null;
+                    }"""
+                )
+                if btn_enabled is False:
+                    logger.info(f"[{self.nome}] Botão destino desabilitado, aguardando (tentativa {tentativa}/{max_tentativas})")
+                    await page.wait_for_timeout(2000)
+                    continue
+
                 try:
                     btn_dest = page.locator("#enderecoDestino button[type='submit']").first
                     if await btn_dest.count() > 0:
@@ -506,18 +538,20 @@ class AGEXProvider(ProviderBase):
                         await page.get_by_role("button", name="Continuar").click()
                 except Exception:
                     await page.get_by_role("button", name="Continuar").click()
-                await page.wait_for_timeout(1500)
+
+                wait_ms = 2000 + (tentativa * 500)  # espera progressiva
+                await page.wait_for_timeout(wait_ms)
 
                 valor_total_loc = page.locator("input[name='valorTotal']")
                 if await valor_total_loc.count() > 0:
                     try:
-                        await valor_total_loc.first.wait_for(timeout=5000)
+                        await valor_total_loc.first.wait_for(timeout=8000)
                         avancou = True
                         break
                     except Exception:
                         pass
 
-                logger.info(f"[{self.nome}] Destino ainda não avançou para carga (tentativa {tentativa}/5)")
+                logger.info(f"[{self.nome}] Destino ainda não avançou para carga (tentativa {tentativa}/{max_tentativas})")
 
             if not avancou:
                 estado_dest = await page.evaluate(
@@ -527,11 +561,17 @@ class AGEXProvider(ProviderBase):
                         const sujo = !!document.querySelector("#enderecoDestino .dirty");
                         const btn = document.querySelector("#enderecoDestino button[type='submit']");
                         const btnDisabled = btn ? !!btn.disabled : null;
-                        return { cnpj, cep, sujo, btnDisabled };
+                        const errs = Array.from(document.querySelectorAll(
+                            "#enderecoDestino .error, #enderecoDestino .help-block, #enderecoDestino .invalid-feedback, .ng-invalid"
+                        ) || []).map(e => e.textContent?.trim()).filter(Boolean).slice(0, 3);
+                        const city = document.querySelector("input[name='enderecoDestino.cidade'],"
+                            + "input[name='enderecoDestino.municipio']");
+                        const cityVal = city ? city.value : "";
+                        return { cnpj, cep, sujo, btnDisabled, errs, cityVal };
                     }"""
                 )
                 logger.error(f"[{self.nome}] Destino não avançou para carga: {estado_dest}")
-                raise Exception("Destino não avançou para etapa de carga no AGEX")
+                raise Exception(f"Destino não avançou para etapa de carga no AGEX: {estado_dest}")
 
             # ETAPA 4: Carga
             etapa = "carga_valores"

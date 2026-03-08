@@ -6,6 +6,7 @@ from fretebot.providers.agex import AGEXProvider
 from fretebot.providers.eucatur import EucaturProvider
 from fretebot.providers.rodonaves import RodonavesProvider
 from fretebot.providers.alfa import AlfaProvider
+from fretebot.providers.coopex import CoopexProvider
 
 __all__ = [
     "ProviderBase",
@@ -17,4 +18,5 @@ __all__ = [
     "EucaturProvider",
     "RodonavesProvider",
     "AlfaProvider",
+    "CoopexProvider",
 ]

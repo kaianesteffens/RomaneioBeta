@@ -49,11 +49,12 @@ AGEXProvider = None
 EucaturProvider = None
 RodonavesProvider = None
 AlfaProvider = None
+CoopexProvider = None
 
 def _ensure_provider_imports() -> None:
     """Importa os providers na primeira chamada (lazy)."""
     global BraspressProvider, BauerAutoProvider, TRDProvider
-    global AGEXProvider, EucaturProvider, RodonavesProvider, AlfaProvider
+    global AGEXProvider, EucaturProvider, RodonavesProvider, AlfaProvider, CoopexProvider
     if BraspressProvider is not None:
         return  # já carregado
     from fretebot.providers.braspress_playwright import BraspressPlaywrightProvider as _BP
@@ -82,6 +83,11 @@ def _ensure_provider_imports() -> None:
     except ImportError:
         _AL = None
     AlfaProvider = _AL
+    try:
+        from fretebot.providers.coopex import CoopexProvider as _CO
+    except ImportError:
+        _CO = None
+    CoopexProvider = _CO
 
 
 CEP_ORIGEM_PADRAO = "99740000"
@@ -155,6 +161,13 @@ login_url = "https://arearestrita.alfatransportes.com.br/login/"
 cotacao_url = "https://arearestrita.alfatransportes.com.br/cotacao/api/"
 headless = false
 ufs_atendidas = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
+
+[transportadoras.coopex]
+habilitado = false
+dominio = ""
+usuario = ""
+senha = ""
+ufs_atendidas = []
 """
 
 
@@ -857,6 +870,7 @@ _PRIORIDADE_LENTIDAO: dict[str, int] = {
     "ALFA": 600,
     "BRASPRESS": 500,
     "EUCATUR": 400,
+    "COOPEX": 350,
     "RODONAVES": 300,
     "BAUER": 200,
     "AGEX": 100,
@@ -902,7 +916,7 @@ class TransportadoraSession:
                 transportadoras_cfg = {}
             transportadoras_cfg = dict(transportadoras_cfg)
             foco = str(MODO_FOCO_TRANSPORTADORA).strip().lower()
-            for nome_cfg in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa"):
+            for nome_cfg in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex"):
                 sec = transportadoras_cfg.get(nome_cfg)
                 if not isinstance(sec, dict):
                     sec = {}
@@ -1032,6 +1046,23 @@ class TransportadoraSession:
                             headless=headless_alfa,
                         )
                         _log_diag(f"ALFA sessão criada com headless={headless_alfa}")
+
+        if CoopexProvider is not None:
+            cocfg = _cfg_secao("coopex")
+            if cocfg.get("habilitado", True):
+                dominio = str(cocfg.get("dominio", "")).strip()
+                usuario = str(cocfg.get("usuario", "")).strip()
+                senha_co = str(cocfg.get("senha", "")).strip()
+                if dominio and usuario and senha_co:
+                    foco_coopex = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "coopex"
+                    headless_coopex = False if foco_coopex else bool(cocfg.get("headless", True))
+                    self.providers["coopex"] = CoopexProvider(
+                        dominio=dominio,
+                        usuario=usuario,
+                        senha=senha_co,
+                        headless=headless_coopex,
+                    )
+                    _log_diag(f"COOPEX sessão criada com headless={headless_coopex}")
 
         # Pre-login em todos (paralelo)
         _log_diag(f"Iniciando pre-login em {len(self.providers)} transportadoras...")
@@ -1187,7 +1218,7 @@ async def _executar_cotacoes_com_dados(
             transportadoras_cfg = {}
         transportadoras_cfg = dict(transportadoras_cfg)
         foco = str(MODO_FOCO_TRANSPORTADORA).strip().lower()
-        for nome_cfg in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves"):
+        for nome_cfg in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "coopex"):
             sec = transportadoras_cfg.get(nome_cfg)
             if not isinstance(sec, dict):
                 sec = {}
@@ -1799,6 +1830,69 @@ async def _executar_cotacoes_com_dados(
     except Exception as e:
         _log_diag(f"Erro ao preparar ALFA: {e}")
         erros_setup.append(ResultadoCotacao(transportadora="ALFA", status="erro", detalhes=str(e)))
+
+    # COOPEX (SSW)
+    try:
+        if CoopexProvider is not None:
+            cocfg = _cfg_secao("coopex")
+            if cocfg.get("habilitado", True):
+                if not _uf_atendida(cocfg.get("ufs_atendidas"), uf_destino):
+                    _log_diag(f"COOPEX ignorada (UF {uf_destino} não atendida)")
+                else:
+                    dominio = str(cocfg.get("dominio", "")).strip()
+                    usuario = str(cocfg.get("usuario", "")).strip()
+                    senha_co = str(cocfg.get("senha", "")).strip()
+                    if dominio and usuario and senha_co:
+                        foco_coopex = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "coopex"
+                        headless_coopex = False if foco_coopex else bool(cocfg.get("headless", True))
+                        provider = sessao.providers.get("coopex") if sessao else None
+                        if provider is not None:
+                            headless_atual = bool(getattr(provider, "headless", headless_coopex))
+                            if headless_atual != headless_coopex:
+                                _log_diag(
+                                    f"COOPEX: headless alterado ({headless_atual} -> {headless_coopex}), "
+                                    "reiniciando sessão do provider."
+                                )
+                                try:
+                                    await provider.cleanup()
+                                except Exception as cleanup_error:
+                                    _log_diag(f"COOPEX cleanup ao trocar headless falhou: {cleanup_error}")
+                                provider = None
+                        if provider is None:
+                            provider = CoopexProvider(
+                                dominio=dominio,
+                                usuario=usuario,
+                                senha=senha_co,
+                                headless=headless_coopex,
+                            )
+                            if sessao is not None:
+                                sessao.providers["coopex"] = provider
+                        _log_diag(f"COOPEX preparada (headless={headless_coopex})")
+                        if sessao is not None:
+                            sessao.registrar_uso("coopex")
+                        _co_kwargs = dict(
+                            origem=origem,
+                            destino=destino,
+                            peso=peso,
+                            valor=valor,
+                            volumes=volumes,
+                            cubagem_m3=cubagem_m3,
+                            cubagens=cubagens_validas,
+                            cnpj_remetente="40223106000179",
+                            cnpj_destinatario=cnpj_destinatario,
+                        )
+                        if cnpj_remetente:
+                            _co_kwargs["cnpj_pagador"] = "40223106000179"
+                            _co_kwargs["cnpj_remetente"] = cnpj_remetente
+                            _co_kwargs["cnpj_destinatario"] = "40223106000179"
+                            _co_kwargs["destino"] = _resolver_cep_origem(config, "")
+                            _co_kwargs["tipo_frete"] = "2"
+                        tasks.append(("COOPEX", provider, provider.coteir(**_co_kwargs)))
+                    else:
+                        _log_diag("COOPEX não configurada (domínio/usuário/senha ausentes)")
+    except Exception as e:
+        _log_diag(f"Erro ao preparar COOPEX: {e}")
+        erros_setup.append(ResultadoCotacao(transportadora="COOPEX", status="erro", detalhes=str(e)))
 
     # Executa primeiro as transportadoras mais lentas para reduzir tempo total.
     # Maior número = tendência de maior duração (baseado em testes reais).
