@@ -100,6 +100,15 @@ class LoginStatusEvent(QEvent):
         self.status = status
 
 
+class LoginRetryPromptEvent(QEvent):
+    """Evento para perguntar ao usuário se quer refazer login de uma transportadora."""
+    EventType = QEvent.Type(QEvent.registerEventType())
+
+    def __init__(self, nome: str):
+        super().__init__(self.EventType)
+        self.nome = nome
+
+
 # ---------------------------------------------------------------------------
 # Helpers de formatação automática para campos do formulário fornecedor
 # ---------------------------------------------------------------------------
@@ -1572,12 +1581,15 @@ class RomaneioWindow(QMainWindow):
             self._post_event_safe(StatusUpdateEvent(msg))
         def _login_status_callback(nome, status):
             self._post_event_safe(LoginStatusEvent(nome, status))
+        def _login_retry_callback(nome):
+            self._post_event_safe(LoginRetryPromptEvent(nome))
         try:
             with self._loop_lock:
                 asyncio.set_event_loop(self._loop)
                 self._loop.run_until_complete(self._sessao.inicializar(
                     callback=_status_callback,
                     login_status_callback=_login_status_callback,
+                    login_retry_callback=_login_retry_callback,
                 ))
         except Exception as exc:
             print(f"[FreteBot] Erro no pre-login: {exc}", file=sys.stderr, flush=True)
@@ -1688,6 +1700,8 @@ class RomaneioWindow(QMainWindow):
                 else:
                     lbl.setText(f"⏳ {nome_upper}")
                     lbl.setStyleSheet("color: #8896ab; font-size: 11px; font-weight: 600;")
+        elif isinstance(event, LoginRetryPromptEvent):
+            self._perguntar_relogin(event.nome)
 
     def _formatar_linha_progresso(self, resultado: ResultadoCotacao) -> str:
         nome = (resultado.transportadora or "GERAL").strip().upper()
@@ -1774,8 +1788,46 @@ class RomaneioWindow(QMainWindow):
         threading.Thread(target=_do, daemon=True).start()
 
     def _relogin_manual(self):
-        """Bot\u00e3o de relogin manual \u2014 reinicia sess\u00f5es de todas as transportadoras."""
+        """Botão de relogin manual — reinicia sessões de todas as transportadoras."""
         self._reiniciar_sessao()
+
+    def _perguntar_relogin(self, nome: str):
+        """Mostra prompt perguntando se o usuário quer refazer login de uma transportadora."""
+        nome_upper = nome.upper()
+        resposta = QMessageBox.question(
+            self,
+            f"Login falhou: {nome_upper}",
+            f"O login da transportadora {nome_upper} falhou.\n\n"
+            f"Deseja tentar refazer o login agora?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if resposta == QMessageBox.Yes:
+            self._relogin_transportadora(nome)
+
+    def _relogin_transportadora(self, nome: str):
+        """Refaz login de uma transportadora específica em background."""
+        nome_upper = nome.upper()
+        lbl = self._login_status_labels.get(nome)
+        if lbl is not None:
+            lbl.setText(f"⏳ {nome_upper}")
+            lbl.setStyleSheet("color: #8896ab; font-size: 11px; font-weight: 600;")
+
+        def _login_status_cb(n, status):
+            self._post_event_safe(LoginStatusEvent(n, status))
+
+        def _do():
+            with self._loop_lock:
+                asyncio.set_event_loop(self._loop)
+                try:
+                    self._loop.run_until_complete(
+                        self._sessao.relogin_one(nome, login_status_callback=_login_status_cb)
+                    )
+                except Exception as exc:
+                    print(f"[FreteBot] Erro no relogin de {nome}: {exc}", file=sys.stderr, flush=True)
+                    self._post_event_safe(LoginStatusEvent(nome, "fail"))
+
+        threading.Thread(target=_do, daemon=True).start()
 
     def _validar_local_entrega(self, pedidos):
         if not pedidos:

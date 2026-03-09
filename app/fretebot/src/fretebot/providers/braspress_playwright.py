@@ -100,8 +100,9 @@ class BraspressPlaywrightProvider(ProviderBase):
             logger.warning("[Braspress] Browser desconectado, reinicializando...")
             await self.cleanup()
         self._pw = await async_playwright().start()
-        self._browser = await self._pw.chromium.launch(
-            channel="chrome",
+        from fretebot.providers.base import launch_browser_resilient
+        self._browser = await launch_browser_resilient(
+            self._pw,
             headless=self.headless,
             args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
         )

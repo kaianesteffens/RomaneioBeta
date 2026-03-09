@@ -31,7 +31,7 @@ class AlfaProvider(ProviderBase):
     LOGIN_URL = "https://arearestrita.alfatransportes.com.br/login/"
     COTACAO_URL = "https://arearestrita.alfatransportes.com.br/cotacao/"
     COTACAO_API_URL = "https://arearestrita.alfatransportes.com.br/cotacao/api/"
-    LOGIN_MAX_WAIT_S = 240
+    LOGIN_MAX_WAIT_S = 120
 
     def __init__(
         self,
@@ -161,9 +161,26 @@ class AlfaProvider(ProviderBase):
             os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
             os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
             os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
-            shutil.which("chrome"),
-            shutil.which("google-chrome"),
+            os.path.expandvars(r"%UserProfile%\AppData\Local\Google\Chrome\Application\chrome.exe"),
         ]
+        # Verifica também no registro (caso Chrome tenha sido instalado em path customizado)
+        try:
+            import winreg
+            for root_key in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+                try:
+                    key = winreg.OpenKey(
+                        root_key,
+                        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+                    )
+                    path, _ = winreg.QueryValueEx(key, "")
+                    winreg.CloseKey(key)
+                    if path and os.path.isfile(path):
+                        candidates.append(path)
+                except OSError:
+                    pass
+        except ImportError:
+            pass
+        candidates.extend([shutil.which("chrome"), shutil.which("google-chrome")])
         for path in candidates:
             if path and os.path.isfile(path):
                 return path
@@ -248,8 +265,9 @@ class AlfaProvider(ProviderBase):
             if self._context:
                 return
             self._playwright = await async_playwright().start()
-            self._browser = await self._playwright.chromium.launch(
-                channel="chrome",
+            from fretebot.providers.base import launch_browser_resilient
+            self._browser = await launch_browser_resilient(
+                self._playwright,
                 headless=True,
                 args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
             )
@@ -323,7 +341,7 @@ class AlfaProvider(ProviderBase):
         )
         self._context = self._browser.contexts[0]
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
-        self._page.set_default_timeout(45000)
+        self._page.set_default_timeout(30000)
         logger.info("[ALFA] Playwright conectado ao Chrome via CDP")
 
     async def _disconnect_playwright(self) -> None:
@@ -845,167 +863,98 @@ class AlfaProvider(ProviderBase):
             # Após cotação anterior, pode ter botão "Fazer outra Cotação"
             try:
                 btn_outra = page.locator("a[href='/cotacao/api/']").first
-                if await btn_outra.is_visible(timeout=2000):
+                if await btn_outra.is_visible(timeout=1500):
                     await btn_outra.click()
                     logger.info("[ALFA] Clicou em 'Fazer outra Cotação'")
                     try:
-                        await page.wait_for_selector("#tipoPagador", timeout=15000)
+                        await page.wait_for_selector("#tipoPagador", timeout=8000)
                         return True
                     except Exception:
                         pass
             except Exception:
                 pass
 
-            # Volta à página base para acessar o menu de cards
-            await page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(1500)
-            logger.info("[ALFA] Navegou para BASE_URL: %s — URL resultante: %s", self.BASE_URL, page.url)
-
-            # ── Passo 1: clicar no card "Painel de Cotações" ──
-            card_clicked = False
+            # Tenta navegação direta pela URL da cotação (mais rápido que menu)
+            logger.info("[ALFA] Navegação direta para %s", self.cotacao_api_url)
             try:
-                card = page.locator("div.opcoes:has(h5:has-text('Painel de Cotações'))").first
-                if await card.is_visible(timeout=5000):
-                    await card.click()
-                    card_clicked = True
-                    logger.info("[ALFA] Clicou no card 'Painel de Cotações'")
-            except Exception:
-                pass
-
-            if not card_clicked:
-                # Fallback: busca card por texto parcial (case-insensitive)
-                card_clicked = await page.evaluate("""() => {
-                    const cards = document.querySelectorAll('div.opcoes');
-                    for (const c of cards) {
-                        const txt = (c.textContent || '').toLowerCase();
-                        if (txt.includes('painel') && txt.includes('cota')) {
-                            c.click();
-                            return true;
-                        }
-                    }
-                    // Fallback: qualquer link/botão contendo "cotaç" ou "cotac"
-                    const links = document.querySelectorAll('a, button, div[onclick], div.opcoes');
-                    for (const el of links) {
-                        const txt = (el.textContent || '').toLowerCase();
-                        if (txt.includes('cota') && (txt.includes('painel') || txt.includes('frete'))) {
-                            el.click();
-                            return true;
-                        }
-                    }
-                    return false;
-                }""")
-                if card_clicked:
-                    logger.info("[ALFA] Clicou no card 'Painel de Cotações' (via JS fallback)")
-
-            if not card_clicked:
-                logger.warning("[ALFA] Não encontrou card 'Painel de Cotações' via seletores")
-                # Log do conteúdo da página para diagnóstico
+                await page.goto(self.cotacao_api_url, wait_until="domcontentloaded", timeout=20000)
+                await page.wait_for_timeout(800)
                 try:
-                    body_text = await page.inner_text("body")
-                    logger.warning("[ALFA] Conteúdo da página (primeiros 500 chars): %s", (body_text or "")[:500])
+                    await page.wait_for_selector("#tipoPagador", timeout=8000)
+                    logger.info("[ALFA] Formulário encontrado via URL direta")
+                    return True
                 except Exception:
-                    pass
+                    logger.debug("[ALFA] URL direta não encontrou formulário, tentando via menu...")
+            except Exception as e:
+                logger.debug("[ALFA] Navegação direta falhou: %s", e)
+
+            # Fallback: volta à página base e navega via menu de cards
+            await page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=20000)
+            await page.wait_for_timeout(1000)
+
+            # Clicar no card "Painel de Cotações" via JS (combina todas as tentativas)
+            card_clicked = await page.evaluate("""() => {
+                // Tenta card com class 'opcoes'
+                const cards = document.querySelectorAll('div.opcoes');
+                for (const c of cards) {
+                    const txt = (c.textContent || '').toLowerCase();
+                    if (txt.includes('painel') && txt.includes('cota')) {
+                        c.click();
+                        return true;
+                    }
+                }
+                // Fallback: qualquer link/botão contendo cotação
+                const links = document.querySelectorAll('a, button, div[onclick], div.opcoes');
+                for (const el of links) {
+                    const txt = (el.textContent || '').toLowerCase();
+                    if (txt.includes('cota') && (txt.includes('painel') || txt.includes('frete'))) {
+                        el.click();
+                        return true;
+                    }
+                }
+                return false;
+            }""")
+
+            if not card_clicked:
+                logger.warning("[ALFA] Não encontrou card 'Painel de Cotações'")
                 await self._save_debug_screenshot("card_nao_encontrado")
-                # FALLBACK: tenta navegação direta pela URL da cotação
-                logger.info("[ALFA] Tentando navegação direta para %s", self.cotacao_api_url)
-                try:
-                    await page.goto(self.cotacao_api_url, wait_until="domcontentloaded", timeout=30000)
-                    await page.wait_for_timeout(1500)
-                    try:
-                        await page.wait_for_selector("#tipoPagador", timeout=15000)
-                        logger.info("[ALFA] Formulário encontrado via navegação direta pela URL!")
-                        return True
-                    except Exception:
-                        logger.warning("[ALFA] Navegação direta pela URL não encontrou formulário")
-                except Exception as e:
-                    logger.warning("[ALFA] Navegação direta falhou: %s", e)
                 return False
 
-            await page.wait_for_timeout(1500)
+            logger.info("[ALFA] Clicou no card 'Painel de Cotações'")
+            await page.wait_for_timeout(1000)
 
-            # ── Passo 2: clicar no botão "Nova Cotação" (href=/cotacao/api/) ──
-            nova_clicked = False
-            try:
-                btn = page.locator("a[href='/cotacao/api/']").first
-                if await btn.is_visible(timeout=10000):
-                    await btn.click()
-                    nova_clicked = True
-                    logger.info("[ALFA] Clicou em 'Nova Cotação'")
-            except Exception:
-                pass
-
-            if not nova_clicked:
-                try:
-                    btn = page.locator("a:has-text('Nova')").filter(has_text="Cotação").first
-                    if await btn.is_visible(timeout=5000):
-                        await btn.click()
-                        nova_clicked = True
-                        logger.info("[ALFA] Clicou em 'Nova Cotação' (por texto)")
-                except Exception:
-                    pass
-
-            if not nova_clicked:
-                nova_clicked = await page.evaluate("""() => {
-                    const a = document.querySelector('a[href*="/cotacao/api"]');
-                    if (a) { a.click(); return true; }
-                    // Fallback: qualquer link com texto "Nova Cotação" ou "Nova cotação"
-                    const links = document.querySelectorAll('a');
-                    for (const el of links) {
-                        const txt = (el.textContent || '').toLowerCase();
-                        if (txt.includes('nova') && txt.includes('cota')) {
-                            el.click();
-                            return true;
-                        }
+            # Clicar em "Nova Cotação" via JS
+            nova_clicked = await page.evaluate("""() => {
+                const a = document.querySelector('a[href*="/cotacao/api"]');
+                if (a) { a.click(); return true; }
+                const links = document.querySelectorAll('a');
+                for (const el of links) {
+                    const txt = (el.textContent || '').toLowerCase();
+                    if (txt.includes('nova') && txt.includes('cota')) {
+                        el.click();
+                        return true;
                     }
-                    return false;
-                }""")
-                if nova_clicked:
-                    logger.info("[ALFA] Clicou em 'Nova Cotação' (via JS)")
+                }
+                return false;
+            }""")
 
             if not nova_clicked:
-                logger.warning("[ALFA] Não encontrou botão 'Nova Cotação' via seletores")
-                try:
-                    body_text = await page.inner_text("body")
-                    logger.warning("[ALFA] Conteúdo após card (primeiros 500 chars): %s", (body_text or "")[:500])
-                except Exception:
-                    pass
+                logger.warning("[ALFA] Não encontrou botão 'Nova Cotação'")
                 await self._save_debug_screenshot("nova_cotacao_nao_encontrado")
-                # FALLBACK: tenta navegação direta
-                logger.info("[ALFA] Tentando navegação direta para %s", self.cotacao_api_url)
-                try:
-                    await page.goto(self.cotacao_api_url, wait_until="domcontentloaded", timeout=30000)
-                    await page.wait_for_timeout(1500)
-                    try:
-                        await page.wait_for_selector("#tipoPagador", timeout=15000)
-                        logger.info("[ALFA] Formulário encontrado via navegação direta!")
-                        return True
-                    except Exception:
-                        logger.warning("[ALFA] Navegação direta não encontrou formulário")
-                except Exception as e:
-                    logger.warning("[ALFA] Navegação direta falhou: %s", e)
                 return False
+
+            logger.info("[ALFA] Clicou em 'Nova Cotação'")
 
             # Espera formulário renderizar
             try:
-                await page.wait_for_selector("#tipoPagador", timeout=15000)
+                await page.wait_for_selector("#tipoPagador", timeout=10000)
                 return True
             except Exception:
                 logger.warning("[ALFA] Formulário não renderizou após navegação por menu")
                 await self._save_debug_screenshot("formulario_nao_renderizou")
-                # FALLBACK final: tenta ir direto pela URL
-                logger.info("[ALFA] Último fallback: navegação direta para %s", self.cotacao_api_url)
-                try:
-                    await page.goto(self.cotacao_api_url, wait_until="domcontentloaded", timeout=30000)
-                    await page.wait_for_timeout(2000)
-                    await page.wait_for_selector("#tipoPagador", timeout=15000)
-                    logger.info("[ALFA] Formulário encontrado via URL direta (fallback final)")
-                    return True
-                except Exception:
-                    logger.warning("[ALFA] Fallback final via URL direta também falhou")
                 return False
         except Exception as e:
             logger.warning("[ALFA] _navegar_para_cotacao falhou com exceção: %s", e)
-            await self._save_debug_screenshot("excecao_navegacao")
             return False
 
     async def _is_logged_in(self) -> bool:
@@ -1047,7 +996,7 @@ class AlfaProvider(ProviderBase):
 
         # ── Não-headless: Chrome já abriu na página de login ──
         # Espera a página carregar
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
 
         # Verifica se já está logado (sessão persistente do user-data-dir)
         current_url = self._get_page_url_sync()
@@ -1079,7 +1028,7 @@ class AlfaProvider(ProviderBase):
 
         # Monitora URL via HTTP — sem Playwright, Turnstile não detecta nada
         for _ in range(self.LOGIN_MAX_WAIT_S):
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
             url = self._get_page_url_sync()
             if url and self.BASE_URL.lower() in url.lower() and "login" not in url.lower():
                 break
@@ -1090,7 +1039,7 @@ class AlfaProvider(ProviderBase):
 
         # Login OK — espera a página estabilizar antes de conectar Playwright
         logger.info("[ALFA] Login detectado! Aguardando p\u00e1gina estabilizar...")
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)
 
         # Conecta Playwright (Turnstile já passou)
         await self._connect_playwright()
@@ -1099,16 +1048,16 @@ class AlfaProvider(ProviderBase):
         self._set_taskbar_visible(False)
 
         # Verifica se o formulário de cotação renderizou (com retry)
-        for attempt in range(3):
+        for attempt in range(2):
             if await self._is_logged_in():
                 self._logged_in = True
                 logger.info("[ALFA] Login OK — Playwright conectado após Turnstile")
                 return True
-            logger.info(f"[ALFA] Formul\u00e1rio n\u00e3o renderizou (tentativa {attempt+1}/3), aguardando...")
-            await asyncio.sleep(2)
+            logger.info(f"[ALFA] Formul\u00e1rio n\u00e3o renderizou (tentativa {attempt+1}/2), aguardando...")
+            await asyncio.sleep(1)
 
         self._logged_in = False
-        self.last_error = "Login realizado mas formulário não renderizou após 3 tentativas"
+        self.last_error = "Login realizado mas formulário não renderizou após 2 tentativas"
         logger.error(f"[ALFA] {self.last_error}")
         return False
 
@@ -1139,14 +1088,6 @@ class AlfaProvider(ProviderBase):
         # Navega para cotação via menu (não por URL direta)
         logger.info("[ALFA] Iniciando navegação para formulário de cotação...")
         if not await self._navegar_para_cotacao():
-            # Pode estar em página de resultado; volta à base e tenta de novo
-            logger.info("[ALFA] Navegação falhou (tentativa 1), voltando à página inicial...")
-            try:
-                await page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=30000)
-                await page.wait_for_timeout(1000)
-            except Exception:
-                pass
-
             # Se caiu na tela de login, precisa relogar
             if "login" in page.url.lower():
                 logger.info("[ALFA] Sessão expirou, refazendo login...")
@@ -1155,57 +1096,81 @@ class AlfaProvider(ProviderBase):
                     raise RuntimeError("Login Alfa falhou")
 
             if not await self._navegar_para_cotacao():
-                # Último recurso: tenta relogar
-                logger.info("[ALFA] Navegação falhou (tentativa 2), re-login como último recurso...")
-                self._logged_in = False
-                if not await self._login():
-                    raise RuntimeError("Login Alfa falhou")
-                if not await self._navegar_para_cotacao():
-                    logger.error("[ALFA] Todas as tentativas de navegação para cotação falharam")
-                    await self._save_debug_screenshot("todas_tentativas_falharam")
-                    raise RuntimeError("Não conseguiu navegar para cotação após 3 tentativas")
+                logger.error("[ALFA] Navegação para cotação falhou")
+                await self._save_debug_screenshot("navegacao_falhou")
+                raise RuntimeError("Não conseguiu navegar para cotação")
 
         # Espera o formulário renderizar
         await page.wait_for_selector("#tipoPagador", timeout=10000)
 
         await page.select_option("#tipoPagador", tipo_pagador)
-        # Aguarda o site Angular reagir à mudança de tipoPagador
-        # (pode auto-preencher campos de CNPJ baseado na conta logada)
-        await page.wait_for_timeout(800)
+        await page.wait_for_timeout(400)
 
-        # Preenche campos que não sofrem auto-preenchimento primeiro
-        await page.locator("#pesoMercadoria").fill(self._fmt_decimal(peso, 3, comma=True))
-        await page.locator("#valorMercadoria").fill(self._fmt_decimal(valor, 2, comma=True))
-        await page.locator("#dataInicialColeta").fill(self._today_str())
-        await page.locator("#totalVolumes").fill(str(int(volumes or 0)))
-        await page.locator("#totalCubagem").fill(self._fmt_decimal(cubagem_m3, 3, comma=False))
-        await page.select_option("#tipoCarga", "0")
-        await page.select_option("#tipoZona", "0")
+        # Preenche todos os campos via JS de uma vez (mais rápido que fills individuais)
+        await page.evaluate(
+            """(data) => {
+                function setVal(sel, val) {
+                    const el = document.querySelector(sel);
+                    if (!el) return;
+                    el.value = val;
+                    el.dispatchEvent(new Event('input', {bubbles: true}));
+                    el.dispatchEvent(new Event('change', {bubbles: true}));
+                }
+                function setSelect(sel, val) {
+                    const el = document.querySelector(sel);
+                    if (!el) return;
+                    el.value = val;
+                    el.dispatchEvent(new Event('change', {bubbles: true}));
+                }
+                setVal('#pesoMercadoria', data.peso);
+                setVal('#valorMercadoria', data.valor);
+                setVal('#dataInicialColeta', data.data);
+                setVal('#totalVolumes', data.volumes);
+                setVal('#totalCubagem', data.cubagem);
+                setSelect('#tipoCarga', '0');
+                setSelect('#tipoZona', '0');
+            }""",
+            {
+                "peso": self._fmt_decimal(peso, 3, comma=True),
+                "valor": self._fmt_decimal(valor, 2, comma=True),
+                "data": self._today_str(),
+                "volumes": str(int(volumes or 0)),
+                "cubagem": self._fmt_decimal(cubagem_m3, 3, comma=False),
+            },
+        )
 
         # Preenche CNPJs e CEPs por último para não ser sobrescrito pelo Angular
-        await page.locator("#cnpjRemetente").fill("")
-        await page.wait_for_timeout(200)
-        await page.locator("#cnpjRemetente").fill(self._format_doc(cnpj_remetente))
         await page.wait_for_timeout(300)
-        await page.locator("#cepRemetente").fill(self._digits(cep_remetente))
-        await page.wait_for_timeout(200)
-        await page.locator("#cnpjDestinatario").fill("")
-        await page.wait_for_timeout(200)
-        await page.locator("#cnpjDestinatario").fill(self._format_doc(cnpj_destinatario))
-        await page.wait_for_timeout(300)
-        await page.locator("#cepDestinatario").fill(self._digits(cep_destinatario))
+        await page.evaluate(
+            """(data) => {
+                function setVal(sel, val) {
+                    const el = document.querySelector(sel);
+                    if (!el) return;
+                    el.value = val;
+                    el.dispatchEvent(new Event('input', {bubbles: true}));
+                    el.dispatchEvent(new Event('change', {bubbles: true}));
+                    el.dispatchEvent(new Event('blur', {bubbles: true}));
+                }
+                setVal('#cnpjRemetente', data.cnpjRem);
+                setVal('#cepRemetente', data.cepRem);
+                setVal('#cnpjDestinatario', data.cnpjDest);
+                setVal('#cepDestinatario', data.cepDest);
+            }""",
+            {
+                "cnpjRem": self._format_doc(cnpj_remetente),
+                "cepRem": self._digits(cep_remetente),
+                "cnpjDest": self._format_doc(cnpj_destinatario),
+                "cepDest": self._digits(cep_destinatario),
+            },
+        )
 
     async def _do_submit_click(self, submit_btn) -> None:
         """Clica no botão submit com fallbacks."""
         try:
-            await submit_btn.click(timeout=15000)
+            await submit_btn.click(timeout=8000)
         except Exception:
-            logger.warning("[ALFA] Click normal no submit falhou, tentando force click...")
-            try:
-                await submit_btn.click(force=True, timeout=10000)
-            except Exception:
-                logger.warning("[ALFA] Force click falhou, tentando via JS...")
-                await self._page.evaluate("document.querySelector(\"button[type='submit']\")?.click()")
+            logger.warning("[ALFA] Click normal falhou, tentando via JS...")
+            await self._page.evaluate("document.querySelector(\"button[type='submit']\")?.click()")
 
     async def _extrair_resultado(self, api_response=None) -> Optional[Cotacao]:
         page = self._page
@@ -1310,8 +1275,7 @@ class AlfaProvider(ProviderBase):
 
             submit_btn = self._page.locator("button[type='submit']")
             try:
-                await submit_btn.scroll_into_view_if_needed(timeout=5000)
-                await self._page.wait_for_timeout(300)
+                await submit_btn.scroll_into_view_if_needed(timeout=3000)
             except Exception:
                 pass
 
@@ -1321,7 +1285,7 @@ class AlfaProvider(ProviderBase):
             try:
                 async with self._page.expect_response(
                     lambda r: self.cotacao_api_url in r.url and r.request.method.upper() in {"POST", "GET"},
-                    timeout=30000,
+                    timeout=15000,
                 ) as response_info:
                     await self._do_submit_click(submit_btn)
                 api_response = response_info.value

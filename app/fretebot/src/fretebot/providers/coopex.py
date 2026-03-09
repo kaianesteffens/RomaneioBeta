@@ -45,10 +45,11 @@ class CoopexProvider(ProviderBase):
             await self.cleanup()
 
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            channel="chrome",
+        from fretebot.providers.base import launch_browser_resilient
+        self._browser = await launch_browser_resilient(
+            self._playwright,
             headless=self.headless,
-            args=['--disable-blink-features=AutomationControlled', '--no-sandbox']
+            args=['--disable-blink-features=AutomationControlled', '--no-sandbox'],
         )
         self._context = await self._browser.new_context(
             viewport={'width': 1920, 'height': 1080},
@@ -290,23 +291,31 @@ class CoopexProvider(ProviderBase):
                 }}
             }}''')
 
-        # Preencher cubagem por volume (campos cuba1..cuba11) usando somente linhas reais
+        # Preencher cubagem por volume (campos cuba1..cuba11)
+        # Agrupa caixas de mesmo tamanho para economizar campos
         cubagens_validas = self._normalizar_cubagens_cm(cubagens)
-        cuba_values: list[str] = []
-        for cub in cubagens_validas:
-            for _ in range(int(cub["quantidade"])):
-                cuba_values.append(
-                    f'{int(cub["comprimento_cm"])}x{int(cub["largura_cm"])}x{int(cub["altura_cm"])}'
-                )
-        if not cuba_values:
-            raise Exception("COOPEX sem cubagens reais para preencher os campos cubaN")
-        if len(cuba_values) > 11:
-            raise Exception("COOPEX não suporta mais de 11 volumes (campos cuba1..cuba11)")
-        for i, cuba_value in enumerate(cuba_values, start=1):
-            await page.evaluate(f'''() => {{
-                const el = document.querySelector('input[name=cuba{i}]');
-                if (el) el.value = '{cuba_value}';
-            }}''')
+        if cubagens_validas:
+            # Agrupa por dimensão: {"50x40x30": quantidade_total}
+            grupos: dict[str, int] = {}
+            for cub in cubagens_validas:
+                chave = f'{int(cub["comprimento_cm"])}x{int(cub["largura_cm"])}x{int(cub["altura_cm"])}'
+                grupos[chave] = grupos.get(chave, 0) + int(cub["quantidade"])
+
+            # Expande os grupos em valores individuais
+            cuba_values: list[str] = []
+            for dim, qtd in grupos.items():
+                for _ in range(qtd):
+                    cuba_values.append(dim)
+
+            if len(cuba_values) <= 11:
+                for i, cuba_value in enumerate(cuba_values, start=1):
+                    await page.evaluate(f'''() => {{
+                        const el = document.querySelector('input[name=cuba{i}]');
+                        if (el) el.value = '{cuba_value}';
+                    }}''')
+                logger.info(f"[{self.nome}] Preencheu {len(cuba_values)} campos cuba individuais")
+            else:
+                logger.info(f"[{self.nome}] {len(cuba_values)} volumes > 11 campos cuba, usando apenas cubagem m³ total")
 
         # Reaplica f15 no final, pois alguns scripts do SSW podem limpar/reformatar o campo.
         await page.evaluate(
@@ -357,16 +366,31 @@ class CoopexProvider(ProviderBase):
 
         # Submit via sim()
         await page.evaluate('() => { if (typeof sim === "function") sim(); }')
-        await page.wait_for_timeout(3000)
 
-        # Extrair TODOS os campos de resultado do DOM
-        results = await page.evaluate('''() => {
-            const result = {};
-            document.querySelectorAll('input').forEach(el => {
-                if (el.name && el.value) result[el.name] = el.value;
-            });
-            return result;
-        }''')
+        # Polling: aguardar vlr_frete ser populado no DOM (até 15s)
+        results = {}
+        for _poll in range(15):
+            await page.wait_for_timeout(1000)
+            results = await page.evaluate('''() => {
+                const result = {};
+                document.querySelectorAll('input').forEach(el => {
+                    if (el.name && el.value) result[el.name] = el.value;
+                });
+                return result;
+            }''')
+            vlr = results.get('vlr_frete', '')
+            if vlr and vlr != '0,00':
+                logger.info(f"[{self.nome}] vlr_frete encontrado após {_poll+1}s")
+                break
+            # Se XML retornou erro, não precisa continuar esperando
+            if xml_responses:
+                for xml in xml_responses:
+                    if '<erro>' in xml and 'ERRO' in xml.upper():
+                        logger.info(f"[{self.nome}] Erro XML detectado, parando polling")
+                        break
+                else:
+                    continue
+                break
 
         logger.info(f"[{self.nome}] Todos os campos resultado DOM: {results}")
 
@@ -437,11 +461,13 @@ class CoopexProvider(ProviderBase):
             cubagens_cm = self._normalizar_cubagens_cm(cubagens)
             if cubagens_cm:
                 soma = sum(int(c["quantidade"]) for c in cubagens_cm)
-                if int(volumes or 0) > 0 and int(volumes) != soma:
-                    self.last_error = f"Cotação bloqueada: VOL ({volumes}) diverge da soma das cubagens ({soma})"
-                    logger.error(f"[{self.nome}] {self.last_error}")
-                    return None
                 volumes = soma
+                # Calcula m³ total a partir das cubagens individuais
+                if cubagem_m3 <= 0:
+                    cubagem_m3 = sum(
+                        (c["comprimento_cm"] * c["largura_cm"] * c["altura_cm"] / 1_000_000.0) * c["quantidade"]
+                        for c in cubagens_cm
+                    )
             elif volumes > 0 and comprimento_cm > 0 and largura_cm > 0 and altura_cm > 0:
                 cubagens_cm = [
                     {
@@ -451,10 +477,15 @@ class CoopexProvider(ProviderBase):
                         "altura_cm": int(altura_cm),
                     }
                 ]
+                if cubagem_m3 <= 0:
+                    cubagem_m3 = (comprimento_cm * largura_cm * altura_cm / 1_000_000.0) * volumes
+            elif cubagem_m3 > 0:
+                # Sem cubagens individuais, mas tem m³ total — prossegue
+                cubagens_cm = []
             else:
                 self.last_error = (
                     f"Cotação bloqueada: cubagens reais ausentes/inválidas "
-                    f"(volumes={volumes}, dims_cm={comprimento_cm}x{largura_cm}x{altura_cm})"
+                    f"(volumes={volumes}, dims_cm={comprimento_cm}x{largura_cm}x{altura_cm}, m3={cubagem_m3})"
                 )
                 logger.error(f"[{self.nome}] {self.last_error}")
                 return None

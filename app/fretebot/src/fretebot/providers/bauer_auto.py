@@ -498,8 +498,9 @@ class BauerAutoProvider(ProviderBase):
         zip_future = loop.run_in_executor(None, self._load_zip_codes)
 
         async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(
-                channel="chrome",
+            from fretebot.providers.base import launch_browser_resilient
+            browser = await launch_browser_resilient(
+                playwright,
                 headless=self.headless,
                 args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
             )

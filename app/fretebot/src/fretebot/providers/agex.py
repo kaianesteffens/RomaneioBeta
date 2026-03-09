@@ -223,8 +223,9 @@ class AGEXProvider(ProviderBase):
             logger.warning(f"[{self.nome}] Browser desconectado, reinicializando...")
             await self.cleanup()
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            channel="chrome",
+        from fretebot.providers.base import launch_browser_resilient
+        self._browser = await launch_browser_resilient(
+            self._playwright,
             headless=self.headless,
             args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
         )

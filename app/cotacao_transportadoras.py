@@ -890,9 +890,10 @@ class TransportadoraSession:
         self._ultimo_uso: dict[str, float] = {}
         self._idle_task: asyncio.Task | None = None
 
-    async def inicializar(self, callback=None, login_status_callback=None):
+    async def inicializar(self, callback=None, login_status_callback=None, login_retry_callback=None):
         """Cria providers e faz pre-login em todos. callback(msg) para status.
-        login_status_callback(nome, status) para status individual ('pending','ok','fail')."""
+        login_status_callback(nome, status) para status individual ('pending','ok','fail').
+        login_retry_callback(nome) chamado quando login falha, para perguntar ao usuário."""
         # Importa providers sob demanda (lazy) para não atrasar a abertura da janela
         _ensure_provider_imports()
         # Mata processos Chrome órfãos de sessões anteriores do FreteBot
@@ -1072,9 +1073,9 @@ class TransportadoraSession:
 
         async def _pre_login_one(nome, prov):
             # Alfa pode aguardar Turnstile manual; timeout maior
-            timeout_s = 120 if nome.lower() == "alfa" else 60
-            max_retries = 1 if nome.lower() == "alfa" else 2  # até 2 retries p/ erros de rede
-            backoff = 5  # segundos entre tentativas
+            timeout_s = 90 if nome.lower() == "alfa" else 45
+            max_retries = 0 if nome.lower() == "alfa" else 1
+            backoff = 3  # segundos entre tentativas
 
             if login_status_callback:
                 login_status_callback(nome, "pending")
@@ -1090,6 +1091,8 @@ class TransportadoraSession:
                         _log_diag(f"Pre-login {nome} timeout ({timeout_s}s) — login continuará na cotação")
                         if login_status_callback:
                             login_status_callback(nome, "fail")
+                        if login_retry_callback:
+                            login_retry_callback(nome)
                         return nome, False
                     _log_diag(f"Pre-login {nome} OK")
                     if login_status_callback:
@@ -1106,6 +1109,8 @@ class TransportadoraSession:
                     report_error_message(f"Pre-login {nome} falhou: {e}", context=f"prelogin_{nome}")
                     if login_status_callback:
                         login_status_callback(nome, "fail")
+                    if login_retry_callback:
+                        login_retry_callback(nome)
                     return nome, False
 
         results = await asyncio.gather(
@@ -1136,6 +1141,32 @@ class TransportadoraSession:
     def registrar_uso(self, nome: str) -> None:
         """Atualiza timestamp de último uso de um provider."""
         self._ultimo_uso[nome] = time.monotonic()
+
+    async def relogin_one(self, nome: str, login_status_callback=None) -> bool:
+        """Refaz login de um provider específico. Retorna True se OK."""
+        prov = self.providers.get(nome)
+        if prov is None:
+            _log_diag(f"relogin_one: provider '{nome}' não encontrado")
+            return False
+        _log_diag(f"Refazendo login de {nome}...")
+        if login_status_callback:
+            login_status_callback(nome, "pending")
+        try:
+            await prov.cleanup()
+        except Exception:
+            pass
+        try:
+            await prov.pre_login()
+            _log_diag(f"Relogin {nome} OK")
+            if login_status_callback:
+                login_status_callback(nome, "ok")
+            self._ultimo_uso[nome] = time.monotonic()
+            return True
+        except Exception as e:
+            _log_diag(f"Relogin {nome} falhou: {e}")
+            if login_status_callback:
+                login_status_callback(nome, "fail")
+            return False
 
     async def fechar_ociosos(self) -> None:
         """Fecha browsers de providers ociosos por mais de IDLE_TIMEOUT_S."""
@@ -1318,7 +1349,7 @@ async def _executar_cotacoes_com_dados(
         _log_diag(msg)
         return [ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=msg)]
 
-    tasks: list[tuple[str, Any, Any]] = []
+    tasks: list[tuple[str, Any, dict[str, Any]]] = []  # (nome, provider, kwargs_coteir)
     erros_setup: list[ResultadoCotacao] = []
     uf_destino_cep = _cep_para_uf(destino)
     uf_destino = uf_destino_informada or uf_destino_cep
@@ -1394,7 +1425,7 @@ async def _executar_cotacoes_com_dados(
                     if cnpj_remetente:
                         _bp_kwargs["cnpj_remetente"] = cnpj_remetente
                         _bp_kwargs["tipo_frete"] = tipo_frete or "2"
-                    tasks.append(("BRASPRESS", provider, provider.coteir(**_bp_kwargs)))
+                    tasks.append(("BRASPRESS", provider, _bp_kwargs))
                 else:
                     _log_diag("BRASPRESS não configurada (CNPJ/senha ausentes)")
     except Exception as e:
@@ -1478,7 +1509,7 @@ async def _executar_cotacoes_com_dados(
                             provider.cnpj_destinatario = re.sub(r"\D", "", bau_cnpj_pag)
                             _bauer_kwargs["destino"] = _resolver_cep_origem(config, "")
                             _bauer_kwargs["tipo_frete"] = "fob"
-                        tasks.append(("BAUER", provider, provider.coteir(**_bauer_kwargs)))
+                        tasks.append(("BAUER", provider, _bauer_kwargs))
                 else:
                     _log_diag("BAUER não configurada (parâmetros ausentes)")
     except Exception as e:
@@ -1529,7 +1560,7 @@ async def _executar_cotacoes_com_dados(
                     if cnpj_remetente:
                         _trd_kwargs["cnpj_remetente"] = cnpj_remetente
                         _trd_kwargs["cep_remetente"] = origem
-                    tasks.append(("TRD", provider, provider.coteir(**_trd_kwargs)))
+                    tasks.append(("TRD", provider, _trd_kwargs))
                 else:
                     _log_diag("TRD não configurada (email/senha ausentes)")
     except Exception as e:
@@ -1642,7 +1673,7 @@ async def _executar_cotacoes_com_dados(
                                 peso=peso,
                                 valor=valor,
                             )
-                            tasks.append(("AGEX", provider, provider.coteir(**_agex_kwargs)))
+                            tasks.append(("AGEX", provider, _agex_kwargs))
                     else:
                         _log_diag("AGEX não configurada (CNPJ/senha ausentes)")
       except Exception as e:
@@ -1705,7 +1736,7 @@ async def _executar_cotacoes_com_dados(
                             _euc_kwargs["cnpj_destinatario"] = "40223106000179"
                             _euc_kwargs["destino"] = _resolver_cep_origem(config, "")
                             _euc_kwargs["tipo_frete"] = "2"
-                        tasks.append(("EUCATUR", provider, provider.coteir(**_euc_kwargs)))
+                        tasks.append(("EUCATUR", provider, _euc_kwargs))
                     else:
                         _log_diag("Eucatur não configurada (domínio/usuário/senha ausentes)")
     except Exception as e:
@@ -1758,7 +1789,7 @@ async def _executar_cotacoes_com_dados(
                         _log_diag(f"RODONAVES preparada (headless={headless_rodonaves})")
                         if sessao is not None:
                             sessao.registrar_uso("rodonaves")
-                        tasks.append(("RODONAVES", provider, provider.coteir(
+                        _rodo_kwargs = dict(
                             origem=origem,
                             destino=destino,
                             peso=peso,
@@ -1769,7 +1800,8 @@ async def _executar_cotacoes_com_dados(
                             cnpj_remetente=cnpj_pagador,
                             cnpj_destinatario=cnpj_destinatario,
                             preencher_cep_origem=bool(_cep(cep_origem)),
-                        )))
+                        )
+                        tasks.append(("RODONAVES", provider, _rodo_kwargs))
                     else:
                         _log_diag("RODONAVES não configurada (domínio/usuário/senha/cnpj_pagador ausentes)")
       except Exception as e:
@@ -1834,7 +1866,7 @@ async def _executar_cotacoes_com_dados(
                             _alfa_kwargs["cnpj_destinatario"] = cnpj_rem
                             _alfa_kwargs["destino"] = _resolver_cep_origem(config, "")
                             _alfa_kwargs["tipo_pagador"] = "2"
-                        tasks.append(("ALFA", provider, provider.coteir(**_alfa_kwargs)))
+                        tasks.append(("ALFA", provider, _alfa_kwargs))
                     else:
                         _log_diag("ALFA não configurada (login/senha/cnpj_remetente ausentes)")
     except Exception as e:
@@ -1897,7 +1929,7 @@ async def _executar_cotacoes_com_dados(
                             _co_kwargs["cnpj_destinatario"] = "40223106000179"
                             _co_kwargs["destino"] = _resolver_cep_origem(config, "")
                             _co_kwargs["tipo_frete"] = "2"
-                        tasks.append(("COOPEX", provider, provider.coteir(**_co_kwargs)))
+                        tasks.append(("COOPEX", provider, _co_kwargs))
                     else:
                         _log_diag("COOPEX não configurada (domínio/usuário/senha ausentes)")
     except Exception as e:
@@ -1911,7 +1943,7 @@ async def _executar_cotacoes_com_dados(
     # Cotações em paralelo (configurável, padrão 3)
     fb_cfg = config.get("fretebot", {}) if isinstance(config, dict) else {}
     max_paralelo = max(1, min(7, int(fb_cfg.get("max_paralelo", 3) or 3)))
-    nomes_tasks = ", ".join(nome for nome, _provider, _coro in tasks)
+    nomes_tasks = ", ".join(nome for nome, _provider, _kwargs in tasks)
     _log_diag(f"Executando {len(tasks)} cotações em paralelo (máx {max_paralelo}): {nomes_tasks}")
     resultados: list[ResultadoCotacao] = []
     total_cotacoes = len(tasks) + len(erros_setup)
@@ -1924,143 +1956,176 @@ async def _executar_cotacoes_com_dados(
         _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=erro_setup)
     semaforo = asyncio.Semaphore(max_paralelo)
 
-    timeout_por_transportadora_s = 180
+    timeout_por_transportadora_s = 120
 
-    async def _exec(i: int, nome: str, provider: Any, coro):
-        # Alfa roda fora do semáforo: pode exigir interação manual (Turnstile)
+    async def _exec(i: int, nome: str, provider: Any, kwargs: dict[str, Any]):
         is_alfa = nome.upper() == "ALFA"
         if not is_alfa:
             await semaforo.acquire()
             _log_diag(f"Semáforo adquirido: {nome} (posição {i})")
         try:
-            effective_timeout = timeout_por_transportadora_s + 120 if is_alfa else timeout_por_transportadora_s
+            effective_timeout = timeout_por_transportadora_s + 60 if is_alfa else timeout_por_transportadora_s
+            coro = provider.coteir(**kwargs)
             cotacao = await asyncio.wait_for(coro, timeout=effective_timeout)
-            return i, nome, provider, cotacao, None
+            return i, nome, provider, kwargs, cotacao, None
         except asyncio.TimeoutError:
-            return i, nome, provider, None, TimeoutError(
+            return i, nome, provider, kwargs, None, TimeoutError(
                 f"Timeout de {effective_timeout}s na cotação {nome}"
             )
         except asyncio.CancelledError as exc:
             detalhe = str(exc).strip() or "sem detalhe"
-            return i, nome, provider, None, RuntimeError(
+            return i, nome, provider, kwargs, None, RuntimeError(
                 f"Cotação {nome} cancelada: {detalhe}"
             )
         except Exception as exc:
-            return i, nome, provider, None, exc
+            return i, nome, provider, kwargs, None, exc
         finally:
             if not is_alfa:
                 semaforo.release()
 
-    # Cria tasks na ordem de prioridade (mais lentas primeiro) para
-    # garantir que adquiram o semáforo nessa sequência.
-    futuros = []
-    for i, (nome, prov, coro) in enumerate(tasks):
-        t = asyncio.ensure_future(_exec(i, nome, prov, coro))
-        futuros.append(t)
+    def _processar_resultado(res, resultados, falhas_para_retry):
+        """Processa resultado de _exec, retorna (ResultadoCotacao|None, ok: bool)."""
+        nonlocal concluidas
 
-    for fut in asyncio.as_completed(futuros):
-        resultado_emitir: ResultadoCotacao | None = None
-        try:
-            res = await fut
-            if not isinstance(res, tuple) or len(res) != 5:
-                msg = f"Executor retornou formato inesperado de resultado: {type(res).__name__}"
-                _log_diag(msg)
-                resultado_emitir = ResultadoCotacao(
-                    transportadora="GERAL",
-                    status="erro",
-                    detalhes=msg,
-                )
-                concluidas += 1
-                resultados.append(resultado_emitir)
-                _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=resultado_emitir)
-                continue
+        if not isinstance(res, tuple) or len(res) != 6:
+            msg = f"Executor retornou formato inesperado de resultado: {type(res).__name__}"
+            _log_diag(msg)
+            r = ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=msg)
+            concluidas += 1
+            resultados.append(r)
+            _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
+            return
 
-            _i, nome_task, provider_task, cotacao, erro = res
-            if isinstance(erro, BaseException):
-                import traceback
-                tb = ''.join(traceback.format_exception(type(erro), erro, erro.__traceback__))
-                _log_diag(f"Erro em cotação {nome_task}: {type(erro).__name__}: {erro}\n{tb}")
-                report_error(type(erro), erro, erro.__traceback__, context=f"cotacao_{nome_task}")
-                resultado_emitir = ResultadoCotacao(
-                    transportadora=nome_task,
-                    status="erro",
+        _i, nome_task, provider_task, kwargs_task, cotacao, erro = res
+
+        if isinstance(erro, BaseException):
+            import traceback
+            tb = ''.join(traceback.format_exception(type(erro), erro, erro.__traceback__))
+            _log_diag(f"Erro em cotação {nome_task}: {type(erro).__name__}: {erro}\n{tb}")
+            report_error(type(erro), erro, erro.__traceback__, context=f"cotacao_{nome_task}")
+            if falhas_para_retry is not None:
+                falhas_para_retry.append((nome_task, provider_task, kwargs_task))
+                _log_diag(f"{nome_task} enfileirada para retry após as demais completarem")
+            else:
+                r = ResultadoCotacao(
+                    transportadora=nome_task, status="erro",
                     detalhes=f"{type(erro).__name__}: {erro}",
                 )
                 concluidas += 1
-                resultados.append(resultado_emitir)
-                _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=resultado_emitir)
-                continue
-            if erro is not None:
-                _log_diag(f"Erro em cotação {nome_task}: {erro}")
-                resultado_emitir = ResultadoCotacao(
-                    transportadora=nome_task,
-                    status="erro",
-                    detalhes=str(erro),
+                resultados.append(r)
+                _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
+            return
+
+        if erro is not None:
+            _log_diag(f"Erro em cotação {nome_task}: {erro}")
+            if falhas_para_retry is not None:
+                falhas_para_retry.append((nome_task, provider_task, kwargs_task))
+                _log_diag(f"{nome_task} enfileirada para retry após as demais completarem")
+            else:
+                r = ResultadoCotacao(
+                    transportadora=nome_task, status="erro", detalhes=str(erro),
                 )
                 concluidas += 1
-                resultados.append(resultado_emitir)
-                _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=resultado_emitir)
-                continue
+                resultados.append(r)
+                _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
+            return
 
-            if cotacao is not None:
-                try:
-                    transportadora = str(getattr(cotacao, "transportadora", nome_task))
-                    valor_frete = float(getattr(cotacao, "valor_frete", 0.0))
-                    prazo_dias = int(getattr(cotacao, "prazo_dias", 0))
-                    detalhes = getattr(cotacao, "restricoes", None)
-                except Exception as parse_exc:
-                    _log_diag(f"Resultado inválido em {nome_task}: {parse_exc}")
-                    resultado_emitir = ResultadoCotacao(
-                        transportadora=nome_task,
-                        status="erro",
-                        detalhes=f"Resultado inválido: {parse_exc}",
-                    )
-                    concluidas += 1
-                    resultados.append(resultado_emitir)
-                    _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=resultado_emitir)
-                    continue
-
-                resultado_emitir = ResultadoCotacao(
-                    transportadora=transportadora,
-                    status="ok",
-                    valor_frete=valor_frete,
-                    prazo_dias=prazo_dias,
-                    detalhes=detalhes,
+        if cotacao is not None:
+            try:
+                transportadora = str(getattr(cotacao, "transportadora", nome_task))
+                valor_frete = float(getattr(cotacao, "valor_frete", 0.0))
+                prazo_dias = int(getattr(cotacao, "prazo_dias", 0))
+                detalhes = getattr(cotacao, "restricoes", None)
+            except Exception as parse_exc:
+                _log_diag(f"Resultado inválido em {nome_task}: {parse_exc}")
+                r = ResultadoCotacao(
+                    transportadora=nome_task, status="erro",
+                    detalhes=f"Resultado inválido: {parse_exc}",
                 )
-                resultados.append(resultado_emitir)
-                _log_diag(f"✅ {transportadora}: R$ {valor_frete:.2f} - {prazo_dias} dias")
-            else:
-                detalhe = None
-                if provider_task is not None:
-                    detalhe = getattr(provider_task, "last_error", None)
-                if detalhe:
-                    _log_diag(f"{nome_task} retornou None: {detalhe}")
-                else:
-                    _log_diag(f"{nome_task} retornou None (sem resultado)")
-                    detalhe = "Sem resultado"
-                report_error_message(f"{nome_task} retornou None: {detalhe}", context=f"cotacao_{nome_task}")
-                resultado_emitir = ResultadoCotacao(
-                    transportadora=nome_task,
-                    status="erro",
-                    detalhes=str(detalhe),
-                )
-                resultados.append(resultado_emitir)
+                concluidas += 1
+                resultados.append(r)
+                _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
+                return
 
+            r = ResultadoCotacao(
+                transportadora=transportadora, status="ok",
+                valor_frete=valor_frete, prazo_dias=prazo_dias, detalhes=detalhes,
+            )
+            resultados.append(r)
             concluidas += 1
-            _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=resultado_emitir)
+            _log_diag(f"✅ {transportadora}: R$ {valor_frete:.2f} - {prazo_dias} dias")
+            _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
+        else:
+            detalhe = None
+            if provider_task is not None:
+                detalhe = getattr(provider_task, "last_error", None)
+            if detalhe:
+                _log_diag(f"{nome_task} retornou None: {detalhe}")
+            else:
+                _log_diag(f"{nome_task} retornou None (sem resultado)")
+                detalhe = "Sem resultado"
+            report_error_message(f"{nome_task} retornou None: {detalhe}", context=f"cotacao_{nome_task}")
+            if falhas_para_retry is not None:
+                falhas_para_retry.append((nome_task, provider_task, kwargs_task))
+                _log_diag(f"{nome_task} enfileirada para retry após as demais completarem")
+            else:
+                r = ResultadoCotacao(
+                    transportadora=nome_task, status="erro", detalhes=str(detalhe),
+                )
+                concluidas += 1
+                resultados.append(r)
+                _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
+
+    # ── Rodada 1: executa todas as cotações ──
+    falhas_para_retry: list[tuple[str, Any, dict[str, Any]]] = []
+    futuros = []
+    for i, (nome, prov, kwargs) in enumerate(tasks):
+        t = asyncio.ensure_future(_exec(i, nome, prov, kwargs))
+        futuros.append(t)
+
+    for fut in asyncio.as_completed(futuros):
+        try:
+            res = await fut
+            _processar_resultado(res, resultados, falhas_para_retry)
         except Exception as loop_exc:
             import traceback
             tb = ''.join(traceback.format_exception(type(loop_exc), loop_exc, loop_exc.__traceback__))
             _log_diag(f"Falha ao processar resultado de cotação: {loop_exc}\n{tb}")
             concluidas += 1
-            resultado_emitir = ResultadoCotacao(
-                transportadora="GERAL",
-                status="erro",
+            r = ResultadoCotacao(
+                transportadora="GERAL", status="erro",
                 detalhes=f"Falha interna ao processar cotação: {loop_exc}",
             )
-            resultados.append(resultado_emitir)
-            _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=resultado_emitir)
-            continue
+            resultados.append(r)
+            _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
+
+    # ── Rodada 2: retry das que falharam (máx 1 retry, sem enfileirar de novo) ──
+    if falhas_para_retry:
+        nomes_retry = ", ".join(n for n, _, _ in falhas_para_retry)
+        total_cotacoes += len(falhas_para_retry)
+        _log_diag(f"Retentando {len(falhas_para_retry)} cotação(ões) que falharam: {nomes_retry}")
+        _emitir_progresso(concluidas=concluidas, total=total_cotacoes)
+
+        futuros_retry = []
+        for i, (nome, prov, kwargs) in enumerate(falhas_para_retry):
+            t = asyncio.ensure_future(_exec(i, nome, prov, kwargs))
+            futuros_retry.append(t)
+
+        for fut in asyncio.as_completed(futuros_retry):
+            try:
+                res = await fut
+                _processar_resultado(res, resultados, None)  # None = não enfileira de novo
+            except Exception as loop_exc:
+                import traceback
+                tb = ''.join(traceback.format_exception(type(loop_exc), loop_exc, loop_exc.__traceback__))
+                _log_diag(f"Falha ao processar retry de cotação: {loop_exc}\n{tb}")
+                concluidas += 1
+                r = ResultadoCotacao(
+                    transportadora="GERAL", status="erro",
+                    detalhes=f"Falha interna no retry: {loop_exc}",
+                )
+                resultados.append(r)
+                _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
 
     validas = [r for r in resultados if r.status == "ok" and r.valor_frete is not None]
     _log_diag(f"Cotações válidas: {len(validas)} de {len(tasks)}")

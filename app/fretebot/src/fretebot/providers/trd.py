@@ -83,15 +83,16 @@ class TRDProvider(ProviderBase):
             await self.cleanup()
         
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            channel="chrome",
+        from fretebot.providers.base import launch_browser_resilient
+        self._browser = await launch_browser_resilient(
+            self._playwright,
             headless=self.headless,
             args=[
                 '--disable-blink-features=AutomationControlled',
                 '--no-sandbox',
                 '--enable-features=NetworkService,NetworkServiceInProcess',
                 '--disable-features=IsolateOrigins,site-per-process,TranslateUI',
-            ]
+            ],
         )
         self._context = await self._browser.new_context(
             viewport={'width': 1920, 'height': 1080},
