@@ -320,6 +320,7 @@ CAMPOS_CREDENCIAIS: dict[str, list[tuple[str, str, bool]]] = {
         ("senha", "Senha", True),
         ("cnpj_remetente", "CNPJ Remetente", False),
     ],
+    "coopex": [("dominio", "Domínio", False), ("usuario", "Usuário", False), ("senha", "Senha", True)],
 }
 
 
@@ -447,6 +448,8 @@ def _criar_config_empresa_vazia(nome: str) -> None:
             "alfa": {"habilitado": False, "login": "", "senha": "", "cnpj_remetente": "",
                      "login_url": "", "cotacao_url": "", "headless": False,
                      "ufs_atendidas": list(TODAS_UFS)},
+            "coopex": {"habilitado": False, "dominio": "", "usuario": "", "senha": "",
+                       "ufs_atendidas": []},
         },
     }
     _escrever_config_toml(config, _empresa_config_path(nome))
@@ -708,7 +711,7 @@ class ConfiguracoesDialog(QDialog):
         vbox = QVBoxLayout(content)
         vbox.setSpacing(10)
         transp_cfg = self.config.get("transportadoras", {}) or {}
-        for nome in sorted(["braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa"]):
+        for nome in sorted(["braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex"]):
             tcfg = transp_cfg.get(nome, {}) or {}
             ufs_atuais = tcfg.get("ufs_atendidas", [])
             if isinstance(ufs_atuais, str):
