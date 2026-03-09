@@ -461,7 +461,6 @@ class BraspressPlaywrightProvider(ProviderBase):
                 status = await page.evaluate(
                     """() => {
                         const clean = (v) => (v || '').replace(/\\s+/g, ' ').trim();
-                        const stepText = clean(document.getElementById('step4Result')?.innerText || '');
                         const bodyText = clean(document.body?.innerText || '');
                         const hasTable = Array.from(document.querySelectorAll('table')).some((t) => {
                             const headers = Array.from(t.querySelectorAll('th'))
@@ -478,25 +477,37 @@ class BraspressPlaywrightProvider(ProviderBase):
                         const hasValorBadge = badges.some((b) => /\\d+[\\.,]\\d{2}/.test(b) || /^R\\$\\s*\\d/.test(b));
                         const hasSucesso = /cota[çc][aã]o realizada com sucesso/i.test(bodyText);
                         const hasResultadoTitulo = /resultado da cota[çc][aã]o/i.test(bodyText);
+                        // Detectar erros visíveis na página
+                        const errs = Array.from(document.querySelectorAll(
+                            '.has-error .help-block, .error-message, .alert-danger, .alert-warning, .modal.in .modal-body'
+                        )).map(e => clean(e.innerText)).filter(t => t.length > 0);
                         return {
-                            stepLen: stepText.length,
+                            stepLen: clean(document.getElementById('step4Result')?.innerText || '').length,
                             hasTable,
                             hasValorBadge,
                             hasSucesso,
                             hasResultadoTitulo,
+                            errs,
                         };
                     }"""
                 )
                 ultimo_status = status if isinstance(status, dict) else None
-                if isinstance(status, dict) and (
-                    bool(status.get("hasTable"))
-                    or bool(status.get("hasValorBadge"))
-                    or bool(status.get("hasSucesso"))
-                    or bool(status.get("hasResultadoTitulo"))
-                    or int(status.get("stepLen", 0) or 0) > 0
-                ):
-                    resultado_pronto = True
-                    break
+                if isinstance(status, dict):
+                    # Detectar erros da página cedo para não esperar 135s em vão
+                    page_errs = status.get("errs") or []
+                    if page_errs and _poll >= 3:
+                        self.last_error = f"Erro na página Braspress: {'; '.join(page_errs[:3])}"
+                        logger.error(f"[Braspress] {self.last_error}")
+                        return None
+                    if (
+                        bool(status.get("hasTable"))
+                        or bool(status.get("hasValorBadge"))
+                        or bool(status.get("hasSucesso"))
+                        or bool(status.get("hasResultadoTitulo"))
+                        or int(status.get("stepLen", 0) or 0) > 0
+                    ):
+                        resultado_pronto = True
+                        break
 
             if not resultado_pronto:
                 # Log estado atual para debug

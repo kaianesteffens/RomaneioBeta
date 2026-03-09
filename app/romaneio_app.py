@@ -89,6 +89,17 @@ class CotacaoProgressEvent(QEvent):
         self.payload = payload or {}
 
 
+class LoginStatusEvent(QEvent):
+    """Evento para atualizar status de login individual de transportadora."""
+    EventType = QEvent.Type(QEvent.registerEventType())
+
+    def __init__(self, nome: str, status: str):
+        # status: "pending", "ok", "fail"
+        super().__init__(self.EventType)
+        self.nome = nome
+        self.status = status
+
+
 # ---------------------------------------------------------------------------
 # Helpers de formatação automática para campos do formulário fornecedor
 # ---------------------------------------------------------------------------
@@ -1013,6 +1024,32 @@ class RomaneioWindow(QMainWindow):
         self.label_info.setObjectName("StatusLabel")
         header_layout.addWidget(self.label_info)
 
+        # --- Painel de status de login das transportadoras ---
+        login_status_row = QHBoxLayout()
+        login_status_row.setSpacing(12)
+        self._login_status_labels: dict[str, QLabel] = {}
+        config = self._sessao.config if hasattr(self._sessao, 'config') else {}
+        transp_cfg = config.get("transportadoras", {}) if isinstance(config, dict) else {}
+        for nome in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex"):
+            tcfg = transp_cfg.get(nome, {}) if isinstance(transp_cfg, dict) else {}
+            if not tcfg.get("habilitado", False):
+                continue
+            lbl = QLabel(f"⏳ {nome.upper()}")
+            lbl.setStyleSheet("color: #8896ab; font-size: 11px; font-weight: 600;")
+            login_status_row.addWidget(lbl)
+            self._login_status_labels[nome] = lbl
+        login_status_row.addStretch(1)
+        self.btn_relogin = QPushButton("🔄 Refazer Login")
+        self.btn_relogin.setObjectName("SecondaryButton")
+        self.btn_relogin.setFixedHeight(28)
+        self.btn_relogin.setStyleSheet(
+            "font-size: 11px; padding: 4px 10px; background: #e9eef7; color: #1f2a44; "
+            "border: 1px solid #b0bdd0; border-radius: 6px; font-weight: 600;"
+        )
+        self.btn_relogin.clicked.connect(self._relogin_manual)
+        login_status_row.addWidget(self.btn_relogin)
+        header_layout.addLayout(login_status_row)
+
         self.tabs = QTabWidget()
         self.tabs.setObjectName("MainTabs")
 
@@ -1533,10 +1570,15 @@ class RomaneioWindow(QMainWindow):
         """Faz pre-login de todas as transportadoras em background."""
         def _status_callback(msg):
             self._post_event_safe(StatusUpdateEvent(msg))
+        def _login_status_callback(nome, status):
+            self._post_event_safe(LoginStatusEvent(nome, status))
         try:
             with self._loop_lock:
                 asyncio.set_event_loop(self._loop)
-                self._loop.run_until_complete(self._sessao.inicializar(callback=_status_callback))
+                self._loop.run_until_complete(self._sessao.inicializar(
+                    callback=_status_callback,
+                    login_status_callback=_login_status_callback,
+                ))
         except Exception as exc:
             print(f"[FreteBot] Erro no pre-login: {exc}", file=sys.stderr, flush=True)
 
@@ -1633,6 +1675,19 @@ class RomaneioWindow(QMainWindow):
         elif isinstance(event, StatusUpdateEvent):
             self.label_info.setText(event.msg)
             self.label_info.setStyleSheet("color: #1f6feb;")
+        elif isinstance(event, LoginStatusEvent):
+            lbl = self._login_status_labels.get(event.nome)
+            if lbl is not None:
+                nome_upper = event.nome.upper()
+                if event.status == "ok":
+                    lbl.setText(f"✅ {nome_upper}")
+                    lbl.setStyleSheet("color: #067647; font-size: 11px; font-weight: 600;")
+                elif event.status == "fail":
+                    lbl.setText(f"❌ {nome_upper}")
+                    lbl.setStyleSheet("color: #b42318; font-size: 11px; font-weight: 600;")
+                else:
+                    lbl.setText(f"⏳ {nome_upper}")
+                    lbl.setStyleSheet("color: #8896ab; font-size: 11px; font-weight: 600;")
 
     def _formatar_linha_progresso(self, resultado: ResultadoCotacao) -> str:
         nome = (resultado.transportadora or "GERAL").strip().upper()
@@ -1700,6 +1755,11 @@ class RomaneioWindow(QMainWindow):
         """Limpa sess\u00e3o atual e faz login novamente com a config atualizada."""
         self.label_info.setText("Reiniciando sess\u00f5es...")
         self.label_info.setStyleSheet("color: #1f6feb;")
+        for lbl in self._login_status_labels.values():
+            raw = lbl.text()
+            nome_upper = raw.split(" ", 1)[-1] if " " in raw else raw
+            lbl.setText(f"\u23f3 {nome_upper}")
+            lbl.setStyleSheet("color: #8896ab; font-size: 11px; font-weight: 600;")
 
         def _do():
             with self._loop_lock:
@@ -1712,6 +1772,10 @@ class RomaneioWindow(QMainWindow):
             self._run_pre_login()
 
         threading.Thread(target=_do, daemon=True).start()
+
+    def _relogin_manual(self):
+        """Bot\u00e3o de relogin manual \u2014 reinicia sess\u00f5es de todas as transportadoras."""
+        self._reiniciar_sessao()
 
     def _validar_local_entrega(self, pedidos):
         if not pedidos:

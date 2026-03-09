@@ -141,10 +141,18 @@ class TRDProvider(ProviderBase):
                 return False
 
             except Exception as e:
-                is_net = any(k in str(e) for k in ("ERR_CONNECTION", "ERR_NAME", "ERR_TIMED_OUT", "net::"))
-                if is_net and tentativa < max_tentativas:
-                    logger.warning(f"[{self.nome}] Login tentativa {tentativa} falhou: {e}")
+                is_retryable = any(k in str(e) for k in (
+                    "ERR_CONNECTION", "ERR_NAME", "ERR_TIMED_OUT", "net::", "Timeout",
+                ))
+                if is_retryable and tentativa < max_tentativas:
+                    logger.warning(f"[{self.nome}] Login tentativa {tentativa} falhou (retry): {e}")
                     await asyncio.sleep(5)
+                    try:
+                        await self._page.close()
+                    except Exception:
+                        pass
+                    self._page = await self._context.new_page()
+                    await self._page.add_init_script(self._STEALTH_JS)
                     continue
                 self.last_error = f"Erro no login: {e}"
                 logger.error(f"[{self.nome}] Erro no login após {tentativa} tentativa(s): {e}")

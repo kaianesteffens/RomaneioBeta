@@ -890,8 +890,9 @@ class TransportadoraSession:
         self._ultimo_uso: dict[str, float] = {}
         self._idle_task: asyncio.Task | None = None
 
-    async def inicializar(self, callback=None):
-        """Cria providers e faz pre-login em todos. callback(msg) para status."""
+    async def inicializar(self, callback=None, login_status_callback=None):
+        """Cria providers e faz pre-login em todos. callback(msg) para status.
+        login_status_callback(nome, status) para status individual ('pending','ok','fail')."""
         # Importa providers sob demanda (lazy) para não atrasar a abertura da janela
         _ensure_provider_imports()
         # Mata processos Chrome órfãos de sessões anteriores do FreteBot
@@ -1075,6 +1076,9 @@ class TransportadoraSession:
             max_retries = 1 if nome.lower() == "alfa" else 2  # até 2 retries p/ erros de rede
             backoff = 5  # segundos entre tentativas
 
+            if login_status_callback:
+                login_status_callback(nome, "pending")
+
             for attempt in range(max_retries + 1):
                 try:
                     _log_diag(f"Pre-login {nome}..." if attempt == 0 else f"Pre-login {nome} tentativa {attempt + 1}...")
@@ -1084,8 +1088,12 @@ class TransportadoraSession:
                         await asyncio.wait_for(asyncio.shield(prov.pre_login()), timeout=timeout_s)
                     except asyncio.TimeoutError:
                         _log_diag(f"Pre-login {nome} timeout ({timeout_s}s) — login continuará na cotação")
+                        if login_status_callback:
+                            login_status_callback(nome, "fail")
                         return nome, False
                     _log_diag(f"Pre-login {nome} OK")
+                    if login_status_callback:
+                        login_status_callback(nome, "ok")
                     return nome, True
                 except Exception as e:
                     is_connection_error = any(k in str(e) for k in ("ERR_CONNECTION", "ERR_NAME", "ERR_TIMED_OUT", "net::"))
@@ -1096,6 +1104,8 @@ class TransportadoraSession:
                         continue
                     _log_diag(f"Pre-login {nome} falhou: {e}")
                     report_error_message(f"Pre-login {nome} falhou: {e}", context=f"prelogin_{nome}")
+                    if login_status_callback:
+                        login_status_callback(nome, "fail")
                     return nome, False
 
         results = await asyncio.gather(

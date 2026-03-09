@@ -29,6 +29,7 @@ class CoopexProvider(ProviderBase):
         self.usuario = usuario
         self.senha = senha
         self.headless = headless
+        self.last_error: str | None = None
         self._browser = None
         self._context = None
         self._page = None
@@ -76,7 +77,8 @@ class CoopexProvider(ProviderBase):
             logger.info(f"[{self.nome}] Login OK")
             self._logged_in = True
         except Exception as e:
-            logger.error(f"[{self.nome}] Erro no login: {e}")
+            self.last_error = f"Erro no login: {e}"
+            logger.error(f"[{self.nome}] {self.last_error}")
             raise
 
     async def pre_login(self):
@@ -384,7 +386,8 @@ class CoopexProvider(ProviderBase):
                 logger.warning(f"[{self.nome}] Aviso SSW: {erro} - {msg}")
 
         if erro and 'ERRO' in erro.upper():
-            logger.info(f"[{self.nome}] Rota não atendida pelo SSW: {erro_msg}")
+            self.last_error = f"Rota não atendida pelo SSW: {erro_msg}"
+            logger.info(f"[{self.nome}] {self.last_error}")
             return None
 
         vlr_frete_str = results.get('vlr_frete', '')
@@ -392,13 +395,15 @@ class CoopexProvider(ProviderBase):
         prazo_str = results.get('prazo', '')
 
         if not vlr_frete_str or vlr_frete_str == '0,00':
-            logger.warning(f"[{self.nome}] Sem valor de frete retornado")
+            self.last_error = f"Sem valor de frete retornado (campos DOM: vlr_frete={vlr_frete_str!r}, nro_cotacao={nro_cotacao!r}, prazo={prazo_str!r})"
+            logger.warning(f"[{self.nome}] {self.last_error}")
             return None
 
         try:
             valor_frete = float(vlr_frete_str.replace('.', '').replace(',', '.'))
         except ValueError:
-            logger.error(f"[{self.nome}] Erro ao parsear valor: {vlr_frete_str}")
+            self.last_error = f"Erro ao parsear valor: {vlr_frete_str}"
+            logger.error(f"[{self.nome}] {self.last_error}")
             return None
 
         prazo_dias = 0
@@ -427,14 +432,14 @@ class CoopexProvider(ProviderBase):
                     cubagens: Optional[list[dict]] = None,
                     cnpj_pagador: str = "", tipo_frete: str = "1") -> Optional[Cotacao]:
         """Realiza cotação de frete via portal SSW COOPEX."""
+        self.last_error = None
         try:
             cubagens_cm = self._normalizar_cubagens_cm(cubagens)
             if cubagens_cm:
                 soma = sum(int(c["quantidade"]) for c in cubagens_cm)
                 if int(volumes or 0) > 0 and int(volumes) != soma:
-                    logger.error(
-                        f"[{self.nome}] Cotação bloqueada: VOL ({volumes}) diverge da soma das cubagens ({soma})"
-                    )
+                    self.last_error = f"Cotação bloqueada: VOL ({volumes}) diverge da soma das cubagens ({soma})"
+                    logger.error(f"[{self.nome}] {self.last_error}")
                     return None
                 volumes = soma
             elif volumes > 0 and comprimento_cm > 0 and largura_cm > 0 and altura_cm > 0:
@@ -447,10 +452,11 @@ class CoopexProvider(ProviderBase):
                     }
                 ]
             else:
-                logger.error(
-                    f"[{self.nome}] Cotação bloqueada: cubagens reais ausentes/inválidas "
+                self.last_error = (
+                    f"Cotação bloqueada: cubagens reais ausentes/inválidas "
                     f"(volumes={volumes}, dims_cm={comprimento_cm}x{largura_cm}x{altura_cm})"
                 )
+                logger.error(f"[{self.nome}] {self.last_error}")
                 return None
 
             await self._init_browser()
@@ -471,5 +477,6 @@ class CoopexProvider(ProviderBase):
                                          cubagens_cm, cnpj_pagador, tipo_frete)
             return await self._submeter_e_extrair()
         except Exception as e:
-            logger.error(f"[{self.nome}] Erro na cotação: {e}")
+            self.last_error = f"Erro na cotação: {e}"
+            logger.error(f"[{self.nome}] {self.last_error}")
             return None
