@@ -975,7 +975,7 @@ class RodonavesProvider(ProviderBase):
                 except Exception:
                     pass
                 await chk_captcha.click(timeout=5000)
-                await page.wait_for_timeout(random.randint(2000, 4000))
+                await page.wait_for_timeout(random.randint(1000, 2500))
         except Exception:
             pass
 
@@ -1042,37 +1042,17 @@ class RodonavesProvider(ProviderBase):
                 await page.wait_for_timeout(2000)
         logger.info(f"[{self.nome}] Botão Calcular clicado, aguardando resultado...")
 
-        # Aguarda resultado: a Rodonaves mostra resultado numa tabela ou seção
-        # que contém "R$" ou "Valor do Frete" ou "Prazo"
+        # Aguarda resultado: td.col-result aparece quando a tabela de resultado renderiza
         try:
-            # Espera aparecer elemento com valor R$ OU mensagem de erro
-            resultado_locator = page.locator("text=/R\\$\\s*[\\d.,]+/").first
-            erro_locator = page.locator("text=/erro|não foi possível|indisponível/i").first
-            
-            # Espera até 30s por qualquer um dos dois
-            import asyncio
-            resultado_promise = resultado_locator.wait_for(timeout=30000)
-            erro_promise = erro_locator.wait_for(timeout=30000)
-            
-            done, pending = await asyncio.wait(
-                [asyncio.ensure_future(resultado_promise), asyncio.ensure_future(erro_promise)],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for p in pending:
-                p.cancel()
-                try:
-                    await p
-                except (asyncio.CancelledError, Exception):
-                    pass
-            
-            logger.info(f"[{self.nome}] Elemento de resultado/erro apareceu na página")
-        except Exception as e:
-            logger.info(f"[{self.nome}] Timeout esperando resultado/erro, continuando extração: {e}")
+            await page.locator("td.col-result").first.wait_for(timeout=30000)
+            logger.info(f"[{self.nome}] Resultado detectado (td.col-result)")
+        except Exception:
             # Fallback: aguarda networkidle
             try:
-                await page.wait_for_load_state("networkidle", timeout=15000)
+                await page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
                 await page.wait_for_timeout(3000)
+            logger.info(f"[{self.nome}] Resultado nao detectado via td.col-result, tentando extracao")
 
         # ─── Extrair resultado ───
         valor_frete = None

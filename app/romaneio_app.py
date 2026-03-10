@@ -917,11 +917,9 @@ class ConfiguracoesDialog(QDialog):
         for nome, cbs in self._ufs_cbs.items():
             tcfg = transp_cfg.setdefault(nome, {})
             tcfg["ufs_atendidas"] = [uf for uf, cb in cbs.items() if cb.isChecked()]
-        # Habilitado
+        # Habilitado (toggle não requer relogin de todas as transportadoras)
         for nome, cb in self._hab_checks.items():
             tcfg = transp_cfg.setdefault(nome, {})
-            if tcfg.get("habilitado") != cb.isChecked():
-                cred_changed = True
             tcfg["habilitado"] = cb.isChecked()
         # Credenciais
         for nome, fields in self._cred_fields.items():

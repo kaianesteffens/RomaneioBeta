@@ -994,9 +994,11 @@ class AlfaProvider(ProviderBase):
             self.last_error = "Login Alfa falhou (headless, Turnstile bloqueou)"
             return False
 
-        # ── Não-headless: Chrome já abriu na página de login ──
-        # Espera a página carregar
-        await asyncio.sleep(2)
+        # ── Não-headless ──
+        # Espera a página carregar (apenas no primeiro launch)
+        chrome_was_running = self._chrome_proc is not None and self._chrome_proc.poll() is None
+        if not chrome_was_running:
+            await asyncio.sleep(2)
 
         # Verifica se já está logado (sessão persistente do user-data-dir)
         current_url = self._get_page_url_sync()
@@ -1008,10 +1010,8 @@ class AlfaProvider(ProviderBase):
                 self._set_taskbar_visible(False)
                 return True
 
-        # Turnstile necessário: desconecta Playwright e mostra janela do Chrome
+        # Turnstile necessário: desconecta Playwright
         await self._disconnect_playwright()
-        self._ensure_chrome_visible()
-        self._set_taskbar_visible(True)
 
         # Preenche login/senha via CDP bruto (sem Playwright = sem detecção)
         fill_js = (
@@ -1024,18 +1024,36 @@ class AlfaProvider(ProviderBase):
         )
         await self._cdp_eval_raw(fill_js)
         logger.info("[ALFA] Credenciais preenchidas via CDP direto (sem Playwright)")
-        logger.info("[ALFA] Aguardando usu\u00e1rio resolver Turnstile e clicar Continuar...")
 
-        # Monitora URL via HTTP — sem Playwright, Turnstile não detecta nada
-        for _ in range(self.LOGIN_MAX_WAIT_S):
+        # Tenta clicar submit (Turnstile pode auto-resolver para browsers conhecidos)
+        click_js = "(function(){var b=document.querySelector('#btn-enviar');if(b){b.click();}})();"
+        await self._cdp_eval_raw(click_js)
+
+        # Aguarda até 15s por auto-pass do Turnstile (janela fica oculta)
+        logger.info("[ALFA] Tentando auto-login (sem janela)...")
+        auto_pass = False
+        for _ in range(30):
             await asyncio.sleep(0.5)
             url = self._get_page_url_sync()
             if url and self.BASE_URL.lower() in url.lower() and "login" not in url.lower():
+                auto_pass = True
                 break
-        else:
-            self.last_error = "Login Alfa timeout (aguardando login manual)"
-            logger.error(f"[ALFA] {self.last_error}")
-            return False
+
+        if not auto_pass:
+            # Auto-pass falhou — mostra janela para resolução manual do Turnstile
+            self._ensure_chrome_visible()
+            self._set_taskbar_visible(True)
+            logger.info("[ALFA] Aguardando usuario resolver Turnstile e clicar Continuar...")
+
+            for _ in range(self.LOGIN_MAX_WAIT_S):
+                await asyncio.sleep(0.5)
+                url = self._get_page_url_sync()
+                if url and self.BASE_URL.lower() in url.lower() and "login" not in url.lower():
+                    break
+            else:
+                self.last_error = "Login Alfa timeout (aguardando login manual)"
+                logger.error(f"[ALFA] {self.last_error}")
+                return False
 
         # Login OK — espera a página estabilizar antes de conectar Playwright
         logger.info("[ALFA] Login detectado! Aguardando p\u00e1gina estabilizar...")
