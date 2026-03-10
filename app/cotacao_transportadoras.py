@@ -891,10 +891,9 @@ class TransportadoraSession:
         self._ultimo_uso: dict[str, float] = {}
         self._idle_task: asyncio.Task | None = None
 
-    async def inicializar(self, callback=None, login_status_callback=None, login_retry_callback=None):
+    async def inicializar(self, callback=None, login_status_callback=None):
         """Cria providers e faz pre-login em todos. callback(msg) para status.
-        login_status_callback(nome, status) para status individual ('pending','ok','fail').
-        login_retry_callback(nome) chamado quando login falha, para perguntar ao usuário."""
+        login_status_callback(nome, status) para status individual ('pending','ok','fail')."""
         # Importa providers sob demanda (lazy) para não atrasar a abertura da janela
         _ensure_provider_imports()
         # Mata processos Chrome órfãos de sessões anteriores do FreteBot
@@ -1092,8 +1091,6 @@ class TransportadoraSession:
                         _log_diag(f"Pre-login {nome} timeout ({timeout_s}s) — login continuará na cotação")
                         if login_status_callback:
                             login_status_callback(nome, "fail")
-                        if login_retry_callback:
-                            login_retry_callback(nome)
                         return nome, False
                     _log_diag(f"Pre-login {nome} OK")
                     if login_status_callback:
@@ -1110,8 +1107,6 @@ class TransportadoraSession:
                     report_error_message(f"Pre-login {nome} falhou: {e}", context=f"prelogin_{nome}")
                     if login_status_callback:
                         login_status_callback(nome, "fail")
-                    if login_retry_callback:
-                        login_retry_callback(nome)
                     return nome, False
 
         results = await asyncio.gather(
@@ -1142,32 +1137,6 @@ class TransportadoraSession:
     def registrar_uso(self, nome: str) -> None:
         """Atualiza timestamp de último uso de um provider."""
         self._ultimo_uso[nome] = time.monotonic()
-
-    async def relogin_one(self, nome: str, login_status_callback=None) -> bool:
-        """Refaz login de um provider específico. Retorna True se OK."""
-        prov = self.providers.get(nome)
-        if prov is None:
-            _log_diag(f"relogin_one: provider '{nome}' não encontrado")
-            return False
-        _log_diag(f"Refazendo login de {nome}...")
-        if login_status_callback:
-            login_status_callback(nome, "pending")
-        try:
-            await prov.cleanup()
-        except Exception:
-            pass
-        try:
-            await prov.pre_login()
-            _log_diag(f"Relogin {nome} OK")
-            if login_status_callback:
-                login_status_callback(nome, "ok")
-            self._ultimo_uso[nome] = time.monotonic()
-            return True
-        except Exception as e:
-            _log_diag(f"Relogin {nome} falhou: {e}")
-            if login_status_callback:
-                login_status_callback(nome, "fail")
-            return False
 
     async def fechar_ociosos(self) -> None:
         """Fecha browsers de providers ociosos por mais de IDLE_TIMEOUT_S."""
