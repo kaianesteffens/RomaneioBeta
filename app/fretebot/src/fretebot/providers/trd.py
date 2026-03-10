@@ -115,19 +115,77 @@ class TRDProvider(ProviderBase):
                 await self._page.goto(self.LOGIN_URL, wait_until='domcontentloaded', timeout=60000)
 
                 # Etapa 1: Email + clicar "Próximo"
+                # Tenta seletor direto primeiro, depois busca em iframes
                 email_loc = self._page.locator('#username-input-field')
-                await email_loc.wait_for(state='visible', timeout=30000)
+                try:
+                    await email_loc.wait_for(state='visible', timeout=10000)
+                except Exception:
+                    # Fallback: procurar em iframes (Senior X pode usar iframe para login)
+                    logger.info(f"[{self.nome}] #username-input-field não visível, buscando em iframes...")
+                    found_in_frame = False
+                    for frame in self._page.frames:
+                        try:
+                            frame_loc = frame.locator('#username-input-field')
+                            if await frame_loc.count() > 0:
+                                await frame_loc.wait_for(state='visible', timeout=5000)
+                                email_loc = frame_loc
+                                # Atualizar referência da página para o frame
+                                self._login_frame = frame
+                                found_in_frame = True
+                                logger.info(f"[{self.nome}] Campo de email encontrado em iframe: {frame.url}")
+                                break
+                        except Exception:
+                            continue
+                    if not found_in_frame:
+                        # Tenta seletores alternativos (input type=email, name=username)
+                        alt_selectors = [
+                            'input[type="email"]',
+                            'input[name="username"]',
+                            'input[name="login"]',
+                            'input[placeholder*="mail"]',
+                            'input[placeholder*="suário"]',
+                        ]
+                        for sel in alt_selectors:
+                            try:
+                                alt_loc = self._page.locator(sel).first
+                                if await alt_loc.count() > 0 and await alt_loc.is_visible():
+                                    email_loc = alt_loc
+                                    found_in_frame = True
+                                    logger.info(f"[{self.nome}] Campo de email encontrado via seletor: {sel}")
+                                    break
+                            except Exception:
+                                continue
+                    if not found_in_frame:
+                        # Log do HTML para debug
+                        try:
+                            body_text = await self._page.inner_text("body")
+                            logger.warning(f"[{self.nome}] Página de login (500 chars): {body_text[:500]}")
+                        except Exception:
+                            pass
+                        raise Exception(f"Campo de login não encontrado na página (URL: {self._page.url})")
                 await self._page.wait_for_timeout(500)
                 await email_loc.fill(self.email)
-                await self._page.locator('#nextBtn').click()
+                # Botão "Próximo" - tenta no frame se encontrou lá
+                login_context = getattr(self, '_login_frame', self._page)
+                next_btn = login_context.locator('#nextBtn')
+                try:
+                    await next_btn.click(timeout=5000)
+                except Exception:
+                    # Fallback: qualquer botão submit/next na página
+                    await self._page.locator('button[type="submit"], input[type="submit"]').first.click(timeout=5000)
                 await self._page.wait_for_timeout(2000)
 
                 # Etapa 2: Senha + clicar "Autenticar"
-                pwd = self._page.locator('#password-input-field')
+                login_context = getattr(self, '_login_frame', self._page)
+                pwd = login_context.locator('#password-input-field')
                 await pwd.wait_for(state='visible', timeout=15000)
                 await pwd.fill(self.senha)
                 await self._page.wait_for_timeout(300)
-                await self._page.locator('#loginbtn').click()
+                login_btn = login_context.locator('#loginbtn')
+                try:
+                    await login_btn.click(timeout=5000)
+                except Exception:
+                    await login_context.locator('button[type="submit"], input[type="submit"]').first.click(timeout=5000)
 
                 await self._page.wait_for_timeout(5000)
                 if 'senior-x/#/' in self._page.url:
