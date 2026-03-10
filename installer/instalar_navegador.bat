@@ -1,42 +1,32 @@
 @echo off
-REM FreteBot — Instalar navegador Chromium (Playwright)
-REM Execute uma vez após a instalação
+REM FreteBot - Verificar Google Chrome
+REM O FreteBot usa o Google Chrome instalado no computador (nao usa Chromium)
 
 echo ============================================
-echo FreteBot - Instalando navegador Chromium...
+echo FreteBot - Verificando Google Chrome...
 echo ============================================
 echo.
 
-REM Definir caminho dos browsers dentro do app empacotado
-set "APPDIR=%~dp0"
-set "DRIVER_DIR=%APPDIR%_internal\playwright\driver"
-set "BROWSERS_DIR=%DRIVER_DIR%\package\.local-browsers"
-set "PLAYWRIGHT_BROWSERS_PATH=%BROWSERS_DIR%"
+REM Verificar se o Chrome esta instalado em algum caminho padrao
+set "FOUND="
+if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" set "FOUND=1"
+if exist "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" set "FOUND=1"
+if exist "%LocalAppData%\Google\Chrome\Application\chrome.exe" set "FOUND=1"
 
-REM Usar node.exe + cli.js do app empacotado
-set "NODE_EXE=%DRIVER_DIR%\node.exe"
-set "CLI_JS=%DRIVER_DIR%\package\cli.js"
-
-if exist "%NODE_EXE%" if exist "%CLI_JS%" (
-    echo Usando Playwright CLI do app...
-    "%NODE_EXE%" "%CLI_JS%" install chromium
-    goto :done
+if defined FOUND (
+    echo Google Chrome encontrado!
+    echo O FreteBot esta pronto para uso.
+) else (
+    echo ATENCAO: Google Chrome NAO encontrado!
+    echo.
+    echo O FreteBot requer o Google Chrome instalado.
+    echo Baixe em: https://www.google.com/chrome/
+    echo.
+    echo Apos instalar o Chrome, o FreteBot funcionara normalmente.
 )
 
-REM Fallback: tentar via python do sistema
-where python >nul 2>&1
-if %ERRORLEVEL% == 0 (
-    python -m playwright install chromium
-    goto :done
-)
-
-echo ERRO: Playwright CLI nao encontrado.
-echo Reinstale o FreteBot ou entre em contato com o suporte.
-
-:done
 echo.
 echo ============================================
-echo Instalacao do navegador concluida!
-echo Voce pode fechar esta janela.
+echo Verificacao concluida.
 echo ============================================
 pause

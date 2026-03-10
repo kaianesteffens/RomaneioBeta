@@ -4,8 +4,10 @@ import asyncio
 import json
 import os
 import re
+import socket
+import subprocess
 from playwright.async_api import async_playwright
-from fretebot.providers.base import ProviderBase
+from fretebot.providers.base import ProviderBase, find_chrome, _find_free_port, _kill_proc
 from fretebot.providers._win_taskbar import ocultar_taskbar_por_pagina, trazer_janela_frente
 from fretebot.models import Cotacao
 from fretebot.logging_conf import get_logger
@@ -175,6 +177,7 @@ class RodonavesProvider(ProviderBase):
         self._logged_in = False
         self._cdp_session = None
         self._window_id = None
+        self._chrome_proc = None
 
     # ── helpers ────────────────────────────────────────────────────────
 
@@ -370,49 +373,42 @@ class RodonavesProvider(ProviderBase):
 
     async def _init_browser(self):
         if self._context:
-            # Verificar se browser (headless/fallback) ainda está vivo
             if self._browser and not self._browser.is_connected():
                 logger.warning(f"[{self.nome}] Browser desconectado, reinicializando...")
                 await self.cleanup()
-            elif not self._browser:
-                # Persistent context (sem Browser separado): verifica se page responde
-                try:
-                    if self._page:
-                        await self._page.evaluate("1")
-                    return
-                except Exception:
-                    logger.warning(f"[{self.nome}] Persistent context morto, reinicializando...")
-                    await self.cleanup()
             else:
                 return
         self._playwright = await async_playwright().start()
-        # Contexto persistente: mantém cache de JS/CSS/imagens entre execuções
-        # --window-position=-3000,-3000 → janela nasce fora da tela (sem piscar)
-        # --window-size=1920,1080 → tamanho real para renderizar corretamente
+
+        # Lanca Chrome como subprocess + conecta via CDP (sem Chromium)
+        chrome_path = find_chrome()
+        port = _find_free_port()
+
         if self.headless:
-            self._browser = await self._playwright.chromium.launch(
-                channel="chrome",
-                headless=True,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-            )
-            self._context = await self._browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                user_agent=_CHROME_UA,
-                locale="pt-BR",
-            )
-            await self._context.add_init_script(_STEALTH_JS)
+            import tempfile
+            self._profile_tmp = tempfile.mkdtemp(prefix="fretebot_rodo_")
+            udd = self._profile_tmp
         else:
             udd = self._user_data_dir()
-            # Mata processos Chrome órfãos que travam o user-data-dir
             self._kill_stale_chrome(udd)
             self._fix_preferences(udd)
-            _suppress_flags = [
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
+            self._profile_tmp = None
+
+        launch_args = [
+            chrome_path,
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={udd}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--no-sandbox",
+            "--disable-blink-features=AutomationControlled",
+        ]
+        if self.headless:
+            launch_args.append("--headless=new")
+        else:
+            launch_args.extend([
                 "--window-position=-3000,-3000",
                 "--window-size=1920,1080",
-                "--no-first-run",
-                "--no-default-browser-check",
                 "--disable-session-crashed-bubble",
                 "--disable-features=InfiniteSessionRestore",
                 "--hide-crash-restore-bubble",
@@ -421,49 +417,37 @@ class RodonavesProvider(ProviderBase):
                 "--enable-features=NetworkService,NetworkServiceInProcess",
                 "--disable-features=IsolateOrigins,site-per-process,TranslateUI",
                 "--disable-component-extensions-with-background-pages",
-            ]
+            ])
+
+        self._chrome_proc = subprocess.Popen(
+            launch_args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+        for _ in range(50):
+            await asyncio.sleep(0.1)
+            if self._chrome_proc.poll() is not None:
+                raise RuntimeError(f"Chrome (Rodonaves) encerrou inesperadamente (exit {self._chrome_proc.returncode})")
             try:
-                self._context = await self._playwright.chromium.launch_persistent_context(
-                    user_data_dir=udd,
-                    channel="chrome",
-                    headless=False,
-                    no_viewport=True,
-                    user_agent=_CHROME_UA,
-                    locale="pt-BR",
-                    args=_suppress_flags,
-                )
-            except Exception as e:
-                logger.warning(f"[{self.nome}] Falha ao iniciar contexto persistente: {type(e).__name__}: {e}")
-                # Tenta limpar perfil corrompido e tentar novamente
-                try:
-                    import shutil as _shutil
-                    logger.info(f"[{self.nome}] Limpando user_data_dir e tentando novamente...")
-                    _shutil.rmtree(udd, ignore_errors=True)
-                    os.makedirs(udd, exist_ok=True)
-                    self._fix_preferences(udd)
-                    self._context = await self._playwright.chromium.launch_persistent_context(
-                        user_data_dir=udd,
-                        channel="chrome",
-                        headless=False,
-                        no_viewport=True,
-                        user_agent=_CHROME_UA,
-                        locale="pt-BR",
-                        args=_suppress_flags,
-                    )
-                    logger.info(f"[{self.nome}] Contexto persistente OK após limpeza do perfil")
-                except Exception as e2:
-                    logger.warning(f"[{self.nome}] Persistente falhou de novo, tentando sem persistencia: {type(e2).__name__}: {e2}")
-                    self._browser = await self._playwright.chromium.launch(
-                        channel="chrome",
-                        headless=False,
-                        args=_suppress_flags,
-                    )
-                    self._context = await self._browser.new_context(
-                        viewport={"width": 1920, "height": 1080},
-                        user_agent=_CHROME_UA,
-                        locale="pt-BR",
-                    )
-                    await self._context.add_init_script(_STEALTH_JS)
+                with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+                    break
+            except (ConnectionRefusedError, OSError):
+                continue
+        else:
+            _kill_proc(self._chrome_proc)
+            raise RuntimeError(f"Chrome (Rodonaves) nao respondeu na porta {port} em 5s")
+
+        self._browser = await self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+        logger.info(f"[{self.nome}] Chrome conectado via CDP porta {port} (headless={self.headless})")
+
+        self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context(
+            viewport={"width": 1920, "height": 1080},
+            user_agent=_CHROME_UA,
+            locale="pt-BR",
+        )
+
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
         if not self.headless:
             # Força janela off-screen via CDP (--window-position pode ser ignorado pelo persistent context)
@@ -581,6 +565,7 @@ class RodonavesProvider(ProviderBase):
                 await self._browser.close()
         except Exception:
             pass
+        _kill_proc(self._chrome_proc)
         try:
             if self._playwright:
                 await self._playwright.stop()
@@ -591,6 +576,11 @@ class RodonavesProvider(ProviderBase):
             self._fix_preferences(self._user_data_dir())
         except Exception:
             pass
+        # Limpa perfil temporario (headless)
+        if getattr(self, "_profile_tmp", None):
+            import shutil as _shutil
+            _shutil.rmtree(self._profile_tmp, ignore_errors=True)
+            self._profile_tmp = None
         self._context = None
         self._browser = None
         self._page = None
@@ -598,6 +588,7 @@ class RodonavesProvider(ProviderBase):
         self._logged_in = False
         self._cdp_session = None
         self._window_id = None
+        self._chrome_proc = None
 
     # ── login ──────────────────────────────────────────────────────────
 
