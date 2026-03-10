@@ -168,7 +168,10 @@ async def launch_browser_resilient(playwright=None, *, headless: bool = True, ar
             else:
                 raise RuntimeError(f"Chrome nao respondeu na porta {port} em 5s")
 
-            browser = await pw.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+            browser = await asyncio.wait_for(
+                pw.chromium.connect_over_cdp(f"http://127.0.0.1:{port}"),
+                timeout=15,
+            )
             _base_logger.info("Chrome conectado via CDP porta %d (headless=%s)", port, headless)
 
             owned_pw = pw if manage_pw else None
