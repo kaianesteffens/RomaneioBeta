@@ -45,7 +45,7 @@ A distribuição é feita como `.exe` empacotado com PyInstaller + Inno Setup. O
 - **Configuração:** TOML (`toml` / `tomli`)
 - **Cache:** SQLite3 (nativo)
 - **Empacotamento:** PyInstaller (one-folder mode) + Inno Setup 6
-- **Versão atual:** lida de `app/version.txt` (ex: `1.48`)
+- **Versão atual:** lida de `app/version.txt` (ex: `1.50`)
 
 ---
 
@@ -262,15 +262,105 @@ senha = "..."
 ## Repositórios
 
 - **`kaianesteffens/RomaneioBeta`** — repositório **privado** com o código-fonte completo
-- **Repo de release** — repositório **público** usado apenas para publicar GitHub Releases (ZIPs de atualização). Nenhum código-fonte vai para lá.
+- **`kaianesteffens/RomaneioBeta-releases`** — repositório **público** usado apenas para publicar GitHub Releases (ZIPs de atualização). Nenhum código-fonte vai para lá.
+- **Diretório local de build:** `C:\\Users\\eduar_zgrj9vh\\Desktop\\FRETEBOT\\FreteBot-Installer`
+- **GitHub CLI** (`gh`) está instalado e autenticado como `kaianesteffens` com escopo `repo`, `gist`, `workflow`
 
-## Processo de Release
+### Workspace virtual vs diretório local
+O workspace do VS Code (`vscode-vfs://github/kaianesteffens/RomaneioBeta`) é um **filesystem virtual** montado pelo GitHub. Edições feitas nele atualizam o repositório GitHub mas **NÃO** afetam o diretório local. Para fazer build, é necessário aplicar as mesmas mudanças no diretório local (`C:\\Users\\eduar_zgrj9vh\\Desktop\\FRETEBOT\\FreteBot-Installer`) usando terminal PowerShell.
 
-1. Incrementar `app/version.txt`
-2. Rodar `installer/build.bat` (gera `dist/FreteBot/`)
-3. Rodar `installer/build_update_zip.bat` (gera `FreteBot-Update-X.Y.zip`)
-4. Publicar o ZIP como asset em uma GitHub Release no repo público de release
-5. O app detecta automaticamente e faz update silencioso no próximo startup
+## Processo de Build e Release (passo a passo exato)
+
+O **workspace do VS Code** (`vscode-vfs://github/...`) é um filesystem **virtual** do GitHub. Ele **não é** o diretório local. Para builds, o clone local fica em `C:\Users\eduar_zgrj9vh\Desktop\FRETEBOT\FreteBot-Installer`.
+
+### Fluxo completo de release
+
+1. **Aplicar mudanças no diretório local** — Se as edições foram feitas no workspace virtual, copiar as alterações para os mesmos arquivos no diretório local. Usar Python ou PowerShell para aplicar as edições nos arquivos locais.
+
+2. **Executar build** — Navegar até `installer/` e rodar:
+   ```
+   cd C:\Users\eduar_zgrj9vh\Desktop\FRETEBOT\FreteBot-Installer\installer
+   cmd /c "build.bat"
+   ```
+   O `build.bat` **auto-incrementa** a versão minor em `app/version.txt` (ex: 1.49 → 1.50). Não editar `version.txt` manualmente antes do build.
+
+3. **Gerar ZIP de atualização**:
+   ```
+   cmd /c "build_update_zip.bat"
+   ```
+   O ZIP é gerado em `installer\installer\FreteBot-Update-X.Y.zip` (caminho aninhado — `installer` dentro de `installer`).
+
+4. **Commit e push** — Voltar ao root do repo e fazer commit + push:
+   ```
+   cd C:\Users\eduar_zgrj9vh\Desktop\FRETEBOT\FreteBot-Installer
+   git add -A
+   git commit -m "vX.Y: descrição das mudanças"
+   git push origin master
+   ```
+   ⚠️ Se o push falhar com "fetch first", fazer `git pull --rebase origin master` antes de re-tentar.
+
+5. **Publicar GitHub Release** — Usar GitHub CLI (`gh`) para publicar no repo **público**:
+   ```
+   gh release create "vX.Y" --repo "kaianesteffens/RomaneioBeta-releases" --title "Romaneio Beta vX.Y" --latest --notes "descrição"
+   gh release upload "vX.Y" "C:\...\installer\installer\FreteBot-Update-X.Y.zip" --repo "kaianesteffens/RomaneioBeta-releases"
+   ```
+   - O repo de release é `kaianesteffens/RomaneioBeta-releases` (público, separado do código-fonte).
+   - Antes de criar, verificar se já existe draft/tag com `gh release list --repo kaianesteffens/RomaneioBeta-releases`.
+   - Se existir tag/release anterior com mesmo nome, deletar com `gh release delete vX.Y --yes` e `gh api -X DELETE repos/kaianesteffens/RomaneioBeta-releases/git/refs/tags/vX.Y`.
+
+6. O app detecta automaticamente e faz update silencioso no próximo startup.
+
+### Verificações pós-build
+- `Test-Path "installer\dist\FreteBot\FreteBot.exe"` deve retornar True
+- `Get-Content "app\version.txt"` deve mostrar a nova versão
+- `gh release view "vX.Y" --repo kaianesteffens/RomaneioBeta-releases` deve mostrar o asset ZIP
+
+---
+
+## Relatório de Erros (Error Reporter)
+
+Erros do app são enviados automaticamente como **comentários** em um GitHub Gist secreto.
+
+- **Gist ID:** `***REMOVED-GIST-ID***`
+- **Para ler erros em produção:** `gh api gists/***REMOVED-GIST-ID***/comments`
+- Cada comentário contém: tipo de exceção, traceback, versão, hash da máquina, licença parcial, fingerprint
+- Rate-limit: máximo 1 report por erro idêntico a cada 10 minutos
+- O `error_reporter.py` usa `toml.load(path)` (aceita path direto) com fallback para `tomli` (requer `open(path, "rb")`)
+- **Atenção:** `tomli.load()` ≠ `toml.load()` — `tomli` exige file object aberto em modo binário (`rb`), enquanto `toml` aceita path string
+
+---
+
+## Padrões Importantes e Bugs Conhecidos
+
+### Portal SSW (Eucatur e COOPEX)
+Eucatur e COOPEX compartilham o **mesmo código base** (portal SSW em `sistema.ssw.inf.br`). Ambos os providers (`eucatur.py` e `coopex.py`) têm estrutura quase idêntica.
+
+**Padrão obrigatório para listeners:**
+```python
+# CORRETO — sempre usar try/finally para remover listener
+handler = lambda r: asyncio.ensure_future(capture_response(r))
+page.on('response', handler)
+try:
+    result = await self._submeter_e_extrair_inner(page, xml_responses)
+finally:
+    page.remove_listener('response', handler)
+```
+Nunca usar `page.on('response', ...)` sem `page.remove_listener()` no finally — causa **leak de handlers** que acumula a cada cotação.
+
+**Regex para erros XML do SSW:**
+```python
+# CORRETO — [^<]+ captura acentos e espaços
+re.search(r'<erro>([^<]+)</erro>', xml)
+
+# ERRADO — \w+ não captura caracteres acentuados
+re.search(r'<erro>(\w+)</erro>', xml)
+```
+
+### Provider __init__.py
+`BraspressPlaywrightProvider` é importado como alias `BraspressProvider`. O `__all__` deve exportar apenas `BraspressProvider` (o alias), não o nome original.
+
+### config.py
+O `config.py` do pacote `fretebot` **não usa `tomllib`**. A leitura do CONFIG.toml é feita em `fretebot/config.py` (dataclass simples) e nos módulos que precisam (`error_reporter.py`, `updater.py`, etc.) usando o pacote `toml`.
 
 ---
 
