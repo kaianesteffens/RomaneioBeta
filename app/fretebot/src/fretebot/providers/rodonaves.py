@@ -378,8 +378,6 @@ class RodonavesProvider(ProviderBase):
                 await self.cleanup()
             else:
                 return
-        self._playwright = await async_playwright().start()
-
         # Lanca Chrome como subprocess + conecta via CDP (sem Chromium)
         chrome_path = find_chrome()
         port = _find_free_port()
@@ -439,8 +437,28 @@ class RodonavesProvider(ProviderBase):
             _kill_proc(self._chrome_proc)
             raise RuntimeError(f"Chrome (Rodonaves) nao respondeu na porta {port} em 5s")
 
-        self._browser = await self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
-        logger.info(f"[{self.nome}] Chrome conectado via CDP porta {port} (headless={self.headless})")
+        # Conecta Playwright via CDP com retry (driver Node.js pode crashar)
+        last_err = None
+        for _attempt in range(3):
+            try:
+                self._playwright = await async_playwright().start()
+                self._browser = await self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+                logger.info(f"[{self.nome}] Chrome conectado via CDP porta {port} (headless={self.headless})")
+                break
+            except Exception as e:
+                last_err = e
+                logger.warning(f"[{self.nome}] CDP tentativa {_attempt+1}/3 falhou: {e}")
+                try:
+                    if self._playwright:
+                        await self._playwright.stop()
+                        self._playwright = None
+                except Exception:
+                    pass
+                if _attempt < 2:
+                    await asyncio.sleep(1 + _attempt)
+        else:
+            _kill_proc(self._chrome_proc)
+            raise RuntimeError(f"Falha ao conectar CDP apos 3 tentativas: {last_err}")
 
         self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context(
             viewport={"width": 1920, "height": 1080},
