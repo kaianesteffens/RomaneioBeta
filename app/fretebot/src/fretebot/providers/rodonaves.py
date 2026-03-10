@@ -182,52 +182,42 @@ class RodonavesProvider(ProviderBase):
     # ── helpers ────────────────────────────────────────────────────────
 
     async def _simular_interacao_humana(self, page) -> None:
-        """Simula mouse/scroll naturais para reduzir score de bot no reCAPTCHA."""
-        import math
+        """Simula mouse/scroll rápidos para acumular score no reCAPTCHA."""
         vw = 820
         vh = 720
 
-        # Curva Bézier entre dois pontos para movimento suave (não-linear)
-        async def _bezier_move(x1, y1, x2, y2, steps=None):
-            if steps is None:
-                steps = random.randint(12, 25)
-            # Ponto de controle aleatório para curvatura
-            cx = (x1 + x2) / 2 + random.randint(-80, 80)
-            cy = (y1 + y2) / 2 + random.randint(-60, 60)
+        # Curva Bézier compacta entre dois pontos
+        async def _bezier_move(x1, y1, x2, y2):
+            steps = random.randint(8, 14)
+            cx = (x1 + x2) / 2 + random.randint(-60, 60)
+            cy = (y1 + y2) / 2 + random.randint(-40, 40)
             for i in range(steps + 1):
                 t = i / steps
                 x = (1 - t)**2 * x1 + 2 * (1 - t) * t * cx + t**2 * x2
                 y = (1 - t)**2 * y1 + 2 * (1 - t) * t * cy + t**2 * y2
                 await page.mouse.move(x, y)
-                await page.wait_for_timeout(random.randint(5, 20))
+                await page.wait_for_timeout(random.randint(3, 10))
 
-        # Move mouse por pontos aleatórios (reCAPTCHA monitora eventos de mouse)
+        # Move mouse por 2 pontos aleatórios (reduzido de 4)
         px, py = random.randint(100, 300), random.randint(50, 150)
         await page.mouse.move(px, py)
-        await page.wait_for_timeout(random.randint(200, 500))
+        await page.wait_for_timeout(random.randint(100, 250))
 
         pontos = [
-            (random.randint(200, vw - 200), random.randint(100, 250)),
-            (random.randint(100, vw - 100), random.randint(250, 450)),
-            (random.randint(150, vw - 150), random.randint(400, vh - 100)),
-            (random.randint(80, 400), random.randint(150, 350)),
+            (random.randint(200, vw - 200), random.randint(100, 300)),
+            (random.randint(100, vw - 100), random.randint(300, vh - 100)),
         ]
         for x, y in pontos:
             await _bezier_move(px, py, x, y)
             px, py = x, y
-            await page.wait_for_timeout(random.randint(150, 500))
+            await page.wait_for_timeout(random.randint(80, 200))
 
-        # Scroll suave para baixo e volta (vários passos pequenos)
-        for _ in range(random.randint(2, 4)):
-            await page.mouse.wheel(0, random.randint(30, 80))
-            await page.wait_for_timeout(random.randint(100, 300))
-        await page.wait_for_timeout(random.randint(300, 700))
-        for _ in range(random.randint(1, 3)):
-            await page.mouse.wheel(0, -random.randint(20, 50))
-            await page.wait_for_timeout(random.randint(100, 250))
-
-        # Pausa final (reCAPTCHA mede tempo na página)
-        await page.wait_for_timeout(random.randint(500, 1200))
+        # Scroll rápido para baixo e volta
+        for _ in range(random.randint(1, 2)):
+            await page.mouse.wheel(0, random.randint(40, 80))
+            await page.wait_for_timeout(random.randint(50, 150))
+        await page.mouse.wheel(0, -random.randint(20, 50))
+        await page.wait_for_timeout(random.randint(200, 500))
 
     @staticmethod
     def _digits(value: str) -> str:
@@ -624,12 +614,21 @@ class RodonavesProvider(ProviderBase):
 
         logger.info(f"[{self.nome}] Navegando para /Quotation... URL atual: {page.url}")
 
-        # Navega direto via goto (mais confiável que clicar em menus dropdown)
-        await page.goto(
-            "https://cliente.rte.com.br/Quotation",
-            wait_until="domcontentloaded",
-            timeout=60000,
-        )
+        # Navega direto via goto com retry para ERR_ABORTED
+        for _goto_attempt in range(3):
+            try:
+                await page.goto(
+                    "https://cliente.rte.com.br/Quotation",
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                )
+                break
+            except Exception as goto_err:
+                if "ERR_ABORTED" in str(goto_err) and _goto_attempt < 2:
+                    logger.warning(f"[{self.nome}] goto /Quotation ERR_ABORTED, retry {_goto_attempt + 1}/3")
+                    await asyncio.sleep(1)
+                    continue
+                raise
 
         # Verifica se sessão expirou (redirecionou para home/login)
         try:
@@ -658,13 +657,22 @@ class RodonavesProvider(ProviderBase):
         logger.info(f"[{self.nome}] Iniciando login...")
         logger.info(f"[{self.nome}] URL atual: {page.url}")
 
-        # Acessa página de login
+        # Acessa página de login (com retry para ERR_ABORTED)
         logger.info(f"[{self.nome}] Acessando página de login...")
-        await page.goto(
-            "https://cliente.rte.com.br/?showLogin=true",
-            wait_until="domcontentloaded",
-            timeout=60000,
-        )
+        for _goto_attempt in range(3):
+            try:
+                await page.goto(
+                    "https://cliente.rte.com.br/?showLogin=true",
+                    wait_until="domcontentloaded",
+                    timeout=30000,
+                )
+                break
+            except Exception as goto_err:
+                if "ERR_ABORTED" in str(goto_err) and _goto_attempt < 2:
+                    logger.warning(f"[{self.nome}] goto ERR_ABORTED, retry {_goto_attempt + 1}/3")
+                    await asyncio.sleep(1)
+                    continue
+                raise
         logger.info(f"[{self.nome}] URL após goto showLogin=true: {page.url}")
 
         # Aceitar cookies / banners
@@ -790,12 +798,23 @@ class RodonavesProvider(ProviderBase):
                 await page.evaluate("document.getElementById('loginSubmit')?.click()")
         logger.info(f"[{self.nome}] Botão Entrar clicado, aguardando redirecionamento...")
 
-        # Aguarda redirecionamento completo
-        await page.wait_for_load_state("networkidle", timeout=30000)
-        logger.info(f"[{self.nome}] URL pós-login: {page.url}")
+        # Aguarda redirecionamento: espera o formulário de cotação aparecer (mais rápido que networkidle)
+        try:
+            await page.locator("#ReceiverTaxId").wait_for(timeout=15000)
+            logger.info(f"[{self.nome}] Formulário de cotação apareceu direto após login")
+        except Exception:
+            # Fallback: networkidle com timeout reduzido
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
+            logger.info(f"[{self.nome}] URL pós-login: {page.url}")
+            # Verifica se login falhou (ainda na página de login)
+            if await page.locator("#cpfcnp").count() > 0:
+                logger.error(f"[{self.nome}] Login aparentemente falhou (campo #cpfcnp ainda visível)")
+                raise RuntimeError("Login Rodonaves falhou — credenciais ou CAPTCHA")
 
-        # Verifica se já estamos na página de cotação (SPA redireciona automaticamente)
-        # Senão, tenta navegação via menu ou reload
+        # Navega para /Quotation se não estamos lá
         await self._navegar_cotacao()
 
         self._logged_in = True
