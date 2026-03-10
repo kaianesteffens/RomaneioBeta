@@ -263,7 +263,7 @@ class ExtratorPedidos:
         else:
             secao_itens = texto[match_inicio.end():]
         linhas = secao_itens.split('\n')
-        spec_re = re.compile(r'([\d.,]+\s*kg\s*\|\s*[\d.,]+\s*m3\s*\|\s*[\d\-xX]+)', re.IGNORECASE)
+        spec_re = re.compile(r'([\d.,]+\s*kg\s*\|\s*[\d.,]+\s*m3(?:\s*\|\s*[\d\-xX]+)?)', re.IGNORECASE)
         code_re = re.compile(r'^[A-Z0-9]+(?:[-/][A-Z0-9./]+)+', re.IGNORECASE)
         pending_desc = None
         last_header_line = None
@@ -712,6 +712,14 @@ class ExtratorPedidos:
                                 match_specs = spec_re.search(linha_specs)
                                 if match_specs:
                                     info_caixa = f"{cx_info_parcial} | {match_specs.group(1)}"
+                                elif not re.search(r'\d+[xX]\d+[xX]\d+', info_caixa):
+                                    m_dim_sep = re.search(r'(\d+[xX]\d+[xX]\d+)', linha_specs)
+                                    if m_dim_sep:
+                                        info_caixa = info_caixa.rstrip(' |') + ' | ' + m_dim_sep.group(1)
+                                elif not re.search(r'\d+[xX]\d+[xX]\d+', info_caixa):
+                                    m_dim_sep = re.search(r'(\d+[xX]\d+[xX]\d+)', linha_specs)
+                                    if m_dim_sep:
+                                        info_caixa = info_caixa.rstrip(' |') + ' | ' + m_dim_sep.group(1)
                             
                             item = Item(
                                 produto=codigo,
@@ -756,6 +764,18 @@ class ExtratorPedidos:
                                 match_specs = spec_re.search(linha_specs)
                                 if match_specs:
                                     info_caixa = f"{cx_info_parcial} | {match_specs.group(1)}"
+                                elif not re.search(r'\d+[xX]\d+[xX]\d+', info_caixa):
+                                    m_dim_sep = re.search(r'(\d+[xX]\d+[xX]\d+)', linha_specs)
+                                    if m_dim_sep:
+                                        info_caixa = info_caixa.rstrip(' |') + ' | ' + m_dim_sep.group(1)
+                                elif not re.search(r'\d+[xX]\d+[xX]\d+', info_caixa):
+                                    m_dim_sep = re.search(r'(\d+[xX]\d+[xX]\d+)', linha_specs)
+                                    if m_dim_sep:
+                                        info_caixa = info_caixa.rstrip(' |') + ' | ' + m_dim_sep.group(1)
+                                elif not re.search(r'\d+[xX]\d+[xX]\d+', info_caixa):
+                                    m_dim_sep = re.search(r'(\d+[xX]\d+[xX]\d+)', linha_specs)
+                                    if m_dim_sep:
+                                        info_caixa = info_caixa.rstrip(' |') + ' | ' + m_dim_sep.group(1)
 
                             item = Item(
                                 produto=codigo,
@@ -1505,12 +1525,13 @@ class ExtratorPedidos:
 
             # Caixas completas
             rotulo = 'Fardos' if container == 'FD' else 'Caixas fechadas'
-            desc_completas = '{} - {} kg - {} m3 - {}'.format(
+            desc_completas = '{} - {} kg - {} m3'.format(
                 rotulo,
                 self._formatar_decimal(peso_box), 
                 self._formatar_decimal(vol_box),
-                dims
             )
+            if dims:
+                desc_completas += ' - {}'.format(dims)
             
             skus_full = {}
             if u_per_box > 0:
@@ -1549,12 +1570,13 @@ class ExtratorPedidos:
                 container = caixa_info.get('container') or 'CX'
                 rotulo = 'Fardo complementar' if container == 'FD' else 'Caixa complementar'
                 peso_fmt = self._formatar_decimal(peso_comp)
-                desc_comp = '{} - {} kg - {} m3 - {}'.format(
+                desc_comp = '{} - {} kg - {} m3'.format(
                     rotulo,
                     peso_fmt,
                     self._formatar_decimal(vol_comp),
-                    dims_comp
                 )
+                if dims_comp:
+                    desc_comp += ' - {}'.format(dims_comp)
 
                 linhas.append('1 x {} <br>'.format(desc_comp))
                 for sku, qtd_comp in items.items():
