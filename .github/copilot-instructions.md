@@ -1,5 +1,26 @@
 # Romaneio Beta — Instruções para o Copilot
 
+## 🤖 Papel do Copilot neste projeto
+
+**O Copilot é o responsável pela elaboração de todo e qualquer código deste projeto.**
+
+O dono do projeto (`kaianesteffens`) atua como **product owner**: ele define o que precisa ser feito, aponta melhorias, relata problemas e dá instruções de mudança. O Copilot é quem **implementa tudo** — escreve, corrige, refatora e mantém o código.
+
+### Isso significa que o Copilot deve:
+- ✅ Escrever o código completo quando uma nova funcionalidade for pedida
+- ✅ Implementar a solução inteira, não apenas sugerir trechos
+- ✅ Tomar decisões técnicas de implementação com base no contexto do projeto
+- ✅ Garantir que o novo código segue todas as convenções já estabelecidas
+- ✅ Atualizar este arquivo de instruções quando o projeto mudar
+- ✅ Commitar o código diretamente no repositório quando solicitado
+
+### O dono do projeto NÃO vai:
+- ❌ Escrever código manualmente
+- ❌ Decidir detalhes de implementação
+- ❌ Revisar sintaxe ou estrutura interna — apenas o comportamento final
+
+---
+
 ## O que é este projeto
 
 **Romaneio Beta** (internamente chamado de **FreteBot**) é uma aplicação desktop Windows que:
@@ -250,3 +271,32 @@ senha = "..."
 3. Rodar `installer/build_update_zip.bat` (gera `FreteBot-Update-X.Y.zip`)
 4. Publicar o ZIP como asset em uma GitHub Release no repo público de release
 5. O app detecta automaticamente e faz update silencioso no próximo startup
+
+---
+
+## 🔄 Auto-atualização destas instruções
+
+**O Copilot DEVE atualizar este arquivo sempre que uma mudança significativa for feita no projeto.**
+
+### Quando atualizar:
+- Adicionou ou removeu uma transportadora em `fretebot/providers/`
+- Criou, renomeou ou deletou um arquivo/pasta importante
+- Mudou a arquitetura ou o fluxo de dados
+- Adicionou um novo módulo principal (novo `.py` na raiz do `app/`)
+- Mudou uma convenção de código ou regra do projeto
+- Mudou o processo de build ou release
+- Adicionou novos campos aos modelos de dados (`models.py`)
+- Adicionou novos QEvents de comunicação entre threads
+
+### Como atualizar:
+1. Leia o arquivo atual (`.github/copilot-instructions.md`)
+2. Identifique **somente a seção afetada** pela mudança
+3. Reescreva apenas essa seção — não altere o resto
+4. Mantenha o mesmo formato, estilo e língua portuguesa
+5. Faça commit junto com as mudanças do código
+
+### Exemplos de gatilhos:
+- "Adicionei o provider JAMEF" → atualizar tabela de transportadoras
+- "Renomeei `cotacao_transportadoras.py` para `cotador.py`" → atualizar estrutura de pastas
+- "Adicionei campo `urgente: bool` no dataclass `Pedido`" → atualizar modelos de dados
+- "Criei um novo QEvent `ErroFatalEvent`" → atualizar seção de thread-safe
