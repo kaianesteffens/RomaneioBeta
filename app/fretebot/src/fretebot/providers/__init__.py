@@ -11,7 +11,6 @@ from fretebot.providers.coopex import CoopexProvider
 __all__ = [
     "ProviderBase",
     "BraspressProvider",
-    "BraspressPlaywrightProvider",
     "BauerAutoProvider",
     "TRDProvider",
     "AGEXProvider",

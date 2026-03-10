@@ -357,8 +357,15 @@ class EucaturProvider(ProviderBase):
                 except:
                     pass
 
-        page.on('response', lambda r: __import__('asyncio').ensure_future(capture_response(r)))
+        handler = lambda r: __import__('asyncio').ensure_future(capture_response(r))
+        page.on('response', handler)
 
+        try:
+            return await self._submeter_e_extrair_inner(page, xml_responses)
+        finally:
+            page.remove_listener('response', handler)
+
+    async def _submeter_e_extrair_inner(self, page, xml_responses) -> Optional[Cotacao]:
         # Submit via sim()
         await page.evaluate('() => { if (typeof sim === "function") sim(); }')
         await page.wait_for_timeout(3000)
@@ -378,7 +385,7 @@ class EucaturProvider(ProviderBase):
         erro = None
         erro_msg = None
         for xml in xml_responses:
-            erro_match = re.search(r'<erro>(\w+)</erro>', xml)
+            erro_match = re.search(r'<erro>([^<]+)</erro>', xml)
             msg_match = re.search(r'<mensagem>(.*?)</mensagem>', xml, re.DOTALL)
             if erro_match and erro_match.group(1) != '':
                 erro = erro_match.group(1)

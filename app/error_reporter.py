@@ -42,7 +42,13 @@ def _load_config() -> None:
         import toml
     except ImportError:
         try:
-            import tomli as toml  # fallback
+            import tomli as _tomli  # fallback
+            class _TomlCompat:
+                @staticmethod
+                def load(path):
+                    with open(path, "rb") as f:
+                        return _tomli.load(f)
+            toml = _TomlCompat()
         except ImportError:
             print("[error_reporter] AVISO: módulo toml/tomli não disponível", file=sys.stderr, flush=True)
             return
