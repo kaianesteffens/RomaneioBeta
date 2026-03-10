@@ -803,6 +803,7 @@ def _kill_orphan_fretebot_chromes() -> None:
         return
     import subprocess as _sp
     fretebot_marker = os.path.join(os.path.expanduser("~"), ".fretebot").replace("/", "\\").lower()
+    fretebot_temp_marker = "fretebot_chrome_"
 
     def _kill_pids_from_lines(lines: list[str]) -> None:
         pid = None
@@ -810,7 +811,7 @@ def _kill_orphan_fretebot_chromes() -> None:
         for line in lines:
             line = line.strip()
             if not line:
-                if pid is not None and fretebot_marker in cmd.lower():
+                if pid is not None and (fretebot_marker in cmd.lower() or fretebot_temp_marker in cmd.lower()):
                     try:
                         os.kill(pid, 9)
                         _log_diag(f"Matou Chrome órfão do FreteBot PID={pid}")
@@ -826,7 +827,7 @@ def _kill_orphan_fretebot_chromes() -> None:
                     pid = int(line[len("ProcessId="):])
                 except ValueError:
                     pid = None
-        if pid is not None and fretebot_marker in cmd.lower():
+        if pid is not None and (fretebot_marker in cmd.lower() or fretebot_temp_marker in cmd.lower()):
             try:
                 os.kill(pid, 9)
                 _log_diag(f"Matou Chrome órfão do FreteBot PID={pid}")
