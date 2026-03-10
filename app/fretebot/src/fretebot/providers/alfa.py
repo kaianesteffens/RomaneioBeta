@@ -264,10 +264,8 @@ class AlfaProvider(ProviderBase):
         if self.headless:
             if self._context:
                 return
-            self._playwright = await async_playwright().start()
             from fretebot.providers.base import launch_browser_resilient
             self._browser = await launch_browser_resilient(
-                self._playwright,
                 headless=True,
                 args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
             )
@@ -335,14 +333,30 @@ class AlfaProvider(ProviderBase):
         """Conecta Playwright ao Chrome já rodando via CDP."""
         if self._context:
             return
-        self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.connect_over_cdp(
-            f"http://127.0.0.1:{self._debug_port}"
-        )
-        self._context = self._browser.contexts[0]
-        self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
-        self._page.set_default_timeout(30000)
-        logger.info("[ALFA] Playwright conectado ao Chrome via CDP")
+        last_err = None
+        for _attempt in range(3):
+            try:
+                self._playwright = await async_playwright().start()
+                self._browser = await self._playwright.chromium.connect_over_cdp(
+                    f"http://127.0.0.1:{self._debug_port}"
+                )
+                self._context = self._browser.contexts[0]
+                self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+                self._page.set_default_timeout(30000)
+                logger.info("[ALFA] Playwright conectado ao Chrome via CDP")
+                return
+            except Exception as e:
+                last_err = e
+                logger.warning("[ALFA] CDP tentativa %d/3 falhou: %s", _attempt + 1, e)
+                try:
+                    if self._playwright:
+                        await self._playwright.stop()
+                        self._playwright = None
+                except Exception:
+                    pass
+                if _attempt < 2:
+                    await asyncio.sleep(1 + _attempt)
+        raise RuntimeError(f"[ALFA] Falha ao conectar CDP apos 3 tentativas: {last_err}")
 
     async def _disconnect_playwright(self) -> None:
         """Desconecta Playwright do Chrome sem fechar o navegador."""

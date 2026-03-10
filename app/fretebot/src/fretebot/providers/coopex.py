@@ -44,10 +44,8 @@ class CoopexProvider(ProviderBase):
             logger.warning(f"[{self.nome}] Browser desconectado, reinicializando...")
             await self.cleanup()
 
-        self._playwright = await async_playwright().start()
         from fretebot.providers.base import launch_browser_resilient
         self._browser = await launch_browser_resilient(
-            self._playwright,
             headless=self.headless,
             args=['--disable-blink-features=AutomationControlled', '--no-sandbox'],
         )
@@ -104,15 +102,9 @@ class CoopexProvider(ProviderBase):
                 await self._browser.close()
         except Exception:
             pass
-        try:
-            if self._playwright:
-                await self._playwright.stop()
-        except Exception:
-            pass
         self._browser = None
         self._context = None
         self._page = None
-        self._playwright = None
         self._logged_in = False
 
     @staticmethod

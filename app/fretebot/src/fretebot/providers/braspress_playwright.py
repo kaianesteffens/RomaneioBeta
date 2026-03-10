@@ -99,10 +99,8 @@ class BraspressPlaywrightProvider(ProviderBase):
                 return
             logger.warning("[Braspress] Browser desconectado, reinicializando...")
             await self.cleanup()
-        self._pw = await async_playwright().start()
         from fretebot.providers.base import launch_browser_resilient
         self._browser = await launch_browser_resilient(
-            self._pw,
             headless=self.headless,
             args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
         )
@@ -155,13 +153,7 @@ class BraspressPlaywrightProvider(ProviderBase):
                 await self._browser.close()
         except Exception:
             pass
-        try:
-            if self._pw:
-                await self._pw.stop()
-        except Exception:
-            pass
         self._browser = None
-        self._pw = None
         self._page = None
         self._context = None
         self._logged_in = False
