@@ -488,6 +488,11 @@ class BraspressPlaywrightProvider(ProviderBase):
                 if isinstance(status, dict):
                     # Detectar erros da página cedo para não esperar 135s em vão
                     page_errs = status.get("errs") or []
+                    # Filtrar mensagens de status/processamento (não são erros reais)
+                    page_errs = [
+                        e for e in page_errs
+                        if not re.search(r'\b(VERIFICANDO|CARREGANDO|PROCESSANDO|AGUARD)\b', e, re.IGNORECASE)
+                    ]
                     if page_errs and _poll >= 3:
                         self.last_error = f"Erro na página Braspress: {'; '.join(page_errs[:3])}"
                         logger.error(f"[Braspress] {self.last_error}")
