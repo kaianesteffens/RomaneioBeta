@@ -815,37 +815,18 @@ class RodonavesProvider(ProviderBase):
             url_pos = page.url.lower()
             still_login = await page.locator("#cpfcnp").count() > 0
             if still_login or "showlogin" in url_pos:
-                if not self.headless:
-                    # Mostra janela para o usuário resolver manualmente
-                    # (CAPTCHA, credenciais incorretas, etc.)
-                    logger.warning(
-                        f"[{self.nome}] Login não redirecionou — "
-                        f"mostrando janela para resolução manual (até {self.CAPTCHA_MAX_WAIT_S}s)..."
-                    )
-                    await self._mostrar_janela()
-                    # Aguarda até sair da tela de login (redirect após resolver)
-                    for _ in range(self.CAPTCHA_MAX_WAIT_S):
-                        await asyncio.sleep(1)
-                        still_login = await page.locator("#cpfcnp").count() > 0
-                        if not still_login:
-                            break
-                    await self._ocultar_janela()
-                    if not still_login:
-                        logger.info(f"[{self.nome}] Login OK após intervenção manual")
-                    else:
-                        raise RuntimeError("Login Rodonaves falhou — não resolvido a tempo")
-                else:
-                    # Headless — não tem como resolver manualmente
-                    erro_msg = ""
-                    try:
-                        erro_el = page.locator(".alert-danger, .text-danger, .error-message, #loginError").first
-                        if await erro_el.count() > 0:
-                            erro_msg = (await erro_el.inner_text()).strip()
-                    except Exception:
-                        pass
-                    raise RuntimeError(
-                        f"Login Rodonaves falhou — {erro_msg or 'credenciais ou CAPTCHA'} (URL: {page.url})"
-                    )
+                # Captura mensagem de erro visível
+                erro_msg = ""
+                try:
+                    erro_el = page.locator(".alert-danger, .text-danger, .error-message, #loginError").first
+                    if await erro_el.count() > 0:
+                        erro_msg = (await erro_el.inner_text()).strip()
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"Login Rodonaves falhou — {erro_msg or 'credenciais incorretas ou site indisponível'} "
+                    f"(URL: {page.url})"
+                )
 
         # Navega para /Quotation se não estamos lá
         await self._navegar_cotacao(_from_login=True)
