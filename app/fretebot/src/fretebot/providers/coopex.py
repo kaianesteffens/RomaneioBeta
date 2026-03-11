@@ -68,9 +68,16 @@ class CoopexProvider(ProviderBase):
             await self._page.locator('input[name=f3]').fill(self.usuario)
             await self._page.locator('input[name=f4]').fill(self.senha)
             await self._page.locator('a:has-text("►")').click()
-            await self._page.wait_for_timeout(1500)
 
-            if 'menu01' not in self._page.url:
+            # Aguarda redirecionamento pós-login (polling até 10s)
+            login_ok = False
+            for _wait in range(20):
+                await self._page.wait_for_timeout(500)
+                url = self._page.url
+                if 'ssw0422' not in url or 'menu' in url:
+                    login_ok = True
+                    break
+            if not login_ok:
                 raise Exception(f"Login falhou, URL: {self._page.url}")
 
             logger.info(f"[{self.nome}] Login OK")

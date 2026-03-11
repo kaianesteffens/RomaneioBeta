@@ -600,7 +600,7 @@ class RodonavesProvider(ProviderBase):
 
     # ── login ──────────────────────────────────────────────────────────
 
-    async def _navegar_cotacao(self):
+    async def _navegar_cotacao(self, _from_login: bool = False):
         """Navega para /Quotation e aguarda o formulário ficar visível."""
         page = self._page
 
@@ -639,14 +639,16 @@ class RodonavesProvider(ProviderBase):
             pass
 
         # Sessão provavelmente expirou — detecta login modal ou redirect
-        url_atual = page.url.lower()
-        tem_login = await page.locator("#cpfcnp").count() > 0
-        if tem_login or "showlogin" in url_atual or "/quotation" not in url_atual:
-            logger.warning(f"[{self.nome}] Sessão expirada (URL: {page.url}), refazendo login...")
-            self._logged_in = False
-            await self._login()
-            # Após re-login, _login() já chama _navegar_cotacao() internamente
-            return
+        # Só tenta re-login se NÃO estamos sendo chamados de dentro do _login()
+        # para evitar recursão infinita: _login → _navegar_cotacao → _login → ...
+        if not _from_login:
+            url_atual = page.url.lower()
+            tem_login = await page.locator("#cpfcnp").count() > 0
+            if tem_login or "showlogin" in url_atual or "/quotation" not in url_atual:
+                logger.warning(f"[{self.nome}] Sessão expirada (URL: {page.url}), refazendo login...")
+                self._logged_in = False
+                await self._login()
+                return
 
         raise RuntimeError(f"Formulário de cotação não carregou (URL: {page.url})")
 
@@ -815,7 +817,7 @@ class RodonavesProvider(ProviderBase):
                 raise RuntimeError("Login Rodonaves falhou — credenciais ou CAPTCHA")
 
         # Navega para /Quotation se não estamos lá
-        await self._navegar_cotacao()
+        await self._navegar_cotacao(_from_login=True)
 
         self._logged_in = True
         logger.info(f"[{self.nome}] Login OK – formulário visível")

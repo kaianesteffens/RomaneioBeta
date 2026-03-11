@@ -34,6 +34,7 @@ class EucaturProvider(ProviderBase):
         self._page = None
         self._playwright = None
         self._logged_in = False
+        self.last_error: str | None = None
 
     async def _init_browser(self):
         """Inicializa browser Playwright."""
@@ -67,15 +68,23 @@ class EucaturProvider(ProviderBase):
             await self._page.locator('input[name=f3]').fill(self.usuario)
             await self._page.locator('input[name=f4]').fill(self.senha)
             await self._page.locator('a:has-text("►")').click()
-            await self._page.wait_for_timeout(1500)
 
-            if 'menu01' not in self._page.url:
+            # Aguarda redirecionamento pós-login (polling até 10s)
+            login_ok = False
+            for _wait in range(20):
+                await self._page.wait_for_timeout(500)
+                url = self._page.url
+                if 'ssw0422' not in url or 'menu' in url:
+                    login_ok = True
+                    break
+            if not login_ok:
                 raise Exception(f"Login falhou, URL: {self._page.url}")
 
             logger.info(f"[{self.nome}] Login OK")
             self._logged_in = True
         except Exception as e:
-            logger.error(f"[{self.nome}] Erro no login: {e}")
+            self.last_error = f"Erro no login: {e}"
+            logger.error(f"[{self.nome}] {self.last_error}")
             raise
 
     async def pre_login(self):
@@ -360,16 +369,31 @@ class EucaturProvider(ProviderBase):
     async def _submeter_e_extrair_inner(self, page, xml_responses) -> Optional[Cotacao]:
         # Submit via sim()
         await page.evaluate('() => { if (typeof sim === "function") sim(); }')
-        await page.wait_for_timeout(3000)
 
-        # Extrair TODOS os campos de resultado do DOM
-        results = await page.evaluate('''() => {
-            const result = {};
-            document.querySelectorAll('input').forEach(el => {
-                if (el.name && el.value) result[el.name] = el.value;
-            });
-            return result;
-        }''')
+        # Polling: aguardar vlr_frete ser populado no DOM (até 15s)
+        results = {}
+        for _poll in range(15):
+            await page.wait_for_timeout(1000)
+            results = await page.evaluate('''() => {
+                const result = {};
+                document.querySelectorAll('input').forEach(el => {
+                    if (el.name && el.value) result[el.name] = el.value;
+                });
+                return result;
+            }''')
+            vlr = results.get('vlr_frete', '')
+            if vlr and vlr != '0,00':
+                logger.info(f"[{self.nome}] vlr_frete encontrado após {_poll+1}s")
+                break
+            # Se XML retornou erro, não precisa continuar esperando
+            if xml_responses:
+                for xml in xml_responses:
+                    if '<erro>' in xml and 'ERRO' in xml.upper():
+                        logger.info(f"[{self.nome}] Erro XML detectado, parando polling")
+                        break
+                else:
+                    continue
+                break
 
         logger.info(f"[{self.nome}] Todos os campos resultado DOM: {results}")
 
@@ -391,7 +415,8 @@ class EucaturProvider(ProviderBase):
 
         # Se SSW retornou erro de rota não atendida, descartar cotação
         if erro and 'ERRO' in erro.upper():
-            logger.info(f"[{self.nome}] Rota não atendida pelo SSW: {erro_msg}")
+            self.last_error = f"Rota não atendida pelo SSW: {erro_msg}"
+            logger.info(f"[{self.nome}] {self.last_error}")
             return None
 
         vlr_frete_str = results.get('vlr_frete', '')
@@ -399,14 +424,16 @@ class EucaturProvider(ProviderBase):
         prazo_str = results.get('prazo', '')
 
         if not vlr_frete_str or vlr_frete_str == '0,00':
-            logger.warning(f"[{self.nome}] Sem valor de frete retornado")
+            self.last_error = f"Sem valor de frete retornado (campos DOM: vlr_frete={vlr_frete_str!r}, nro_cotacao={nro_cotacao!r}, prazo={prazo_str!r})"
+            logger.warning(f"[{self.nome}] {self.last_error}")
             return None
 
         # Parse valor do frete
         try:
             valor_frete = float(vlr_frete_str.replace('.', '').replace(',', '.'))
         except ValueError:
-            logger.error(f"[{self.nome}] Erro ao parsear valor: {vlr_frete_str}")
+            self.last_error = f"Erro ao parsear valor: {vlr_frete_str}"
+            logger.error(f"[{self.nome}] {self.last_error}")
             return None
 
         # Parse prazo (formato DD/MM/YY)
@@ -482,5 +509,6 @@ class EucaturProvider(ProviderBase):
                                          cubagens_cm, cnpj_pagador, tipo_frete)
             return await self._submeter_e_extrair()
         except Exception as e:
-            logger.error(f"[{self.nome}] Erro na cotação: {e}")
+            self.last_error = f"Erro na cotação: {e}"
+            logger.error(f"[{self.nome}] {self.last_error}")
             return None
