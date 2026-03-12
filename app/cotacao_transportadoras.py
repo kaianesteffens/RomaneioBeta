@@ -1926,7 +1926,7 @@ async def _executar_cotacoes_com_dados(
         _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=erro_setup)
     semaforo = asyncio.Semaphore(max_paralelo)
 
-    timeout_por_transportadora_s = 120
+    timeout_por_transportadora_s = 45
 
     async def _exec(i: int, nome: str, provider: Any, kwargs: dict[str, Any]):
         is_alfa = nome.upper() == "ALFA"
@@ -1934,7 +1934,7 @@ async def _executar_cotacoes_com_dados(
             await semaforo.acquire()
             _log_diag(f"Semáforo adquirido: {nome} (posição {i})")
         try:
-            effective_timeout = timeout_por_transportadora_s + 60 if is_alfa else timeout_por_transportadora_s
+            effective_timeout = timeout_por_transportadora_s + 15 if is_alfa else timeout_por_transportadora_s
             coro = provider.coteir(**kwargs)
             cotacao = await asyncio.wait_for(coro, timeout=effective_timeout)
             return i, nome, provider, kwargs, cotacao, None
@@ -1969,6 +1969,17 @@ async def _executar_cotacoes_com_dados(
         _i, nome_task, provider_task, kwargs_task, cotacao, erro = res
 
         if isinstance(erro, BaseException):
+            erro_str = str(erro)
+            # Erros de negócio não devem ser reportados nem gerar retry
+            if _is_business_error(erro_str):
+                _log_diag(f"{nome_task}: destino não atendido (erro de negócio, ignorando)")
+                r = ResultadoCotacao(
+                    transportadora=nome_task, status="nao_atendido", detalhes=erro_str,
+                )
+                concluidas += 1
+                resultados.append(r)
+                _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
+                return
             import traceback
             tb = ''.join(traceback.format_exception(type(erro), erro, erro.__traceback__))
             _log_diag(f"Erro em cotação {nome_task}: {type(erro).__name__}: {erro}\n{tb}")
@@ -1987,6 +1998,17 @@ async def _executar_cotacoes_com_dados(
             return
 
         if erro is not None:
+            erro_str = str(erro)
+            # Erros de negócio não devem ser reportados nem gerar retry
+            if _is_business_error(erro_str):
+                _log_diag(f"{nome_task}: destino não atendido (erro de negócio, ignorando)")
+                r = ResultadoCotacao(
+                    transportadora=nome_task, status="nao_atendido", detalhes=erro_str,
+                )
+                concluidas += 1
+                resultados.append(r)
+                _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
+                return
             _log_diag(f"Erro em cotação {nome_task}: {erro}")
             if falhas_para_retry is not None:
                 falhas_para_retry.append((nome_task, provider_task, kwargs_task))
@@ -2034,6 +2056,18 @@ async def _executar_cotacoes_com_dados(
             else:
                 _log_diag(f"{nome_task} retornou None (sem resultado)")
                 detalhe = "Sem resultado"
+            # Erros de negócio (destino não atendido) são normais:
+            # não reportar, não fazer retry, apenas registrar como "não atendido"
+            if _is_business_error(detalhe):
+                _log_diag(f"{nome_task}: destino não atendido (erro de negócio, ignorando)")
+                r = ResultadoCotacao(
+                    transportadora=nome_task, status="nao_atendido", detalhes=str(detalhe),
+                )
+                concluidas += 1
+                resultados.append(r)
+                _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
+                return
+
             report_error_message(f"{nome_task} retornou None: {detalhe}", context=f"cotacao_{nome_task}")
             if falhas_para_retry is not None:
                 falhas_para_retry.append((nome_task, provider_task, kwargs_task))
@@ -2045,6 +2079,35 @@ async def _executar_cotacoes_com_dados(
                 concluidas += 1
                 resultados.append(r)
                 _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
+
+    def _is_business_error(detail: str) -> bool:
+        """Detecta erros de negócio (destino não atendido, rota fora de cobertura).
+
+        Esses erros são normais e não devem ser reportados nem gerar retry."""
+        if not detail:
+            return False
+        d = str(detail).lower()
+        patterns = (
+            "destino fora da cobertura",
+            "cepdestino não atendido",
+            "cep destino não atendido",
+            "não atendemos esse cep",
+            "destino possivelmente não atendido",
+            "destino possìvelmente não atendido",
+            "rota não atendida",
+            "cidade de destino",
+            "transportadora não atende",
+            "transportadora n o atende",
+            "cidade de destino n o",
+            "n o atendida",
+            "não atendido",
+            "nao atendido",
+            "fora de cobertura",
+            "fora da cobertura",
+            "não atendemos",
+            "cepnão atendemos",
+        )
+        return any(p in d for p in patterns)
 
     # ── Rodada 1: executa todas as cotações ──
     falhas_para_retry: list[tuple[str, Any, dict[str, Any]]] = []

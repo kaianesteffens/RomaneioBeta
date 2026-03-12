@@ -1126,6 +1126,10 @@ class AlfaProvider(ProviderBase):
                 self._logged_in = False
                 if not await self._login():
                     raise RuntimeError("Login Alfa falhou")
+                # Garante janela oculta após re-login por sessão expirada
+                if not self.headless:
+                    await self._ocultar_janela()
+                    self._set_taskbar_visible(False)
 
             if not await self._navegar_para_cotacao():
                 logger.error("[ALFA] Navegação para cotação falhou")
@@ -1284,6 +1288,11 @@ class AlfaProvider(ProviderBase):
             self.last_error = None
             if not await self._login():
                 return None
+
+            # Garante que a janela está oculta após login (mesmo que Turnstile tenha sido resolvido)
+            if not self.headless:
+                await self._ocultar_janela()
+                self._set_taskbar_visible(False)
 
             vol_total = self._sum_volumes(cubagens, volumes)
             cub_total = self._calc_cubagem_m3(cubagens)
