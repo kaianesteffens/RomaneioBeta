@@ -811,22 +811,37 @@ class RodonavesProvider(ProviderBase):
             except Exception:
                 pass
             logger.info(f"[{self.nome}] URL pós-login: {page.url}")
-            # Verifica se login falhou (ainda na página de login)
             url_pos = page.url.lower()
-            still_login = await page.locator("#cpfcnp").count() > 0
-            if still_login or "showlogin" in url_pos:
-                # Captura mensagem de erro visível
-                erro_msg = ""
-                try:
-                    erro_el = page.locator(".alert-danger, .text-danger, .error-message, #loginError").first
-                    if await erro_el.count() > 0:
-                        erro_msg = (await erro_el.inner_text()).strip()
-                except Exception:
-                    pass
+            logger.info(f"[{self.nome}] URL pós-login: {page.url}")
+
+            # Captura mensagem de erro visível (qualquer página)
+            erro_msg = ""
+            try:
+                erro_el = page.locator(
+                    ".alert-danger, .text-danger, .error-message, "
+                    "#loginError, .validation-summary-errors"
+                ).first
+                if await erro_el.count() > 0:
+                    erro_msg = (await erro_el.inner_text()).strip()
+            except Exception:
+                pass
+
+            # Verifica se login falhou:
+            # 1) URL ainda contém showLogin → o formulário nem redirecionou
+            # 2) Mensagem de erro explícita visível na página
+            # NÃO checar #cpfcnp aqui: a homepage "/" tem formulário de login
+            # embutido mesmo quando o usuário JÁ está logado.
+            if "showlogin" in url_pos:
                 raise RuntimeError(
                     f"Login Rodonaves falhou — {erro_msg or 'credenciais incorretas ou site indisponível'} "
                     f"(URL: {page.url})"
                 )
+            if erro_msg:
+                raise RuntimeError(
+                    f"Login Rodonaves falhou — {erro_msg} (URL: {page.url})"
+                )
+            # URL mudou (ex: "/" ou outra página) e sem mensagem de erro →
+            # login provavelmente OK; _navegar_cotacao verificará a sessão
 
         # Navega para /Quotation se não estamos lá
         await self._navegar_cotacao(_from_login=True)
