@@ -1,21 +1,19 @@
 """
-Teste completo do modo fornecedor - executa cotação real em todas as transportadoras.
+Teste completo do modo Calcular Frete - executa cotacao real em todas as
+transportadoras habilitadas (incluindo Rodonaves).
 
 Dados de teste:
-  CNPJ fornecedor: 05.892.834/0001-72
-  CEP fornecedor:  95082-000 (Caxias do Sul/RS)
-  2 volumes, 150x100x120 cm, 800 kg total, R$ 17.552,50
+  CNPJ destinatario: 10.620.811/0001-49
+  CEP destino:       14406-077 (Franca/SP)
+  3 volumes, 44x44x144 cm, 57 kg total, R$ 1.582,50
 """
 import asyncio
 import sys
 import os
 
-# Reproduz exatamente o que _montar_romaneio_fornecedor gera na UI
-CNPJ_EMPRESA = "40223106000179"
-CEP_EMPRESA = "99740000"
-
-CNPJ_FORNECEDOR = "10620811000149"
-CEP_FORNECEDOR = "14406077"
+# Dados do destinatario (quem recebe)
+CNPJ_DESTINATARIO = "10620811000149"
+CEP_DESTINO = "14406077"
 
 QTD = 3
 ALT_CM = 44
@@ -24,13 +22,13 @@ COMP_CM = 144
 PESO_TOTAL = 57.0
 VALOR = 1582.50
 
-peso_caixa = PESO_TOTAL / QTD  # 400.0
-cubagem_unit = (ALT_CM * LARG_CM * COMP_CM) / 1_000_000  # 1.8
-cubagem_total = cubagem_unit * QTD  # 3.6
+peso_caixa = PESO_TOTAL / QTD
+cubagem_unit = (ALT_CM * LARG_CM * COMP_CM) / 1_000_000
+cubagem_total = cubagem_unit * QTD
 
-c = CNPJ_EMPRESA
+c = CNPJ_DESTINATARIO
 cnpj_fmt = f"{c[:2]}.{c[2:5]}.{c[5:8]}/{c[8:12]}-{c[12:]}"
-cep_fmt = f"{CEP_EMPRESA[:5]}-{CEP_EMPRESA[5:]}"
+cep_fmt = f"{CEP_DESTINO[:5]}-{CEP_DESTINO[5:]}"
 
 ROMANEIO = "\n".join([
     f"CNPJ/CPF: {cnpj_fmt}",
@@ -39,16 +37,16 @@ ROMANEIO = "\n".join([
     f"- CUBAGEM: {cubagem_total:.6f} m3",
     f"- PESO: {PESO_TOTAL:.2f} kg",
     f"- TOTAL: R$ {VALOR:.2f}",
-    f"{QTD} x Volume fornecedor - {peso_caixa:.3f} kg - {cubagem_unit:.6f} m3 - {ALT_CM}x{LARG_CM}x{COMP_CM}",
+    f"{QTD} x Volume teste - {peso_caixa:.3f} kg - {cubagem_unit:.6f} m3 - {ALT_CM}x{LARG_CM}x{COMP_CM}",
 ])
 
 
 async def main():
     print("=" * 60)
-    print("TESTE COMPLETO - MODO FORNECEDOR")
+    print("TESTE COMPLETO - CALCULAR FRETE")
     print("=" * 60)
-    print(f"\nCNPJ Fornecedor: {CNPJ_FORNECEDOR}")
-    print(f"CEP Fornecedor:  {CEP_FORNECEDOR}")
+    print(f"\nCNPJ Destinatario: {cnpj_fmt}")
+    print(f"CEP Destino:       {cep_fmt}")
     print(f"Volumes: {QTD}  Dims: {ALT_CM}x{LARG_CM}x{COMP_CM} cm")
     print(f"Peso: {PESO_TOTAL} kg  Valor: R$ {VALOR:.2f}")
     print(f"\nRomaneio gerado:\n{ROMANEIO}")
@@ -74,12 +72,12 @@ async def main():
             else:
                 print(f"  [{done}/{total}] {nome}: {status} - {det}")
 
-    print("\nIniciando cotações...\n")
+    print("\nIniciando cotacoes...\n")
     resultados = await cotar_transportadoras_romaneio_colado(
         romaneio_colado=ROMANEIO,
-        cep_origem=CEP_FORNECEDOR,
-        cnpj_remetente=CNPJ_FORNECEDOR,
-        tipo_frete="2",
+        cep_origem="",
+        cnpj_remetente="",
+        tipo_frete="",
         progresso_callback=progresso,
     )
 
