@@ -149,7 +149,7 @@ class RodonavesProvider(ProviderBase):
     """Provider Rodonaves via portal cliente.rte.com.br (seletores gravados)."""
 
     PORTAL_URL = "https://cliente.rte.com.br/Quotation"
-    CAPTCHA_MAX_WAIT_S = 120
+    CAPTCHA_MAX_WAIT_S = 45
 
     def __init__(
         self,
@@ -368,64 +368,93 @@ class RodonavesProvider(ProviderBase):
                 await self.cleanup()
             else:
                 return
-        # Lanca Chrome como subprocess + conecta via CDP (sem Chromium)
+        await self._init_browser_inner()
+
+    async def _init_browser_inner(self):
+        """Lanca Chrome e conecta via CDP, com retry + limpeza de perfil em caso de crash."""
+        import shutil as _shutil
         chrome_path = find_chrome()
-        port = _find_free_port()
 
-        if self.headless:
-            import tempfile
-            self._profile_tmp = tempfile.mkdtemp(prefix="fretebot_rodo_")
-            udd = self._profile_tmp
-        else:
-            udd = self._user_data_dir()
-            self._kill_stale_chrome(udd)
-            self._fix_preferences(udd)
-            self._profile_tmp = None
+        for launch_attempt in range(2):
+            port = _find_free_port()
 
-        launch_args = [
-            chrome_path,
-            f"--remote-debugging-port={port}",
-            f"--user-data-dir={udd}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--no-sandbox",
-            "--disable-blink-features=AutomationControlled",
-        ]
-        if self.headless:
-            launch_args.append("--headless=new")
-        else:
-            launch_args.extend([
-                "--window-position=-3000,-3000",
-                "--window-size=1920,1080",
-                "--disable-session-crashed-bubble",
-                "--disable-features=InfiniteSessionRestore",
-                "--hide-crash-restore-bubble",
-                "--noerrdialogs",
-                "--disable-infobars",
-                "--enable-features=NetworkService,NetworkServiceInProcess",
-                "--disable-features=IsolateOrigins,site-per-process,TranslateUI",
-                "--disable-component-extensions-with-background-pages",
-            ])
+            if self.headless:
+                import tempfile
+                self._profile_tmp = tempfile.mkdtemp(prefix="fretebot_rodo_")
+                udd = self._profile_tmp
+            else:
+                udd = self._user_data_dir()
+                self._kill_stale_chrome(udd)
+                self._fix_preferences(udd)
+                self._profile_tmp = None
 
-        self._chrome_proc = subprocess.Popen(
-            launch_args,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+            launch_args = [
+                chrome_path,
+                f"--remote-debugging-port={port}",
+                f"--user-data-dir={udd}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--no-sandbox",
+                "--disable-blink-features=AutomationControlled",
+            ]
+            if self.headless:
+                launch_args.append("--headless=new")
+            else:
+                launch_args.extend([
+                    "--window-position=-3000,-3000",
+                    "--window-size=1920,1080",
+                    "--disable-session-crashed-bubble",
+                    "--disable-features=InfiniteSessionRestore",
+                    "--hide-crash-restore-bubble",
+                    "--noerrdialogs",
+                    "--disable-infobars",
+                    "--enable-features=NetworkService,NetworkServiceInProcess",
+                    "--disable-features=IsolateOrigins,site-per-process,TranslateUI",
+                    "--disable-component-extensions-with-background-pages",
+                ])
 
-        for _ in range(50):
-            await asyncio.sleep(0.1)
-            if self._chrome_proc.poll() is not None:
-                raise RuntimeError(f"Chrome (Rodonaves) encerrou inesperadamente (exit {self._chrome_proc.returncode})")
-            try:
-                with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+            self._chrome_proc = subprocess.Popen(
+                launch_args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+
+            chrome_ok = False
+            for _ in range(50):
+                await asyncio.sleep(0.1)
+                if self._chrome_proc.poll() is not None:
                     break
-            except (ConnectionRefusedError, OSError):
-                continue
-        else:
+                try:
+                    with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+                        chrome_ok = True
+                        break
+                except (ConnectionRefusedError, OSError):
+                    continue
+
+            if chrome_ok:
+                break  # Chrome iniciou OK, sai do loop de retry
+
+            # Chrome crashou -- tenta limpar perfil e relancar
+            exit_code = self._chrome_proc.returncode if self._chrome_proc.poll() is not None else None
             _kill_proc(self._chrome_proc)
-            raise RuntimeError(f"Chrome (Rodonaves) nao respondeu na porta {port} em 5s")
+            self._chrome_proc = None
+
+            if launch_attempt == 0 and not self.headless:
+                logger.warning(
+                    f"[{self.nome}] Chrome crashou (exit {exit_code}), "
+                    f"limpando perfil e tentando novamente..."
+                )
+                try:
+                    _shutil.rmtree(udd, ignore_errors=True)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+                continue
+
+            raise RuntimeError(
+                f"Chrome (Rodonaves) encerrou inesperadamente (exit {exit_code})"
+            )
 
         # Conecta Playwright via CDP com retry (driver Node.js pode crashar)
         last_err = None
@@ -458,7 +487,7 @@ class RodonavesProvider(ProviderBase):
 
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
         if not self.headless:
-            # Força janela off-screen via CDP (--window-position pode ser ignorado pelo persistent context)
+            # Forca janela off-screen via CDP (--window-position pode ser ignorado pelo persistent context)
             try:
                 self._cdp_session = await self._context.new_cdp_session(self._page)
                 resp = await self._cdp_session.send("Browser.getWindowForTarget")
@@ -475,9 +504,9 @@ class RodonavesProvider(ProviderBase):
             except Exception as e:
                 logger.debug(f"[{self.nome}] Falha ao mover janela off-screen via CDP: {e}")
             await ocultar_taskbar_por_pagina(self._page)
-        # Stealth script: injetar em todas as páginas (funciona também para persistent context)
+        # Stealth script: injetar em todas as paginas (funciona tambem para persistent context)
         await self._context.add_init_script(_STEALTH_JS)
-        # Injetar no primeiro page já existente (add_init_script só afeta navegações futuras)
+        # Injetar no primeiro page ja existente (add_init_script so afeta navegacoes futuras)
         try:
             await self._page.evaluate(_STEALTH_JS)
         except Exception:
@@ -854,8 +883,16 @@ class RodonavesProvider(ProviderBase):
         try:
             await self._login()
         except Exception as e:
-            logger.warning(f"[{self.nome}] Pre-login falhou: {e}")
+            logger.warning(f"[{self.nome}] Pre-login falhou: {e}, tentando novamente...")
             await self.cleanup()
+            # Retry: reinicializa browser e tenta login de novo
+            try:
+                await self._init_browser()
+                await self._login()
+                logger.info(f"[{self.nome}] Pre-login OK no retry")
+            except Exception as e2:
+                logger.warning(f"[{self.nome}] Pre-login retry também falhou: {e2}")
+                await self.cleanup()
 
     # ── preenchimento do formulário (seletores por ID do HTML real) ───
 
