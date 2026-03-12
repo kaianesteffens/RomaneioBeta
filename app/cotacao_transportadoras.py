@@ -813,10 +813,18 @@ def _kill_orphan_fretebot_chromes() -> None:
             if not line:
                 if pid is not None and (fretebot_marker in cmd.lower() or fretebot_temp_marker in cmd.lower()):
                     try:
-                        os.kill(pid, 9)
-                        _log_diag(f"Matou Chrome órfão do FreteBot PID={pid}")
-                    except OSError:
-                        pass
+                        _sp.run(
+                            ["taskkill", "/F", "/T", "/PID", str(pid)],
+                            capture_output=True, timeout=10,
+                            creationflags=_sp.CREATE_NO_WINDOW,
+                        )
+                        _log_diag(f"Matou Chrome órfão do FreteBot PID={pid} (tree kill)")
+                    except Exception:
+                        try:
+                            os.kill(pid, 9)
+                            _log_diag(f"Matou Chrome órfão do FreteBot PID={pid} (os.kill)")
+                        except OSError:
+                            pass
                 pid = None
                 cmd = ""
                 continue
@@ -2159,6 +2167,28 @@ async def _executar_cotacoes_com_dados(
                 )
                 resultados.append(r)
                 _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
+
+    # Cleanup de providers criados ad-hoc (quando sessao=None)
+    if sessao is None and tasks:
+        async def _cleanup_adhoc(nome: str, prov):
+            try:
+                await asyncio.wait_for(prov.cleanup(), timeout=8)
+                _log_diag(f"Cleanup ad-hoc {nome} OK")
+            except Exception as e:
+                _log_diag(f"Cleanup ad-hoc {nome} falhou: {e}")
+        cleanup_tasks = [_cleanup_adhoc(n, p) for n, p, _ in tasks]
+        await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+
+    # Cleanup de providers criados ad-hoc (quando sessao=None)
+    if sessao is None and tasks:
+        async def _cleanup_adhoc(nome: str, prov):
+            try:
+                await asyncio.wait_for(prov.cleanup(), timeout=8)
+                _log_diag(f"Cleanup ad-hoc {nome} OK")
+            except Exception as e:
+                _log_diag(f"Cleanup ad-hoc {nome} falhou: {e}")
+        cleanup_tasks = [_cleanup_adhoc(n, p) for n, p, _ in tasks]
+        await asyncio.gather(*cleanup_tasks, return_exceptions=True)
 
     validas = [r for r in resultados if r.status == "ok" and r.valor_frete is not None]
     _log_diag(f"Cotações válidas: {len(validas)} de {len(tasks)}")
