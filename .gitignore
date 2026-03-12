@@ -63,3 +63,6 @@ app/licenses.json
 # Cache
 cache/
 app/cache/
+
+# Scripts de teste
+app/test_*.py
