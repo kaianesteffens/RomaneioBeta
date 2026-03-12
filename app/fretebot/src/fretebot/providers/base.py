@@ -56,8 +56,22 @@ def _find_free_port() -> int:
 
 
 def _kill_proc(proc):
+    """Encerra processo Chrome e todos os seus filhos (tree kill)."""
     if proc is None or proc.poll() is not None:
         return
+    pid = proc.pid
+    # No Windows, taskkill /T mata a arvore inteira (pai + filhos)
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True, timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            return
+        except Exception:
+            pass
+    # Fallback generico
     try:
         proc.terminate()
         proc.wait(timeout=5)
