@@ -1299,7 +1299,7 @@ class TRDProvider(ProviderBase):
                         await loc_rem.click(timeout=3000)
                         await loc_rem.fill(cnpj_rem_digits)
                         await loc_rem.press("Tab")
-                        await self._page.wait_for_timeout(200)
+                        await self._page.wait_for_timeout(400)
                         val = await loc_rem.input_value()
                         cnpj_rem_ok = len(self._digits(val)) >= 14
                     except Exception:
@@ -1309,7 +1309,7 @@ class TRDProvider(ProviderBase):
                     logger.warning(
                         f"[{self.nome}] Tentativa {tentativa + 1}/4 de preencher CNPJ remetente falhou"
                     )
-                    await self._page.wait_for_timeout(400)
+                    await self._page.wait_for_timeout(500)
 
                 if not cnpj_rem_ok:
                     self.last_error = "TRD: não foi possível preencher CNPJ do remetente na etapa 1"
@@ -1403,7 +1403,7 @@ class TRDProvider(ProviderBase):
                         await loc.click(timeout=3000)
                         await loc.fill(cnpj_dest_digits)
                         await loc.press("Tab")
-                        await self._page.wait_for_timeout(200)
+                        await self._page.wait_for_timeout(400)
                         val = await loc.input_value()
                         cnpj_ok = len(self._digits(val)) >= 14
                     except Exception:
@@ -1414,7 +1414,7 @@ class TRDProvider(ProviderBase):
                         f"[{self.nome}] Tentativa {tentativa + 1}/4 de preencher CNPJ destinatário falhou; "
                         "aguardando e tentando novamente..."
                     )
-                    await self._page.wait_for_timeout(400)
+                    await self._page.wait_for_timeout(500)
 
                 if not cnpj_ok:
                     self.last_error = "TRD: não foi possível preencher CNPJ do destinatário na etapa 1"

@@ -210,7 +210,7 @@ class BraspressPlaywrightProvider(ProviderBase):
 
             # ── PÁGINA DE COTAÇÃO ──────────────────────────────────
             await page.goto(self.COTACAO_URL, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(500)
 
             # Verificar se sessão expirou (redirecionou para login)
             current_url = page.url.lower()
@@ -220,7 +220,7 @@ class BraspressPlaywrightProvider(ProviderBase):
                 if not await self._login():
                     return None
                 await page.goto(self.COTACAO_URL, wait_until="domcontentloaded", timeout=60000)
-                await page.wait_for_timeout(1500)
+                await page.wait_for_timeout(500)
 
             # ── FECHAR MODAL/POPUP ─────────────────────────────────
             for _ in range(3):
@@ -228,12 +228,12 @@ class BraspressPlaywrightProvider(ProviderBase):
                     btn = page.locator("text=Fechar").first
                     if await btn.count() > 0 and await btn.is_visible():
                         await btn.click()
-                        await page.wait_for_timeout(1000)
+                        await page.wait_for_timeout(400)
                     else:
                         break
                 except Exception:
                     break
-            await page.wait_for_timeout(500)
+            await page.wait_for_timeout(300)
 
             # ── 4. PREENCHER FORMULÁRIO ───────────────────────────────
             logger.info("[Braspress] Preenchendo formulário...")
@@ -244,14 +244,14 @@ class BraspressPlaywrightProvider(ProviderBase):
             except Exception:
                 logger.warning("[Braspress] Select #modal não encontrado, tentando reload...")
                 await page.goto(self.COTACAO_URL, wait_until="domcontentloaded", timeout=60000)
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(400)
                 # Fechar modais/popups pós-reload
                 for _ in range(3):
                     try:
                         btn = page.locator("text=Fechar").first
                         if await btn.count() > 0 and await btn.is_visible():
                             await btn.click()
-                            await page.wait_for_timeout(1000)
+                            await page.wait_for_timeout(400)
                         else:
                             break
                     except Exception:
@@ -279,7 +279,7 @@ class BraspressPlaywrightProvider(ProviderBase):
                 await page.locator("#cnpjRemetente").press("Control+a")
                 await page.locator("#cnpjRemetente").type(cnpj_rem, delay=50)
                 await page.keyboard.press("Tab")
-                await page.wait_for_timeout(1200)
+                await page.wait_for_timeout(500)
 
             # CNPJ Destinatário
             if cnpj_rem:
@@ -291,7 +291,7 @@ class BraspressPlaywrightProvider(ProviderBase):
                 await page.locator("#cnpjDestinatario").press("Control+a")
                 await page.locator("#cnpjDestinatario").type(cnpj_dest, delay=50)
                 await page.keyboard.press("Tab")
-                await page.wait_for_timeout(1200)
+                await page.wait_for_timeout(500)
 
             # CEPs: aguardar auto-preenchimento, preencher manualmente se necessário
             cep_orig_auto = ""
@@ -315,13 +315,13 @@ class BraspressPlaywrightProvider(ProviderBase):
                 await page.locator("#cepOrigem").click()
                 await page.locator("#cepOrigem").fill(self._digits(origem))
                 await page.keyboard.press("Tab")
-                await page.wait_for_timeout(1000)
+                await page.wait_for_timeout(500)
             if len(cep_dest_auto) != 8:
                 logger.info("[Braspress] CEP Destino não auto-preenchido, preenchendo manualmente...")
                 await page.locator("#cepDestino").click()
                 await page.locator("#cepDestino").fill(self._digits(destino))
                 await page.keyboard.press("Tab")
-                await page.wait_for_timeout(1000)
+                await page.wait_for_timeout(500)
 
             # Peso (formato BR: vírgula decimal)
             peso_str = self._fmt_decimal(peso)
@@ -449,8 +449,8 @@ class BraspressPlaywrightProvider(ProviderBase):
             # Alguns cenários retornam tabela fora de #step4Result.
             resultado_pronto = False
             ultimo_status: dict | None = None
-            for _poll in range(90):  # até ~135s
-                await page.wait_for_timeout(1500)
+            for _poll in range(50):  # até ~40s
+                await page.wait_for_timeout(800)
                 status = await page.evaluate(
                     """() => {
                         const clean = (v) => (v || '').replace(/\\s+/g, ' ').trim();
