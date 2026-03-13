@@ -238,6 +238,15 @@ class BraspressPlaywrightProvider(ProviderBase):
             # ── 4. PREENCHER FORMULÁRIO ───────────────────────────────
             logger.info("[Braspress] Preenchendo formulário...")
 
+            # Aguarda formulário ficar interativo antes de preencher
+            try:
+                await page.locator("#btnCalcular").wait_for(state="visible", timeout=10000)
+            except Exception:
+                logger.warning("[Braspress] Formulário não visível, aguardando networkidle...")
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
             # #modal e #tipoFrete só existem no frete fornecedor (FOB)
             if cnpj_remetente:
                 # Aguarda select #modal ficar disponível antes de interagir
