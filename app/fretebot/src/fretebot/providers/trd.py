@@ -1235,8 +1235,8 @@ class TRDProvider(ProviderBase):
             )
             
             logger.info(f"[{self.nome}] Navegando para cotação...")
-            await self._page.goto(self.COTACAO_URL, wait_until='networkidle', timeout=60000)
-            await self._page.wait_for_timeout(1500)
+            await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=30000)
+            await self._page.wait_for_timeout(500)
 
             # Verificar se sessão expirou (redirecionou para login ou não carregou o form)
             current_url = self._page.url
@@ -1263,8 +1263,8 @@ class TRDProvider(ProviderBase):
                     "response",
                     lambda response: asyncio.create_task(_capturar_resposta_rede(response)),
                 )
-                await self._page.goto(self.COTACAO_URL, wait_until='networkidle', timeout=60000)
-                await self._page.wait_for_timeout(1500)
+                await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=30000)
+                await self._page.wait_for_timeout(500)
             
             # ETAPA 1: DADOS DO FRETE
             logger.info(f"[{self.nome}] Preenchendo ETAPA 1...")
@@ -1281,12 +1281,12 @@ class TRDProvider(ProviderBase):
                     await self._page.select_option(
                         'select[ng-model="vm.selectCotacaoPagador"]', "DESTINATARIO"
                     )
-                    await self._page.wait_for_timeout(1000)
+                    await self._page.wait_for_timeout(300)
                 except Exception as e:
                     logger.warning(f"[{self.nome}] Falha ao trocar pagador para DESTINATARIO: {e}")
 
             try:
-                await self._page.wait_for_timeout(500)
+                await self._page.wait_for_timeout(200)
             except Exception:
                 pass
 
@@ -1299,7 +1299,7 @@ class TRDProvider(ProviderBase):
                         await loc_rem.click(timeout=3000)
                         await loc_rem.fill(cnpj_rem_digits)
                         await loc_rem.press("Tab")
-                        await self._page.wait_for_timeout(500)
+                        await self._page.wait_for_timeout(200)
                         val = await loc_rem.input_value()
                         cnpj_rem_ok = len(self._digits(val)) >= 14
                     except Exception:
@@ -1309,7 +1309,7 @@ class TRDProvider(ProviderBase):
                     logger.warning(
                         f"[{self.nome}] Tentativa {tentativa + 1}/4 de preencher CNPJ remetente falhou"
                     )
-                    await self._page.wait_for_timeout(700)
+                    await self._page.wait_for_timeout(400)
 
                 if not cnpj_rem_ok:
                     self.last_error = "TRD: não foi possível preencher CNPJ do remetente na etapa 1"
@@ -1328,7 +1328,7 @@ class TRDProvider(ProviderBase):
                         pass
                     if cep_coleta_ok:
                         break
-                    await self._page.wait_for_timeout(500)
+                    await self._page.wait_for_timeout(300)
 
                 # Fallback: preencher CEP coleta manualmente
                 if not cep_coleta_ok and len(cep_rem_digits) == 8:
@@ -1338,7 +1338,7 @@ class TRDProvider(ProviderBase):
                         await loc_cep_col.click(timeout=2000)
                         await loc_cep_col.fill(cep_rem_digits)
                         await loc_cep_col.press("Tab")
-                        await self._page.wait_for_timeout(800)
+                        await self._page.wait_for_timeout(300)
                     except Exception:
                         pass
 
@@ -1346,7 +1346,7 @@ class TRDProvider(ProviderBase):
                 # é auto-preenchido (empresa logada). Aguardar CEP entrega auto-completar.
                 cep_ok = False
                 cidade_uf_ok = False
-                for _ in range(24):
+                for _ in range(16):
                     try:
                         cep_val = self._digits(await self._page.locator('#numeroCepEntregaInput').input_value())
                         cidade_val = (await self._page.evaluate(
@@ -1362,7 +1362,7 @@ class TRDProvider(ProviderBase):
                     cidade_uf_ok = len(cidade_val) >= 3
                     if cep_ok and cidade_uf_ok:
                         break
-                    await self._page.wait_for_timeout(500)
+                    await self._page.wait_for_timeout(300)
 
                 # Fallback: preencher CEP entrega manualmente
                 if not cep_ok:
@@ -1376,7 +1376,7 @@ class TRDProvider(ProviderBase):
                             await loc_cep.press("Tab")
                         except Exception:
                             pass
-                        for _ in range(24):
+                        for _ in range(16):
                             try:
                                 cep_val = self._digits(await self._page.locator('#numeroCepEntregaInput').input_value())
                                 cidade_val = (await self._page.evaluate(
@@ -1392,7 +1392,7 @@ class TRDProvider(ProviderBase):
                             cidade_uf_ok = len(cidade_val) >= 3
                             if cep_ok and cidade_uf_ok:
                                 break
-                            await self._page.wait_for_timeout(500)
+                            await self._page.wait_for_timeout(300)
 
             else:
                 # Modo normal: preencher CNPJ destinatário
@@ -1403,7 +1403,7 @@ class TRDProvider(ProviderBase):
                         await loc.click(timeout=3000)
                         await loc.fill(cnpj_dest_digits)
                         await loc.press("Tab")
-                        await self._page.wait_for_timeout(500)
+                        await self._page.wait_for_timeout(200)
                         val = await loc.input_value()
                         cnpj_ok = len(self._digits(val)) >= 14
                     except Exception:
@@ -1414,7 +1414,7 @@ class TRDProvider(ProviderBase):
                         f"[{self.nome}] Tentativa {tentativa + 1}/4 de preencher CNPJ destinatário falhou; "
                         "aguardando e tentando novamente..."
                     )
-                    await self._page.wait_for_timeout(700)
+                    await self._page.wait_for_timeout(400)
 
                 if not cnpj_ok:
                     self.last_error = "TRD: não foi possível preencher CNPJ do destinatário na etapa 1"
@@ -1424,7 +1424,7 @@ class TRDProvider(ProviderBase):
                 # 1) Aguarda autocomplete natural do CEP/cidade/UF após CNPJ.
                 cep_ok = False
                 cidade_uf_ok = False
-                for _ in range(24):
+                for _ in range(16):
                     try:
                         cep_val = self._digits(await self._page.locator('#numeroCepEntregaInput').input_value())
                         cidade_val = (await self._page.evaluate(
@@ -1440,7 +1440,7 @@ class TRDProvider(ProviderBase):
                     cidade_uf_ok = len(cidade_val) >= 3
                     if cep_ok and cidade_uf_ok:
                         break
-                    await self._page.wait_for_timeout(500)
+                    await self._page.wait_for_timeout(300)
 
                 # 2) Fallback: preencher CEP manualmente se não completou sozinho.
                 if not cep_ok:
@@ -1454,7 +1454,7 @@ class TRDProvider(ProviderBase):
                             await loc_cep.press("Tab")
                         except Exception:
                             pass
-                        for _ in range(24):
+                        for _ in range(16):
                             try:
                                 cep_val = self._digits(await self._page.locator('#numeroCepEntregaInput').input_value())
                                 cidade_val = (await self._page.evaluate(
@@ -1470,7 +1470,7 @@ class TRDProvider(ProviderBase):
                             cidade_uf_ok = len(cidade_val) >= 3
                             if cep_ok and cidade_uf_ok:
                                 break
-                            await self._page.wait_for_timeout(500)
+                            await self._page.wait_for_timeout(300)
 
             if not (cep_ok and cidade_uf_ok):
                 self.last_error = (
@@ -1483,29 +1483,29 @@ class TRDProvider(ProviderBase):
              
             # Continuar
             await self._page.get_by_role("button", name="Continuar").click()
-            await self._page.wait_for_timeout(1200)
+            await self._page.wait_for_timeout(300)
             
             # Fecha modal se aparecer
             try:
                 modal = self._page.locator('[role="dialog"], .modal').first
                 if await modal.count() > 0:
                     await modal.get_by_role("button", name="Continuar").first.click()
-                    await self._page.wait_for_timeout(800)
+                    await self._page.wait_for_timeout(300)
             except:
                 pass
 
             # Garante transição para ETAPA 2.
-            if not await self._aguardar_etapa2_pronta(timeout_ms=12000):
+            if not await self._aguardar_etapa2_pronta(timeout_ms=8000):
                 # Tenta avançar novamente se o botão continuar ainda estiver visível.
                 try:
                     btn_continuar = self._page.get_by_role("button", name="Continuar").first
                     if await btn_continuar.count() > 0 and await btn_continuar.is_visible():
                         await btn_continuar.click()
-                        await self._page.wait_for_timeout(800)
+                        await self._page.wait_for_timeout(300)
                 except Exception:
                     pass
 
-            if not await self._aguardar_etapa2_pronta(timeout_ms=10000):
+            if not await self._aguardar_etapa2_pronta(timeout_ms=8000):
                 alerts = await self._coletar_alertas_ui()
                 extra_alert = f" ({'; '.join(alerts)})" if alerts else ""
                 self.last_error = f"TRD: etapa 2 não carregou após clicar em Continuar{extra_alert}"
@@ -1526,7 +1526,7 @@ class TRDProvider(ProviderBase):
                 self.last_error = "TRD: não foi possível preencher Valor da mercadoria"
                 logger.error(f"[{self.nome}] {self.last_error}")
                 return None
-            await self._page.wait_for_timeout(250)
+            await self._page.wait_for_timeout(100)
             
             # Peso
             peso_str = str(float(peso))
@@ -1539,32 +1539,29 @@ class TRDProvider(ProviderBase):
                 self.last_error = "TRD: não foi possível preencher o campo Peso"
                 logger.error(f"[{self.nome}] {self.last_error}")
                 return None
-            await self._page.wait_for_timeout(300)
+            await self._page.wait_for_timeout(100)
             
             # Cubagens reais do romaneio (uma linha por dimensão real)
             for cub in cubagens_m:
                 await self._page.locator("#quantidadeVolumes").fill(str(int(cub["quantidade"])))
-                await self._page.wait_for_timeout(300)
                 await self._page.locator("#alturaInput").fill(str(float(cub["altura_m"])))
-                await self._page.wait_for_timeout(300)
                 await self._page.locator("#larguraInput").fill(str(float(cub["largura_m"])))
-                await self._page.wait_for_timeout(300)
                 await self._page.locator("#comprimentoInput").fill(str(float(cub["comprimento_m"])))
-                await self._page.wait_for_timeout(500)
+                await self._page.wait_for_timeout(200)
                 await self._page.get_by_role("button", name="Adicionar").click()
-                await self._page.wait_for_timeout(800)
+                await self._page.wait_for_timeout(300)
             
             # Confirmar simulação (botão "Continuar" = vm.confirmaSimulacao())
             logger.info(f"[{self.nome}] Enviando cotação...")
             await self._page.locator('button[ng-click="vm.confirmaSimulacao()"]').click()
-            await self._page.wait_for_timeout(1500)
+            await self._page.wait_for_timeout(500)
 
             # Confirmar todos os modais sequenciais ("Continuar", "Enviar", etc.)
             modal_sel = '.modal-footer button[ng-click="ok()"]'
             for modal_idx in range(1, 6):
                 try:
                     btn = self._page.locator(modal_sel)
-                    await btn.wait_for(state="visible", timeout=10000)
+                    await btn.wait_for(state="visible", timeout=5000)
                     await btn.click()
                     logger.info(f"[{self.nome}] Modal #{modal_idx} confirmado.")
                 except Exception:
@@ -1572,17 +1569,17 @@ class TRDProvider(ProviderBase):
                 # Aguardar spinner sumir entre modais
                 try:
                     spinner = self._page.locator('spinner[name="mainSpinner"] .page-spinner-bar')
-                    await spinner.wait_for(state="hidden", timeout=30000)
+                    await spinner.wait_for(state="hidden", timeout=15000)
                 except Exception:
                     pass
-                await self._page.wait_for_timeout(2000)
-            await self._page.wait_for_timeout(2000)
+                await self._page.wait_for_timeout(500)
+            await self._page.wait_for_timeout(500)
             
             # EXTRAÇÃO via status-card-js (HTML real)
             logger.info(f"[{self.nome}] Extraindo resultado...")
 
             # Aguardar resultado aparecer (status-card "Valor da prestação")
-            for _ in range(30):
+            for _ in range(20):
                 has_result = await self._page.evaluate(
                     """() => {
                         const cards = document.querySelectorAll('status-card-js');
@@ -1598,7 +1595,7 @@ class TRDProvider(ProviderBase):
                 )
                 if has_result:
                     break
-                await self._page.wait_for_timeout(1500)
+                await self._page.wait_for_timeout(800)
 
             # Extrair valor da prestação e validade dos status-card-js
             result_cards = await self._page.evaluate(
