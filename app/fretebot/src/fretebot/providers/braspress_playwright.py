@@ -238,39 +238,40 @@ class BraspressPlaywrightProvider(ProviderBase):
             # ── 4. PREENCHER FORMULÁRIO ───────────────────────────────
             logger.info("[Braspress] Preenchendo formulário...")
 
-            # Aguarda select #modal ficar disponível antes de interagir
-            try:
-                await page.locator("#modal").wait_for(state="attached", timeout=10000)
-            except Exception:
-                logger.warning("[Braspress] Select #modal não encontrado, tentando reload...")
-                await page.goto(self.COTACAO_URL, wait_until="domcontentloaded", timeout=15000)
-                await page.wait_for_timeout(400)
-                # Fechar modais/popups pós-reload
-                for _ in range(3):
-                    try:
-                        btn = page.locator("text=Fechar").first
-                        if await btn.count() > 0 and await btn.is_visible():
-                            await btn.click()
-                            await page.wait_for_timeout(400)
-                        else:
-                            break
-                    except Exception:
-                        break
+            # #modal e #tipoFrete só existem no frete fornecedor (FOB)
+            if cnpj_remetente:
+                # Aguarda select #modal ficar disponível antes de interagir
                 try:
                     await page.locator("#modal").wait_for(state="attached", timeout=10000)
                 except Exception:
-                    # Último fallback: espera networkidle e tenta novamente
-                    logger.warning("[Braspress] #modal ainda não encontrado, aguardando networkidle...")
+                    logger.warning("[Braspress] Select #modal não encontrado, tentando reload...")
+                    await page.goto(self.COTACAO_URL, wait_until="domcontentloaded", timeout=15000)
+                    await page.wait_for_timeout(500)
+                    # Fechar modais/popups pós-reload
+                    for _ in range(3):
+                        try:
+                            btn = page.locator("text=Fechar").first
+                            if await btn.count() > 0 and await btn.is_visible():
+                                await btn.click()
+                                await page.wait_for_timeout(400)
+                            else:
+                                break
+                        except Exception:
+                            break
                     try:
-                        await page.wait_for_load_state("networkidle", timeout=5000)
+                        await page.locator("#modal").wait_for(state="attached", timeout=10000)
                     except Exception:
-                        pass
-                    await page.locator("#modal").wait_for(state="attached", timeout=5000)
+                        logger.warning("[Braspress] #modal ainda não encontrado, aguardando networkidle...")
+                        try:
+                            await page.wait_for_load_state("networkidle", timeout=5000)
+                        except Exception:
+                            pass
+                        await page.locator("#modal").wait_for(state="attached", timeout=5000)
 
-            # Selects
-            await page.select_option("#modal", "R")
-            tipo_frete_val = tipo_frete if tipo_frete else "1"
-            await page.select_option("#tipoFrete", tipo_frete_val)
+                # Selects (frete fornecedor)
+                await page.select_option("#modal", "R")
+                tipo_frete_val = tipo_frete if tipo_frete else "2"
+                await page.select_option("#tipoFrete", tipo_frete_val)
 
             # CNPJ Remetente (preencher quando fornecido, ex: modo FOB fornecedor)
             cnpj_rem = self._digits(cnpj_remetente) if cnpj_remetente else ""
