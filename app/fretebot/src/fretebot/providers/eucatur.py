@@ -377,7 +377,7 @@ class EucaturProvider(ProviderBase):
             results = await page.evaluate('''() => {
                 const result = {};
                 document.querySelectorAll('input').forEach(el => {
-                    if (el.name && el.value) result[el.name] = el.value;
+                    if (el.name) result[el.name] = el.value || '';
                 });
                 return result;
             }''')
@@ -422,6 +422,22 @@ class EucaturProvider(ProviderBase):
         vlr_frete_str = results.get('vlr_frete', '')
         nro_cotacao = results.get('nro_cotacao', '')
         prazo_str = results.get('prazo', '')
+
+        # Fallback: extrair valor do frete da resposta XML se DOM não retornou
+        if (not vlr_frete_str or vlr_frete_str == '0,00') and xml_responses:
+            for xml in xml_responses:
+                m_vlr = re.search(r'<vlr_frete>([^<]+)</vlr_frete>', xml)
+                if m_vlr:
+                    vlr_frete_str = m_vlr.group(1).strip()
+                    logger.info(f"[{self.nome}] vlr_frete extraído do XML: {vlr_frete_str}")
+                if not nro_cotacao:
+                    m_nro = re.search(r'<nro_cotacao>([^<]+)</nro_cotacao>', xml)
+                    if m_nro:
+                        nro_cotacao = m_nro.group(1).strip()
+                if not prazo_str:
+                    m_prazo = re.search(r'<prazo>([^<]+)</prazo>', xml)
+                    if m_prazo:
+                        prazo_str = m_prazo.group(1).strip()
 
         if not vlr_frete_str or vlr_frete_str == '0,00':
             self.last_error = f"Sem valor de frete retornado (campos DOM: vlr_frete={vlr_frete_str!r}, nro_cotacao={nro_cotacao!r}, prazo={prazo_str!r})"

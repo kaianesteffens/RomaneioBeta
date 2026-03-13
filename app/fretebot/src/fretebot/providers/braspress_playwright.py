@@ -309,6 +309,9 @@ class BraspressPlaywrightProvider(ProviderBase):
                 tipo_frete_val = tipo_frete if tipo_frete else "2"
                 await page.select_option("#tipoFrete", tipo_frete_val)
 
+            # Remover #alertXmlModal antes de interagir com o formulário
+            await self._fechar_alert_xml_modal(page)
+
             # CNPJ Remetente (preencher quando fornecido, ex: modo FOB fornecedor)
             cnpj_rem = self._digits(cnpj_remetente) if cnpj_remetente else ""
             if cnpj_rem:
@@ -329,9 +332,6 @@ class BraspressPlaywrightProvider(ProviderBase):
                 await page.locator("#cnpjDestinatario").type(cnpj_dest, delay=50)
                 await page.keyboard.press("Tab")
                 await page.wait_for_timeout(500)
-
-            # Remover #alertXmlModal antes de interagir com o formulário
-            await self._fechar_alert_xml_modal(page)
 
             # CEPs: aguardar auto-preenchimento, preencher manualmente se necessário
             cep_orig_auto = ""

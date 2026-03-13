@@ -968,9 +968,30 @@ class RodonavesProvider(ProviderBase):
         # permitindo que a máscara processe corretamente (centavos à direita).
         nf_loc = page.locator("#eletronicInvoiceValue")
         nf_centavos = str(int(round(float(valor) * 100)))  # ex: 1500.50 → "150050"
-        await nf_loc.click()
-        await nf_loc.press("Control+a")
-        await nf_loc.type(nf_centavos, delay=30)
+        try:
+            await nf_loc.scroll_into_view_if_needed(timeout=3000)
+        except Exception:
+            pass
+        try:
+            await nf_loc.click(timeout=5000)
+            await nf_loc.press("Control+a")
+            await nf_loc.type(nf_centavos, delay=30)
+        except Exception:
+            # Fallback: preencher via JS quando overlay bloqueia clique
+            logger.warning(f"[{self.nome}] Click em #eletronicInvoiceValue bloqueado, usando JS")
+            await page.evaluate(f"""() => {{
+                const el = document.getElementById('eletronicInvoiceValue');
+                if (!el) return;
+                el.focus();
+                el.value = '';
+                el.dispatchEvent(new Event("focus", {{bubbles: true}}));
+                for (const ch of '{nf_centavos}') {{
+                    el.value += ch;
+                    el.dispatchEvent(new Event("input", {{bubbles: true}}));
+                }}
+                el.dispatchEvent(new Event("change", {{bubbles: true}}));
+                el.dispatchEvent(new Event("blur", {{bubbles: true}}));
+            }}""")
 
         # ─── Tipo embalagem ───
         await page.locator("#packageType").select_option("1")
