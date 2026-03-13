@@ -110,7 +110,7 @@ class BraspressPlaywrightProvider(ProviderBase):
             locale="pt-BR",
         )
         self._page = await self._context.new_page()
-        self._page.set_default_timeout(45000)
+        self._page.set_default_timeout(30000)
 
     async def _login(self) -> bool:
         if self._logged_in:
@@ -204,12 +204,12 @@ class BraspressPlaywrightProvider(ProviderBase):
                 except Exception:
                     pass
                 self._page = await self._context.new_page()
-                self._page.set_default_timeout(45000)
+                self._page.set_default_timeout(30000)
 
             page = self._page
 
             # ── PÁGINA DE COTAÇÃO ──────────────────────────────────
-            await page.goto(self.COTACAO_URL, wait_until="domcontentloaded", timeout=60000)
+            await page.goto(self.COTACAO_URL, wait_until="domcontentloaded", timeout=15000)
             await page.wait_for_timeout(500)
 
             # Verificar se sessão expirou (redirecionou para login)
@@ -219,7 +219,7 @@ class BraspressPlaywrightProvider(ProviderBase):
                 self._logged_in = False
                 if not await self._login():
                     return None
-                await page.goto(self.COTACAO_URL, wait_until="domcontentloaded", timeout=60000)
+                await page.goto(self.COTACAO_URL, wait_until="domcontentloaded", timeout=15000)
                 await page.wait_for_timeout(500)
 
             # ── FECHAR MODAL/POPUP ─────────────────────────────────
@@ -240,10 +240,10 @@ class BraspressPlaywrightProvider(ProviderBase):
 
             # Aguarda select #modal ficar disponível antes de interagir
             try:
-                await page.locator("#modal").wait_for(state="attached", timeout=30000)
+                await page.locator("#modal").wait_for(state="attached", timeout=10000)
             except Exception:
                 logger.warning("[Braspress] Select #modal não encontrado, tentando reload...")
-                await page.goto(self.COTACAO_URL, wait_until="domcontentloaded", timeout=60000)
+                await page.goto(self.COTACAO_URL, wait_until="domcontentloaded", timeout=15000)
                 await page.wait_for_timeout(400)
                 # Fechar modais/popups pós-reload
                 for _ in range(3):
@@ -257,15 +257,15 @@ class BraspressPlaywrightProvider(ProviderBase):
                     except Exception:
                         break
                 try:
-                    await page.locator("#modal").wait_for(state="attached", timeout=30000)
+                    await page.locator("#modal").wait_for(state="attached", timeout=10000)
                 except Exception:
                     # Último fallback: espera networkidle e tenta novamente
                     logger.warning("[Braspress] #modal ainda não encontrado, aguardando networkidle...")
                     try:
-                        await page.wait_for_load_state("networkidle", timeout=15000)
+                        await page.wait_for_load_state("networkidle", timeout=5000)
                     except Exception:
                         pass
-                    await page.locator("#modal").wait_for(state="attached", timeout=15000)
+                    await page.locator("#modal").wait_for(state="attached", timeout=5000)
 
             # Selects
             await page.select_option("#modal", "R")
@@ -449,7 +449,7 @@ class BraspressPlaywrightProvider(ProviderBase):
             # Alguns cenários retornam tabela fora de #step4Result.
             resultado_pronto = False
             ultimo_status: dict | None = None
-            for _poll in range(50):  # até ~40s
+            for _poll in range(30):  # até ~40s
                 await page.wait_for_timeout(800)
                 status = await page.evaluate(
                     """() => {
