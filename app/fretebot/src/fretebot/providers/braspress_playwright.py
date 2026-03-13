@@ -93,6 +93,25 @@ class BraspressPlaywrightProvider(ProviderBase):
             for (comp, larg, alt), qtd in agrupadas.items()
         ]
 
+    async def _fechar_alert_xml_modal(self, page):
+        """Remove o modal #alertXmlModal e backdrop do DOM (incondicional)."""
+        try:
+            removed = await page.evaluate("""() => {
+                const m = document.getElementById('alertXmlModal');
+                if (!m) return false;
+                m.remove();
+                document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+                document.body.classList.remove('modal-open');
+                document.body.style.removeProperty('overflow');
+                document.body.style.removeProperty('padding-right');
+                return true;
+            }""")
+            if removed:
+                logger.info("[Braspress] Modal #alertXmlModal removido do DOM")
+                await page.wait_for_timeout(200)
+        except Exception:
+            pass
+
     async def _init_browser(self):
         if self._browser:
             if self._browser.is_connected():
@@ -233,6 +252,10 @@ class BraspressPlaywrightProvider(ProviderBase):
                         break
                 except Exception:
                     break
+
+            # Fechar modal #alertXmlModal se estiver visível (bloqueia cliques)
+            await self._fechar_alert_xml_modal(page)
+
             await page.wait_for_timeout(300)
 
             # ── 4. PREENCHER FORMULÁRIO ───────────────────────────────
@@ -247,6 +270,10 @@ class BraspressPlaywrightProvider(ProviderBase):
                     await page.wait_for_load_state("networkidle", timeout=5000)
                 except Exception:
                     pass
+
+            # Fechar #alertXmlModal se apareceu após carregamento
+            await self._fechar_alert_xml_modal(page)
+
             # #modal e #tipoFrete só existem no frete fornecedor (FOB)
             if cnpj_remetente:
                 # Aguarda select #modal ficar disponível antes de interagir
@@ -302,6 +329,9 @@ class BraspressPlaywrightProvider(ProviderBase):
                 await page.locator("#cnpjDestinatario").type(cnpj_dest, delay=50)
                 await page.keyboard.press("Tab")
                 await page.wait_for_timeout(500)
+
+            # Remover #alertXmlModal antes de interagir com o formulário
+            await self._fechar_alert_xml_modal(page)
 
             # CEPs: aguardar auto-preenchimento, preencher manualmente se necessário
             cep_orig_auto = ""
