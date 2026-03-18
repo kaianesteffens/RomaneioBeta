@@ -461,12 +461,12 @@ class RodonavesProvider(ProviderBase):
         for _attempt in range(3):
             try:
                 self._playwright = await async_playwright().start()
-                self._browser = await self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+                self._browser = await self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}""")
                 logger.info(f"[{self.nome}] Chrome conectado via CDP porta {port} (headless={self.headless})")
                 break
             except Exception as e:
                 last_err = e
-                logger.warning(f"[{self.nome}] CDP tentativa {_attempt+1}/3 falhou: {e}")
+                logger.warning(f"[{self.nome}] CDP tentativa {_attempt+1}/3 falhou: {e}""")
                 try:
                     if self._playwright:
                         await self._playwright.stop()
@@ -477,7 +477,7 @@ class RodonavesProvider(ProviderBase):
                     await asyncio.sleep(1 + _attempt)
         else:
             _kill_proc(self._chrome_proc)
-            raise RuntimeError(f"Falha ao conectar CDP apos 3 tentativas: {last_err}")
+            raise RuntimeError(f"Falha ao conectar CDP apos 3 tentativas: {last_err}""")
 
         self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context(
             viewport={"width": 1920, "height": 1080},
@@ -502,7 +502,7 @@ class RodonavesProvider(ProviderBase):
                         "bounds": {"left": -3000, "top": -3000, "width": 1920, "height": 1080},
                     })
             except Exception as e:
-                logger.debug(f"[{self.nome}] Falha ao mover janela off-screen via CDP: {e}")
+                logger.debug(f"[{self.nome}] Falha ao mover janela off-screen via CDP: {e}""")
             await ocultar_taskbar_por_pagina(self._page)
         # Stealth script: injetar em todas as paginas (funciona tambem para persistent context)
         await self._context.add_init_script(_STEALTH_JS)
@@ -534,7 +534,7 @@ class RodonavesProvider(ProviderBase):
                 logger.debug(f"[{self.nome}] Janela movida off-screen")
             await ocultar_taskbar_por_pagina(self._page)
         except Exception as e:
-            logger.warning(f"[{self.nome}] Falha ao ocultar janela: {e}")
+            logger.warning(f"[{self.nome}] Falha ao ocultar janela: {e}""")
 
     async def _mostrar_janela(self):
         """Mostra janela compacta centralizada na tela, só para o CAPTCHA."""
@@ -570,7 +570,7 @@ class RodonavesProvider(ProviderBase):
                 # Traz a janela para frente de todas as outras
                 await self._page.bring_to_front()
                 await trazer_janela_frente(self._page)
-                logger.debug(f"[{self.nome}] Janela compacta (CAPTCHA) visível em ({left},{top}) tela {screen_w}x{screen_h}")
+                logger.debug(f"[{self.nome}] Janela compacta (CAPTCHA) visível em ({left},{top}) tela {screen_w}x{screen_h}""")
 
             # Scroll para o captcha/botão Calcular ficar visível
             try:
@@ -584,7 +584,7 @@ class RodonavesProvider(ProviderBase):
             except Exception:
                 pass
         except Exception as e:
-            logger.warning(f"[{self.nome}] Falha ao mostrar janela: {e}")
+            logger.warning(f"[{self.nome}] Falha ao mostrar janela: {e}""")
 
     async def cleanup(self):
         try:
@@ -641,7 +641,7 @@ class RodonavesProvider(ProviderBase):
         except Exception:
             pass
 
-        logger.info(f"[{self.nome}] Navegando para /Quotation... URL atual: {page.url}")
+        logger.info(f"[{self.nome}] Navegando para /Quotation... URL atual: {page.url}""")
 
         # Navega direto via goto com retry para ERR_ABORTED
         for _goto_attempt in range(3):
@@ -686,7 +686,7 @@ class RodonavesProvider(ProviderBase):
             return
         page = self._page
         logger.info(f"[{self.nome}] Iniciando login...")
-        logger.info(f"[{self.nome}] URL atual: {page.url}")
+        logger.info(f"[{self.nome}] URL atual: {page.url}""")
 
         # Acessa página de login (com retry para ERR_ABORTED)
         logger.info(f"[{self.nome}] Acessando página de login...")
@@ -704,7 +704,7 @@ class RodonavesProvider(ProviderBase):
                     await asyncio.sleep(1)
                     continue
                 raise
-        logger.info(f"[{self.nome}] URL após goto showLogin=true: {page.url}")
+        logger.info(f"[{self.nome}] URL após goto showLogin=true: {page.url}""")
 
         # Aceitar cookies / banners
         try:
@@ -815,7 +815,7 @@ class RodonavesProvider(ProviderBase):
                     logger.info(f"[{self.nome}] Popup PTE removido via JS")
                 await page.wait_for_timeout(500)
         except Exception as e:
-            logger.debug(f"[{self.nome}] Erro ao fechar popup PTE (ignorado): {e}")
+            logger.debug(f"[{self.nome}] Erro ao fechar popup PTE (ignorado): {e}""")
 
         # Clica no botão Entrar (com force=True caso ainda haja overlay residual)
         try:
@@ -839,9 +839,9 @@ class RodonavesProvider(ProviderBase):
                 await page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
                 pass
-            logger.info(f"[{self.nome}] URL pós-login: {page.url}")
+            logger.info(f"[{self.nome}] URL pós-login: {page.url}""")
             url_pos = page.url.lower()
-            logger.info(f"[{self.nome}] URL pós-login: {page.url}")
+            logger.info(f"[{self.nome}] URL pós-login: {page.url}""")
 
             # Captura mensagem de erro visível (qualquer página)
             erro_msg = ""
@@ -891,7 +891,7 @@ class RodonavesProvider(ProviderBase):
                 await self._login()
                 logger.info(f"[{self.nome}] Pre-login OK no retry")
             except Exception as e2:
-                logger.warning(f"[{self.nome}] Pre-login retry também falhou: {e2}")
+                logger.warning(f"[{self.nome}] Pre-login retry também falhou: {e2}""")
                 await self.cleanup()
 
     # ── preenchimento do formulário (seletores por ID do HTML real) ───
@@ -906,7 +906,7 @@ class RodonavesProvider(ProviderBase):
     ) -> None:
         page = self._page
 
-        # Remove overlays que interceptam cliques (cookie banner, navbar fixa)
+        # Remove overlays que interceptam cliques (cookie banner, navbar fixa, modais)
         try:
             await page.evaluate("""() => {
                 const cookieBtn = document.getElementById('adopt-controller-button');
@@ -915,6 +915,21 @@ class RodonavesProvider(ProviderBase):
                 if (cookieBanner) cookieBanner.remove();
                 const nav = document.getElementById('mainNav');
                 if (nav) nav.style.position = 'relative';
+                // Remove qualquer modal-backdrop residual
+                document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+                document.body.classList.remove('modal-open');
+                document.body.style.overflow = '';
+                document.body.style.paddingRight = '';
+                // Remove banners/overlays genéricos fixos
+                document.querySelectorAll('[style*="position: fixed"], [style*="position:fixed"]').forEach(el => {
+                    const tag = el.tagName.toLowerCase();
+                    if (tag !== 'html' && tag !== 'body' && !el.id?.includes('recaptcha')) {
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width > 200 && rect.height > 50) {
+                            el.style.display = 'none';
+                        }
+                    }
+                });
             }""")
         except Exception:
             pass
@@ -931,22 +946,54 @@ class RodonavesProvider(ProviderBase):
                 await origin_zip.press("Tab")
                 for _ in range(20):
                     await page.wait_for_timeout(500)
-                    city_val = await page.locator("#originCity").input_value()
-                    if city_val.strip():
+                    try:
+                        city_val = await page.locator("#originCity").input_value()
+                        if city_val.strip():
+                            break
+                    except Exception:
                         break
                 await page.wait_for_timeout(500)
 
         # ─── Destinatário ───
-        await page.locator("#ReceiverTaxId").fill(self._format_cnpj(cnpj_destinatario))
+        try:
+            await page.locator("#ReceiverTaxId").fill(self._format_cnpj(cnpj_destinatario))
+        except Exception:
+            logger.warning(f"[{self.nome}] fill #ReceiverTaxId falhou, usando JS")
+            await page.evaluate(f"""() => {{
+                const el = document.getElementById('ReceiverTaxId');
+                if (!el) return;
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                if (setter) setter.call(el, '{self._format_cnpj(cnpj_destinatario)}');
+                else el.value = '{self._format_cnpj(cnpj_destinatario)}';
+                el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                el.dispatchEvent(new Event('blur', {{bubbles: true}}));
+            }}""")
 
         # ─── CEP destino ───
-        await page.locator("#destinationZipCode").fill(self._format_cep(cep_destino))
-        await page.locator("#destinationZipCode").press("Tab")
+        try:
+            await page.locator("#destinationZipCode").fill(self._format_cep(cep_destino))
+            await page.locator("#destinationZipCode").press("Tab")
+        except Exception:
+            logger.warning(f"[{self.nome}] fill #destinationZipCode falhou, usando JS")
+            await page.evaluate(f"""() => {{
+                const el = document.getElementById('destinationZipCode');
+                if (!el) return;
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                if (setter) setter.call(el, '{self._format_cep(cep_destino)}');
+                else el.value = '{self._format_cep(cep_destino)}';
+                el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                el.dispatchEvent(new Event('blur', {{bubbles: true}}));
+            }}""")
         # Aguarda auto-preenchimento de cidade/estado/bairro via API do CEP
         for _ in range(20):
             await page.wait_for_timeout(500)
-            city_val = await page.locator("#destinationCity").input_value()
-            if city_val.strip():
+            try:
+                city_val = await page.locator("#destinationCity").input_value()
+                if city_val.strip():
+                    break
+            except Exception:
                 break
         await page.wait_for_timeout(500)
 
@@ -959,7 +1006,20 @@ class RodonavesProvider(ProviderBase):
                 logger.info(f"[{self.nome}] Bairro destino vazio, preenchido 'Centro'")
 
         # ─── Número destino ───
-        await page.locator("#destinationNumber").fill("1")
+        try:
+            await page.locator("#destinationNumber").fill("1")
+        except Exception:
+            logger.warning(f"[{self.nome}] fill #destinationNumber falhou, usando JS")
+            await page.evaluate("""() => {
+                const el = document.getElementById('destinationNumber');
+                if (!el) return;
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                if (setter) setter.call(el, '1');
+                else el.value = '1';
+                el.dispatchEvent(new Event('input', {bubbles: true}));
+                el.dispatchEvent(new Event('change', {bubbles: true}));
+                el.dispatchEvent(new Event('blur', {bubbles: true}));
+            }""")
 
         # ─── Valor NF ───
         # Campo #eletronicInvoiceValue tem máscara jQuery currency —
@@ -994,7 +1054,18 @@ class RodonavesProvider(ProviderBase):
             }}""")
 
         # ─── Tipo embalagem ───
-        await page.locator("#packageType").select_option("1")
+        try:
+            await page.locator("#packageType").select_option("1", timeout=10000)
+        except Exception:
+            logger.warning(f"[{self.nome}] select_option #packageType falhou, usando JS")
+            await page.evaluate("""() => {
+                const el = document.getElementById('packageType');
+                if (!el) return;
+                el.value = '1';
+                el.dispatchEvent(new Event('change', {bubbles: true}));
+                // Fallback para jQuery/Angular se presente
+                if (window.jQuery) { window.jQuery(el).val('1').trigger('change'); }
+            }""")
 
         # ─── Primeira linha de volume (IDs fixos: amountPacks1, height1, ...) ───
         primeiro = cubagens[0]
@@ -1017,7 +1088,13 @@ class RodonavesProvider(ProviderBase):
             await page.locator(f"#weight{idx}").fill(self._peso_str(linha))
 
         # Reforça número destino (autocomplete pode sobrescrever)
-        await page.locator("#destinationNumber").fill("1")
+        try:
+            await page.locator("#destinationNumber").fill("1")
+        except Exception:
+            await page.evaluate("""() => {
+                const el = document.getElementById('destinationNumber');
+                if (el) { el.value = '1'; el.dispatchEvent(new Event('change', {bubbles: true})); }
+            }""")
         await page.wait_for_timeout(300)
 
         # Simula pequenas interações naturais ao terminar de preencher o formulário.
@@ -1135,9 +1212,9 @@ class RodonavesProvider(ProviderBase):
                 fields['captcha_token_len'] = cap && cap.value ? cap.value.length : 0;
                 return fields;
             }""")
-            logger.info(f"[{self.nome}] Estado do formulário antes de Calcular: {form_state}")
+            logger.info(f"[{self.nome}] Estado do formulário antes de Calcular: {form_state}""")
         except Exception as e:
-            logger.warning(f"[{self.nome}] Não foi possível logar estado do formulário: {e}")
+            logger.warning(f"[{self.nome}] Não foi possível logar estado do formulário: {e}""")
 
         # ─── Calcular ───
         calc_btn = page.locator("#calculateQuotationBtn")
@@ -1153,7 +1230,7 @@ class RodonavesProvider(ProviderBase):
             except Exception as click_err:
                 if _click_attempt == 2:
                     raise
-                logger.warning(f"[{self.nome}] Click no Calcular falhou (tentativa {_click_attempt+1}): {click_err}")
+                logger.warning(f"[{self.nome}] Click no Calcular falhou (tentativa {_click_attempt+1}): {click_err}""")
                 await page.wait_for_timeout(2000)
         logger.info(f"[{self.nome}] Botão Calcular clicado, aguardando resultado...")
 
@@ -1181,7 +1258,7 @@ class RodonavesProvider(ProviderBase):
         erro_validacao = re.search(r'Alerta\s*\{.*?"errors".*?\}', body_norm, re.DOTALL)
         if erro_validacao:
             self.last_error = f"Rodonaves: erro de validação - {erro_validacao.group(0)[:300]}"
-            logger.error(f"[{self.nome}] {self.last_error}")
+            logger.error(f"[{self.nome}] {self.last_error}""")
             return None
 
         # Estratégia 1: extrair da tabela de resultado via td.col-result
@@ -1202,7 +1279,7 @@ class RodonavesProvider(ProviderBase):
                     if m_prazo:
                         prazo_dias = int(m_prazo.group(1))
         except Exception as e:
-            logger.debug(f"[{self.nome}] Extração via td.col-result falhou: {e}")
+            logger.debug(f"[{self.nome}] Extração via td.col-result falhou: {e}""")
 
         # Estratégia 2: busca por cells com role
         if valor_frete is None:
@@ -1231,8 +1308,8 @@ class RodonavesProvider(ProviderBase):
 
         if valor_frete is None:
             self.last_error = "Rodonaves: valor de frete não encontrado no resultado"
-            logger.warning(f"[{self.nome}] {self.last_error}")
-            logger.info(f"[{self.nome}] Trecho body: {body_norm[:1500]}")
+            logger.warning(f"[{self.nome}] {self.last_error}""")
+            logger.info(f"[{self.nome}] Trecho body: {body_norm[:1500]}""")
             return None
 
         # Prazo fallback no body
@@ -1273,7 +1350,7 @@ class RodonavesProvider(ProviderBase):
                 soma = sum(int(c["quantidade"]) for c in cubagens_cm)
                 if int(volumes or 0) > 0 and int(volumes) != soma:
                     self.last_error = f"VOL ({volumes}) diverge da soma das cubagens ({soma})"
-                    logger.error(f"[{self.nome}] {self.last_error}")
+                    logger.error(f"[{self.nome}] {self.last_error}""")
                     return None
                 volumes = soma
             elif volumes > 0 and comprimento_cm > 0 and largura_cm > 0 and altura_cm > 0:
@@ -1290,7 +1367,7 @@ class RodonavesProvider(ProviderBase):
                     f"Cubagens ausentes/inválidas (volumes={volumes}, "
                     f"dims_cm={comprimento_cm}x{largura_cm}x{altura_cm})"
                 )
-                logger.error(f"[{self.nome}] {self.last_error}")
+                logger.error(f"[{self.nome}] {self.last_error}""")
                 return None
 
             cnpj_dest = self._digits(cnpj_destinatario)
@@ -1319,7 +1396,7 @@ class RodonavesProvider(ProviderBase):
             return await self._submeter_e_extrair()
         except Exception as error:
             self.last_error = str(error)
-            logger.error(f"[{self.nome}] Erro na cotação: {error}")
+            logger.error(f"[{self.nome}] Erro na cotação: {error}""")
             # Detectar browser morto e resetar para próxima tentativa
             browser_morto = False
             if self._browser and not self._browser.is_connected():

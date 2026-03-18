@@ -354,7 +354,8 @@ class CoopexProvider(ProviderBase):
         xml_responses = []
 
         async def capture_response(response):
-            if 'ssw1608' in response.url:
+            url = response.url.lower()
+            if 'ssw' in url or 'cotac' in url or 'frete' in url:
                 try:
                     body = await response.text()
                     xml_responses.append(body)
@@ -373,9 +374,9 @@ class CoopexProvider(ProviderBase):
         # Submit via sim()
         await page.evaluate('() => { if (typeof sim === "function") sim(); }')
 
-        # Polling: aguardar vlr_frete ser populado no DOM (até 15s)
+        # Polling: aguardar vlr_frete ser populado no DOM (até 25s)
         results = {}
-        for _poll in range(15):
+        for _poll in range(25):
             await page.wait_for_timeout(1000)
             results = await page.evaluate('''() => {
                 const result = {};
@@ -384,7 +385,7 @@ class CoopexProvider(ProviderBase):
                 });
                 return result;
             }''')
-            vlr = results.get('vlr_frete', '')
+            vlr = results.get('vlr_frete', '') or results.get('vlr_total', '') or results.get('valor_frete', '')
             if vlr and vlr != '0,00':
                 logger.info(f"[{self.nome}] vlr_frete encontrado após {_poll+1}s")
                 break
@@ -420,17 +421,21 @@ class CoopexProvider(ProviderBase):
             logger.info(f"[{self.nome}] {self.last_error}")
             return None
 
-        vlr_frete_str = results.get('vlr_frete', '')
-        nro_cotacao = results.get('nro_cotacao', '')
+        vlr_frete_str = results.get('vlr_frete', '') or results.get('vlr_total', '') or results.get('valor_frete', '')
+        nro_cotacao = results.get('nro_cotacao', '') or results.get('nr_cotacao', '')
         prazo_str = results.get('prazo', '')
 
         # Fallback: extrair valor do frete da resposta XML se DOM não retornou
         if (not vlr_frete_str or vlr_frete_str == '0,00') and xml_responses:
             for xml in xml_responses:
-                m_vlr = re.search(r'<vlr_frete>([^<]+)</vlr_frete>', xml)
-                if m_vlr:
-                    vlr_frete_str = m_vlr.group(1).strip()
-                    logger.info(f"[{self.nome}] vlr_frete extraído do XML: {vlr_frete_str}")
+                for tag in ('vlr_frete', 'vlr_total', 'valor_frete', 'total_frete', 'vlr_total_frete'):
+                    m_vlr = re.search(rf'<{tag}>([^<]+)</{tag}>', xml)
+                    if m_vlr and m_vlr.group(1).strip() and m_vlr.group(1).strip() != '0,00':
+                        vlr_frete_str = m_vlr.group(1).strip()
+                        logger.info(f"[{self.nome}] vlr_frete extraído do XML tag <{tag}>: {vlr_frete_str}")
+                        break
+                if vlr_frete_str and vlr_frete_str != '0,00':
+                    break
                 if not nro_cotacao:
                     m_nro = re.search(r'<nro_cotacao>([^<]+)</nro_cotacao>', xml)
                     if m_nro:
@@ -439,6 +444,45 @@ class CoopexProvider(ProviderBase):
                     m_prazo = re.search(r'<prazo>([^<]+)</prazo>', xml)
                     if m_prazo:
                         prazo_str = m_prazo.group(1).strip()
+
+        # Fallback 2: buscar valor monetário em qualquer campo visível da página
+        if not vlr_frete_str or vlr_frete_str == '0,00':
+            try:
+                page_data = await page.evaluate('''() => {
+                    const result = {};
+                    const els = document.querySelectorAll('td, span, div, label, b, strong');
+                    for (const el of els) {
+                        const txt = (el.innerText || '').trim();
+                        if (!txt) continue;
+                        const parent = el.closest('tr, div, section');
+                        const ctx = (parent ? parent.innerText : '').toLowerCase();
+                        if (ctx.includes('frete') || ctx.includes('total')) {
+                            const m = txt.match(/^[\\d.,]+$/);
+                            if (m && txt.length >= 3 && txt.includes(',')) {
+                                result['frete_text'] = txt;
+                                break;
+                            }
+                        }
+                    }
+                    return result;
+                }''')
+                frete_text = page_data.get('frete_text', '')
+                if frete_text and frete_text != '0,00':
+                    vlr_frete_str = frete_text
+                    logger.info(f"[{self.nome}] vlr_frete extraído de texto visível: {vlr_frete_str}")
+            except Exception as e:
+                logger.debug(f"[{self.nome}] Fallback texto visível falhou: {e}")
+
+        # Fallback 3: buscar valor monetário nos XMLs brutos com regex mais amplo
+        if (not vlr_frete_str or vlr_frete_str == '0,00') and xml_responses:
+            for xml in xml_responses:
+                m_gen = re.search(r'frete[^>]*>(\d[\d.,]+)<', xml, re.IGNORECASE)
+                if m_gen:
+                    candidate = m_gen.group(1).strip()
+                    if candidate and candidate != '0,00':
+                        vlr_frete_str = candidate
+                        logger.info(f"[{self.nome}] vlr_frete extraído via regex genérico XML: {vlr_frete_str}")
+                        break
 
         if not vlr_frete_str or vlr_frete_str == '0,00':
             self.last_error = f"Sem valor de frete retornado (campos DOM: vlr_frete={vlr_frete_str!r}, nro_cotacao={nro_cotacao!r}, prazo={prazo_str!r})"
