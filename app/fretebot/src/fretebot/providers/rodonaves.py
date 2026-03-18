@@ -686,16 +686,14 @@ class RodonavesProvider(ProviderBase):
             return
         page = self._page
         logger.info(f"[{self.nome}] Iniciando login...")
-        logger.info(f"[{self.nome}] URL atual: {page.url}""")
 
-        # Acessa página de login (com retry para ERR_ABORTED)
-        logger.info(f"[{self.nome}] Acessando página de login...")
+        # Acessa página de login para estabelecer sessão/cookies
         for _goto_attempt in range(3):
             try:
                 await page.goto(
                     "https://cliente.rte.com.br/?showLogin=true",
                     wait_until="domcontentloaded",
-                    timeout=30000,
+                    timeout=10000,
                 )
                 break
             except Exception as goto_err:
@@ -704,175 +702,49 @@ class RodonavesProvider(ProviderBase):
                     await asyncio.sleep(1)
                     continue
                 raise
-        logger.info(f"[{self.nome}] URL após goto showLogin=true: {page.url}""")
 
-        # Aceitar cookies / banners
+        # Aguarda jQuery estar disponível (necessário para o AJAX)
         try:
-            btn_cookies = page.get_by_role("button", name=re.compile(r"Aceitar", re.IGNORECASE)).first
-            if await btn_cookies.count() > 0:
-                await btn_cookies.click(timeout=2000)
+            await page.wait_for_function(
+                "typeof jQuery !== 'undefined' && typeof jQuery.ajax === 'function'",
+                timeout=10000,
+            )
         except Exception:
-            pass
+            raise RuntimeError(f"Login Rodonaves falhou — jQuery não carregou (URL: {page.url})")
 
-        # Preencher CPF/CNPJ e Senha (IDs exatos do formulário)
-        cpf_field = page.locator("#cpfcnp")
-
-        # Tenta aguardar o campo ficar visível normalmente
-        try:
-            await cpf_field.wait_for(timeout=5000)
-        except Exception:
-            logger.warning(f"[{self.nome}] Campo #cpfcnp não visível, tentando abrir modal de login...")
-
-            # Tenta clicar em botões/links que abram o modal de login
-            login_triggers = [
-                page.locator("a[href*='showLogin'], a[href*='login']").first,
-                page.get_by_role("link", name=re.compile(r"Entrar|Login|Acessar", re.IGNORECASE)).first,
-                page.get_by_role("button", name=re.compile(r"Entrar|Login|Acessar", re.IGNORECASE)).first,
-                page.locator(".login-btn, .btn-login, #loginBtn, #btnLogin, [data-target*='login']").first,
-            ]
-            modal_aberto = False
-            for trigger in login_triggers:
-                try:
-                    if await trigger.count() > 0:
-                        await trigger.click(timeout=3000)
-                        logger.info(f"[{self.nome}] Clicou trigger de login")
-                        try:
-                            await cpf_field.wait_for(timeout=5000)
-                            modal_aberto = True
-                            break
-                        except Exception:
-                            continue
-                except Exception:
-                    continue
-
-            if not modal_aberto:
-                # Fallback: força visibilidade via JS (modal pode estar display:none)
-                logger.warning(f"[{self.nome}] Triggers não funcionaram, forçando visibilidade via JS...")
-                try:
-                    await page.evaluate("""() => {
-                        const field = document.getElementById('cpfcnp');
-                        if (!field) return;
-                        let el = field;
-                        while (el) {
-                            if (el.style) {
-                                el.style.display = '';
-                                el.style.visibility = 'visible';
-                                el.style.opacity = '1';
-                            }
-                            if (el.classList) {
-                                el.classList.add('show', 'in', 'active');
-                                el.classList.remove('hide', 'hidden', 'fade');
-                            }
-                            el = el.parentElement;
-                        }
-                        // Bootstrap modal: tenta abrir via jQuery/Bootstrap
-                        if (window.jQuery) {
-                            window.jQuery('.modal').modal('show');
-                        }
-                    }""")
-                    await cpf_field.wait_for(timeout=5000)
-                except Exception:
-                    # Último recurso: mostra a janela para o usuário resolver
-                    logger.error(f"[{self.nome}] Não foi possível abrir formulário de login, mostrando janela...")
-                    await self._mostrar_janela()
-                    await cpf_field.wait_for(timeout=30000)
-
+        # Chama API de login diretamente via AJAX (bypassa formulário, validações,
+        # cookie banners, overlays e problemas de fill/click do Playwright)
         login_doc = self._digits(self.usuario) or self._digits(self.dominio) or self.cnpj_pagador
-        await cpf_field.fill(login_doc)
-        await page.locator("#passwordToLogin").fill(self.senha)
+        logger.info(f"[{self.nome}] Login AJAX com doc={login_doc[:4]}***{login_doc[-2:]}")
 
-        # LGPD
-        try:
-            chk_lgpd = page.locator("#lgpAcceptTerms")
-            if await chk_lgpd.count() > 0 and not await chk_lgpd.is_checked():
-                await chk_lgpd.check()
-        except Exception:
-            pass
+        result = await page.evaluate("""({cpfcnp, password}) => {
+            return new Promise((resolve) => {
+                const root = typeof rootPath !== 'undefined' ? rootPath : '';
+                jQuery.ajax({
+                    type: "POST",
+                    url: root + "/CustomerAccount/LogIn",
+                    dataType: "json",
+                    contentType: "application/json; charset=utf-8",
+                    data: JSON.stringify({ Cpfcnp: cpfcnp, Password: password }),
+                    success: function(r) { resolve(r); },
+                    error: function(xhr, status, err) {
+                        resolve({ Success: false, ErrorMessage: err || status || 'AJAX error' });
+                    }
+                });
+            });
+        }""", {"cpfcnp": login_doc, "password": self.senha})
 
-        # Fechar popup PTE (promoção) que intercepta cliques no botão Entrar
-        try:
-            popup_pte = page.locator("#popUpPTE")
-            if await popup_pte.count() > 0:
-                # Tenta fechar via botão de fechar do modal
-                close_btn = popup_pte.locator("button.close, [data-dismiss='modal'], .btn-close").first
-                if await close_btn.count() > 0:
-                    await close_btn.click(timeout=3000)
-                    logger.info(f"[{self.nome}] Popup PTE fechado via botão")
-                else:
-                    # Remove o modal via JS
-                    await page.evaluate("""() => {
-                        const popup = document.getElementById('popUpPTE');
-                        if (popup) {
-                            popup.classList.remove('in', 'show');
-                            popup.style.display = 'none';
-                            popup.setAttribute('aria-hidden', 'true');
-                        }
-                        // Remove backdrop do modal
-                        document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
-                        document.body.classList.remove('modal-open');
-                        document.body.style.overflow = '';
-                    }""")
-                    logger.info(f"[{self.nome}] Popup PTE removido via JS")
-                await page.wait_for_timeout(500)
-        except Exception as e:
-            logger.debug(f"[{self.nome}] Erro ao fechar popup PTE (ignorado): {e}""")
+        if not result or not result.get("Success"):
+            error_msg = (
+                (result or {}).get("WarningMessage")
+                or (result or {}).get("ErrorMessage")
+                or "resposta inesperada do servidor"
+            )
+            raise RuntimeError(f"Login Rodonaves falhou — {error_msg}")
 
-        # Clica no botão Entrar (com force=True caso ainda haja overlay residual)
-        try:
-            await page.locator("#loginSubmit").click(timeout=10000)
-        except Exception:
-            logger.warning(f"[{self.nome}] Click normal no loginSubmit falhou, tentando force click...")
-            try:
-                await page.locator("#loginSubmit").click(force=True, timeout=10000)
-            except Exception:
-                logger.warning(f"[{self.nome}] Force click falhou, tentando via JS...")
-                await page.evaluate("document.getElementById('loginSubmit')?.click()")
-        logger.info(f"[{self.nome}] Botão Entrar clicado, aguardando redirecionamento...")
+        logger.info(f"[{self.nome}] Login AJAX OK, navegando para cotação...")
 
-        # Aguarda redirecionamento: espera o formulário de cotação aparecer (mais rápido que networkidle)
-        try:
-            await page.locator("#ReceiverTaxId").wait_for(timeout=15000)
-            logger.info(f"[{self.nome}] Formulário de cotação apareceu direto após login")
-        except Exception:
-            # Fallback: networkidle com timeout reduzido
-            try:
-                await page.wait_for_load_state("networkidle", timeout=10000)
-            except Exception:
-                pass
-            logger.info(f"[{self.nome}] URL pós-login: {page.url}""")
-            url_pos = page.url.lower()
-            logger.info(f"[{self.nome}] URL pós-login: {page.url}""")
-
-            # Captura mensagem de erro visível (qualquer página)
-            erro_msg = ""
-            try:
-                erro_el = page.locator(
-                    ".alert-danger, .text-danger, .error-message, "
-                    "#loginError, .validation-summary-errors"
-                ).first
-                if await erro_el.count() > 0:
-                    erro_msg = (await erro_el.inner_text()).strip()
-            except Exception:
-                pass
-
-            # Verifica se login falhou:
-            # 1) URL ainda contém showLogin → o formulário nem redirecionou
-            # 2) Mensagem de erro explícita visível na página
-            # NÃO checar #cpfcnp aqui: a homepage "/" tem formulário de login
-            # embutido mesmo quando o usuário JÁ está logado.
-            if "showlogin" in url_pos:
-                raise RuntimeError(
-                    f"Login Rodonaves falhou — {erro_msg or 'credenciais incorretas ou site indisponível'} "
-                    f"(URL: {page.url})"
-                )
-            if erro_msg:
-                raise RuntimeError(
-                    f"Login Rodonaves falhou — {erro_msg} (URL: {page.url})"
-                )
-            # URL mudou (ex: "/" ou outra página) e sem mensagem de erro →
-            # login provavelmente OK; _navegar_cotacao verificará a sessão
-
-        # Navega para /Quotation se não estamos lá
+        # Navega para /Quotation
         await self._navegar_cotacao(_from_login=True)
 
         self._logged_in = True
