@@ -327,10 +327,23 @@ class BraspressPlaywrightProvider(ProviderBase):
             else:
                 cnpj_dest = self._digits(cnpj_destinatario) if cnpj_destinatario else ""
             if cnpj_dest:
-                await page.locator("#cnpjDestinatario").click()
-                await page.locator("#cnpjDestinatario").press("Control+a")
-                await page.locator("#cnpjDestinatario").type(cnpj_dest, delay=50)
-                await page.keyboard.press("Tab")
+                try:
+                    await page.locator("#cnpjDestinatario").click(timeout=10000)
+                    await page.locator("#cnpjDestinatario").press("Control+a")
+                    await page.locator("#cnpjDestinatario").type(cnpj_dest, delay=50)
+                    await page.keyboard.press("Tab")
+                except Exception:
+                    logger.warning("[Braspress] Click em #cnpjDestinatario falhou, usando JS")
+                    await page.evaluate(f"""(cnpj) => {{
+                        const el = document.getElementById('cnpjDestinatario');
+                        if (!el) return;
+                        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                        if (setter) setter.call(el, cnpj);
+                        else el.value = cnpj;
+                        el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                        el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                        el.dispatchEvent(new Event('blur', {{bubbles: true}}));
+                    }}""", cnpj_dest)
                 await page.wait_for_timeout(500)
 
             # CEPs: aguardar auto-preenchimento, preencher manualmente se necessário
@@ -352,15 +365,41 @@ class BraspressPlaywrightProvider(ProviderBase):
             # Preencher CEPs manualmente se não foram auto-preenchidos
             if len(cep_orig_auto) != 8:
                 logger.info("[Braspress] CEP Origem não auto-preenchido, preenchendo manualmente...")
-                await page.locator("#cepOrigem").click()
-                await page.locator("#cepOrigem").fill(self._digits(origem))
-                await page.keyboard.press("Tab")
+                try:
+                    await page.locator("#cepOrigem").click(timeout=10000)
+                    await page.locator("#cepOrigem").fill(self._digits(origem))
+                    await page.keyboard.press("Tab")
+                except Exception:
+                    logger.warning("[Braspress] Click em #cepOrigem falhou, usando JS")
+                    await page.evaluate("""(cep) => {
+                        const el = document.getElementById('cepOrigem');
+                        if (!el) return;
+                        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                        if (setter) setter.call(el, cep);
+                        else el.value = cep;
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                        el.dispatchEvent(new Event('blur', {bubbles: true}));
+                    }""", self._digits(origem))
                 await page.wait_for_timeout(500)
             if len(cep_dest_auto) != 8:
                 logger.info("[Braspress] CEP Destino não auto-preenchido, preenchendo manualmente...")
-                await page.locator("#cepDestino").click()
-                await page.locator("#cepDestino").fill(self._digits(destino))
-                await page.keyboard.press("Tab")
+                try:
+                    await page.locator("#cepDestino").click(timeout=10000)
+                    await page.locator("#cepDestino").fill(self._digits(destino))
+                    await page.keyboard.press("Tab")
+                except Exception:
+                    logger.warning("[Braspress] Click em #cepDestino falhou, usando JS")
+                    await page.evaluate("""(cep) => {
+                        const el = document.getElementById('cepDestino');
+                        if (!el) return;
+                        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                        if (setter) setter.call(el, cep);
+                        else el.value = cep;
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                        el.dispatchEvent(new Event('blur', {bubbles: true}));
+                    }""", self._digits(destino))
                 await page.wait_for_timeout(500)
 
             # Peso (formato BR: vírgula decimal)

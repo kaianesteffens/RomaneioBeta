@@ -114,55 +114,70 @@ class TRDProvider(ProviderBase):
                 logger.info(f"[{self.nome}] Fazendo login (tentativa {tentativa})...")
                 await self._page.goto(self.LOGIN_URL, wait_until='domcontentloaded', timeout=60000)
 
+                # Verificar se já estamos logados (redirecionou para o dashboard)
+                await self._page.wait_for_timeout(2000)
+                current_url = self._page.url
+                if 'senior-x/#/' in current_url and '/login' not in current_url:
+                    logger.info(f"[{self.nome}] Já logado (redirecionou para dashboard: {current_url})")
+                    self._logged_in = True
+                    return True
+
                 # Etapa 1: Email + clicar "Próximo"
                 # Tenta seletor direto primeiro, depois busca em iframes
-                email_loc = self._page.locator('#username-input-field')
-                try:
-                    await email_loc.wait_for(state='visible', timeout=10000)
-                except Exception:
-                    # Fallback: procurar em iframes (Senior X pode usar iframe para login)
-                    logger.info(f"[{self.nome}] #username-input-field não visível, buscando em iframes...")
-                    found_in_frame = False
+                email_selectors = [
+                    '#username-input-field',
+                    'input[id*="username"]',
+                    'input[id*="user"]',
+                    'input[type="email"]',
+                    'input[name="username"]',
+                    'input[name="login"]',
+                    'input[placeholder*="mail"]',
+                    'input[placeholder*="suário"]',
+                    'input[placeholder*="usuário"]',
+                    'input[placeholder*="login"]',
+                ]
+                email_loc = None
+                # Tenta no contexto principal
+                for sel in email_selectors:
+                    try:
+                        loc = self._page.locator(sel).first
+                        await loc.wait_for(state='visible', timeout=3000)
+                        email_loc = loc
+                        logger.info(f"[{self.nome}] Campo de email encontrado via: {sel}")
+                        break
+                    except Exception:
+                        continue
+                # Fallback: procurar em iframes
+                if email_loc is None:
+                    logger.info(f"[{self.nome}] Campo de email não encontrado na página principal, buscando em iframes...")
                     for frame in self._page.frames:
-                        try:
-                            frame_loc = frame.locator('#username-input-field')
-                            if await frame_loc.count() > 0:
-                                await frame_loc.wait_for(state='visible', timeout=5000)
-                                email_loc = frame_loc
-                                # Atualizar referência da página para o frame
-                                self._login_frame = frame
-                                found_in_frame = True
-                                logger.info(f"[{self.nome}] Campo de email encontrado em iframe: {frame.url}")
-                                break
-                        except Exception:
-                            continue
-                    if not found_in_frame:
-                        # Tenta seletores alternativos (input type=email, name=username)
-                        alt_selectors = [
-                            'input[type="email"]',
-                            'input[name="username"]',
-                            'input[name="login"]',
-                            'input[placeholder*="mail"]',
-                            'input[placeholder*="suário"]',
-                        ]
-                        for sel in alt_selectors:
+                        for sel in email_selectors:
                             try:
-                                alt_loc = self._page.locator(sel).first
-                                if await alt_loc.count() > 0 and await alt_loc.is_visible():
-                                    email_loc = alt_loc
-                                    found_in_frame = True
-                                    logger.info(f"[{self.nome}] Campo de email encontrado via seletor: {sel}")
+                                frame_loc = frame.locator(sel).first
+                                if await frame_loc.count() > 0:
+                                    await frame_loc.wait_for(state='visible', timeout=3000)
+                                    email_loc = frame_loc
+                                    self._login_frame = frame
+                                    logger.info(f"[{self.nome}] Campo de email encontrado em iframe via: {sel}")
                                     break
                             except Exception:
                                 continue
-                    if not found_in_frame:
-                        # Log do HTML para debug
-                        try:
-                            body_text = await self._page.inner_text("body")
-                            logger.warning(f"[{self.nome}] Página de login (500 chars): {body_text[:500]}")
-                        except Exception:
-                            pass
-                        raise Exception(f"Campo de login não encontrado na página (URL: {self._page.url})")
+                        if email_loc is not None:
+                            break
+                if email_loc is None:
+                    # Último cheque: talvez a página tenha carregado mas demorou
+                    await self._page.wait_for_timeout(5000)
+                    # Re-check se redirecionou enquanto esperávamos
+                    if 'senior-x/#/' in self._page.url and '/login' not in self._page.url:
+                        logger.info(f"[{self.nome}] Já logado (detectado após espera)")
+                        self._logged_in = True
+                        return True
+                    try:
+                        body_text = await self._page.inner_text("body")
+                        logger.warning(f"[{self.nome}] Página de login (500 chars): {body_text[:500]}")
+                    except Exception:
+                        pass
+                    raise Exception(f"Campo de login não encontrado na página (URL: {self._page.url})")
                 await self._page.wait_for_timeout(500)
                 await email_loc.fill(self.email)
                 # Botão "Próximo" - tenta no frame se encontrou lá
