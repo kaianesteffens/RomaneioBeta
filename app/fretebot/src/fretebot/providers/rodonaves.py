@@ -238,6 +238,57 @@ class RodonavesProvider(ProviderBase):
         return d
 
     @staticmethod
+    @staticmethod
+    def _extrair_de_json(data) -> tuple:
+        """Extrai (valor_frete, prazo_dias) de resposta JSON da API Rodonaves."""
+        valor_frete = None
+        prazo_dias = 0
+
+        if isinstance(data, dict):
+            html_data = data.get("Data") or data.get("data") or ""
+            if isinstance(html_data, str) and len(html_data) > 20:
+                for m in re.finditer(r"R\$\s*([\d.]+,\d{2})", html_data):
+                    trecho = html_data[max(0, m.start() - 200): m.end() + 200].lower()
+                    if any(kw in trecho for kw in (
+                        "frete", "cotacao", "total geral",
+                        "valor total", "prazo", "freight", "total",
+                    )):
+                        valor_frete = float(m.group(1).replace(".", "").replace(",", "."))
+                        break
+                if valor_frete is not None:
+                    m_prazo = re.search(r"(\d+)\s*(?:dias?|day)", html_data, re.IGNORECASE)
+                    if m_prazo:
+                        prazo_dias = int(m_prazo.group(1))
+                    return valor_frete, prazo_dias
+
+        def _buscar(obj):
+            nonlocal valor_frete, prazo_dias
+            if isinstance(obj, dict):
+                for key, val in obj.items():
+                    kl = key.lower()
+                    if valor_frete is None and isinstance(val, (int, float)) and val > 0:
+                        if any(kw in kl for kw in (
+                            "frete", "freight", "freighttotal", "totalfreight",
+                            "valor", "value", "total", "price", "vlrfrete",
+                            "valorfrete", "totalfrete", "vlrtotal",
+                        )):
+                            valor_frete = round(float(val), 2)
+                    if prazo_dias == 0 and isinstance(val, (int, float)) and val > 0:
+                        if any(kw in kl for kw in (
+                            "prazo", "deadline", "days", "dias",
+                            "deliverytime", "transittime", "leadtime",
+                        )):
+                            prazo_dias = int(val)
+                    if isinstance(val, (dict, list)):
+                        _buscar(val)
+            elif isinstance(obj, list):
+                for item in obj:
+                    _buscar(item)
+
+        _buscar(data)
+        return valor_frete, prazo_dias
+
+
     def _peso_str(cub: dict) -> str:
         """Peso por volume em kg (mínimo 1), arredondado para inteiro."""
         try:
@@ -1045,10 +1096,14 @@ class RodonavesProvider(ProviderBase):
 
         async def _captcha_token() -> str:
             try:
-                return str(await page.evaluate(
-                    "() => { const el = document.querySelector('textarea[name=\"g-recaptcha-response\"]'); "
-                    "return (el && el.value) ? String(el.value) : ''; }"
-                ) or "")
+                return str(await page.evaluate("""() => {
+                    const el = document.querySelector('textarea[name="g-recaptcha-response"]');
+                    if (el && el.value) return String(el.value);
+                    if (typeof grecaptcha !== 'undefined') {
+                        try { const r = grecaptcha.getResponse(); if (r) return String(r); } catch(e) {}
+                    }
+                    return '';
+                }""") or "")
             except Exception:
                 return ""
 
@@ -1063,12 +1118,14 @@ class RodonavesProvider(ProviderBase):
                 if token.strip():
                     break
             if not token.strip():
-                self.last_error = "Rodonaves: timeout aguardando reCAPTCHA manual"
-                return None
+                logger.warning(f"[{self.nome}] reCAPTCHA: timeout {self.CAPTCHA_MAX_WAIT_S}s — tentando submeter mesmo assim")
 
-        # Oculta a janela novamente
+        # Oculta a janela novamente (sempre, mesmo se CAPTCHA nao foi confirmado)
         await self._ocultar_janela()
-        logger.info(f"[{self.nome}] CAPTCHA resolvido, janela ocultada")
+        if token.strip():
+            logger.info(f"[{self.nome}] CAPTCHA resolvido, janela ocultada")
+        else:
+            logger.info(f"[{self.nome}] Janela ocultada (CAPTCHA nao confirmado, tentando submeter)")
 
         # Log de debug: estado dos campos antes de submeter
         try:
@@ -1088,114 +1145,180 @@ class RodonavesProvider(ProviderBase):
         except Exception as e:
             logger.warning(f"[{self.nome}] Não foi possível logar estado do formulário: {e}""")
 
-        # ─── Calcular ───
-        calc_btn = page.locator("#calculateQuotationBtn")
-        try:
-            await calc_btn.wait_for(state="visible", timeout=15000)
-        except Exception:
-            logger.warning(f"[{self.nome}] Botão Calcular não visível, aguardando...")
-            await page.wait_for_timeout(3000)
-        for _click_attempt in range(3):
+        # Interceptor de resposta da API
+        # Captura a resposta XHR da cotacao ANTES de clicar Calcular.
+        api_result: dict = {}
+
+        async def _capture_quotation_response(response):
             try:
-                await calc_btn.click(timeout=15000)
-                break
-            except Exception as click_err:
-                if _click_attempt == 2:
-                    raise
-                logger.warning(f"[{self.nome}] Click no Calcular falhou (tentativa {_click_attempt+1}): {click_err}""")
-                await page.wait_for_timeout(2000)
-        logger.info(f"[{self.nome}] Botão Calcular clicado, aguardando resultado...")
-
-        # Aguarda resultado: td.col-result aparece quando a tabela de resultado renderiza
-        try:
-            await page.locator("td.col-result").first.wait_for(timeout=30000)
-            logger.info(f"[{self.nome}] Resultado detectado (td.col-result)")
-        except Exception:
-            # Fallback: aguarda networkidle
-            try:
-                await page.wait_for_load_state("networkidle", timeout=10000)
-            except Exception:
-                await page.wait_for_timeout(3000)
-            logger.info(f"[{self.nome}] Resultado nao detectado via td.col-result, tentando extracao")
-
-        # ─── Extrair resultado ───
-        valor_frete = None
-        prazo_dias = 0
-
-        # Obtém o texto da página para procurar o valor
-        body_txt = await page.inner_text("body")
-        body_norm = (body_txt or "").replace("\xa0", " ")
-
-        # Verificar erro de validação da API (JSON com "errors")
-        erro_validacao = re.search(r'Alerta\s*\{.*?"errors".*?\}', body_norm, re.DOTALL)
-        if erro_validacao:
-            self.last_error = f"Rodonaves: erro de validação - {erro_validacao.group(0)[:300]}"
-            logger.error(f"[{self.nome}] {self.last_error}""")
-            return None
-
-        # Estratégia 1: extrair da tabela de resultado via td.col-result
-        try:
-            col_results = page.locator("td.col-result")
-            count = await col_results.count()
-            for i in range(count):
-                txt = (await col_results.nth(i).inner_text()).strip()
-                # Valor do frete (R$ XX,XX)
-                if valor_frete is None:
-                    m_val = re.search(r"R\$\s*([\d.]+,\d{2})", txt)
-                    if m_val:
-                        valor_frete = float(m_val.group(1).replace(".", "").replace(",", "."))
-                        continue
-                # Prazo ("Até X dias úteis")
-                if prazo_dias == 0:
-                    m_prazo = re.search(r"(\d+)\s*dias?", txt, re.IGNORECASE)
-                    if m_prazo:
-                        prazo_dias = int(m_prazo.group(1))
-        except Exception as e:
-            logger.debug(f"[{self.nome}] Extração via td.col-result falhou: {e}""")
-
-        # Estratégia 2: busca por cells com role
-        if valor_frete is None:
-            try:
-                cells = page.get_by_role("cell", name=re.compile(r"R\\$"))
-                count = await cells.count()
-                for i in range(count):
-                    txt = await cells.nth(i).inner_text()
-                    m = re.search(r"R\$\s*([\d.]+,\d{2})", txt)
-                    if m:
-                        valor_frete = float(m.group(1).replace(".", "").replace(",", "."))
-                        break
+                url = response.url.lower()
+                if response.status != 200:
+                    return
+                if "quotation" in url or "calculate" in url or "cotacao" in url:
+                    ct = response.headers.get("content-type", "")
+                    if "json" in ct:
+                        try:
+                            data = await response.json()
+                            api_result["json"] = data
+                            api_result["url"] = response.url
+                        except Exception:
+                            pass
+                    elif "text" in ct or "html" in ct:
+                        try:
+                            body = await response.text()
+                            if any(kw in body.lower() for kw in ("frete", "valor", "prazo", "freight", "price")):
+                                api_result["text"] = body
+                                api_result["url"] = response.url
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
-        # Estratégia 3: fallback no body inteiro
-        if valor_frete is None:
-            for m in re.finditer(r"R\$\s*([\d.]+,\d{2})", body_norm):
-                trecho = body_norm[max(0, m.start() - 120): m.end() + 120].lower()
-                if any(kw in trecho for kw in ("frete", "cotação", "cotacao", "total geral", "valor total", "prazo")):
-                    try:
-                        valor_frete = float(m.group(1).replace(".", "").replace(",", "."))
+        handler = lambda r: asyncio.ensure_future(_capture_quotation_response(r))
+        page.on("response", handler)
+
+        try:
+            calc_btn = page.locator("#calculateQuotationBtn")
+            try:
+                await calc_btn.wait_for(state="visible", timeout=15000)
+            except Exception:
+                logger.warning(f"[{self.nome}] Botao Calcular nao visivel, aguardando...")
+                await page.wait_for_timeout(3000)
+            for _click_attempt in range(3):
+                try:
+                    await calc_btn.click(timeout=15000)
+                    break
+                except Exception as click_err:
+                    if _click_attempt == 2:
+                        raise
+                    logger.warning(f"[{self.nome}] Click no Calcular falhou (tentativa {_click_attempt+1}): {click_err}")
+                    await page.wait_for_timeout(2000)
+            logger.info(f"[{self.nome}] Botao Calcular clicado, aguardando resultado...")
+
+            for _poll in range(120):
+                if api_result:
+                    logger.info(f"[{self.nome}] Resultado capturado via API ({api_result.get('url', '?')})")
+                    break
+                try:
+                    has_result = await page.evaluate("""() => {
+                        if (document.querySelectorAll('td.col-result').length > 0) return 'col-result';
+                        const qr = document.getElementById('quotationResult');
+                        if (qr && qr.innerHTML.trim().length > 50) return 'quotationResult';
+                        return '';
+                    }""")
+                    if has_result:
+                        logger.info(f"[{self.nome}] Resultado detectado no DOM ({has_result})")
                         break
-                    except ValueError:
-                        continue
+                except Exception:
+                    pass
+                await page.wait_for_timeout(250)
+            else:
+                logger.warning(f"[{self.nome}] Timeout aguardando resultado (30s)")
 
-        if valor_frete is None:
-            self.last_error = "Rodonaves: valor de frete não encontrado no resultado"
-            logger.warning(f"[{self.nome}] {self.last_error}""")
-            logger.info(f"[{self.nome}] Trecho body: {body_norm[:1500]}""")
-            return None
+            if api_result:
+                await page.wait_for_timeout(500)
 
-        # Prazo fallback no body
-        if prazo_dias == 0:
-            m_prazo = re.search(r"(\d+)\s*dias?", body_norm, re.IGNORECASE)
-            if m_prazo:
-                prazo_dias = int(m_prazo.group(1))
+            valor_frete = None
+            prazo_dias = 0
 
-        return Cotacao(
-            transportadora=self.nome,
-            prazo_dias=prazo_dias,
-            valor_frete=round(float(valor_frete), 2),
-            restricoes="Cotação via portal cliente.rte.com.br",
-        )
+            if "json" in api_result:
+                try:
+                    valor_frete, prazo_dias = self._extrair_de_json(api_result["json"])
+                    if valor_frete is not None:
+                        logger.info(f"[{self.nome}] Extracao via JSON API: R${valor_frete:.2f}, {prazo_dias} dias")
+                except Exception as e:
+                    logger.debug(f"[{self.nome}] Extracao JSON falhou: {e}")
+
+            if valor_frete is None:
+                try:
+                    result_data = await page.evaluate("""() => {
+                        const texts = [];
+                        const cells = document.querySelectorAll('td.col-result');
+                        for (const cell of cells) {
+                            texts.push(cell.innerText.trim());
+                        }
+                        if (texts.length === 0) {
+                            const qr = document.getElementById('quotationResult');
+                            if (qr && qr.innerText.trim()) {
+                                texts.push(qr.innerText.trim());
+                            }
+                        }
+                        return texts;
+                    }""")
+                    for txt in (result_data or []):
+                        if valor_frete is None:
+                            m_val = re.search(r"R\$\s*([\d.]+,\d{2})", txt)
+                            if m_val:
+                                valor_frete = float(m_val.group(1).replace(".", "").replace(",", "."))
+                                continue
+                        if prazo_dias == 0:
+                            m_prazo = re.search(r"(\d+)\s*dias?", txt, re.IGNORECASE)
+                            if m_prazo:
+                                prazo_dias = int(m_prazo.group(1))
+                    if valor_frete is not None:
+                        logger.info(f"[{self.nome}] Extracao via td.col-result (batch): R${valor_frete:.2f}")
+                except Exception as e:
+                    logger.debug(f"[{self.nome}] Extracao batch td.col-result falhou: {e}")
+
+            if valor_frete is None and "text" in api_result:
+                try:
+                    api_text = api_result["text"]
+                    for m in re.finditer(r"R\$\s*([\d.]+,\d{2})", api_text):
+                        trecho = api_text[max(0, m.start() - 120): m.end() + 120].lower()
+                        if any(kw in trecho for kw in ("frete", "cotacao", "total geral", "valor total", "prazo")):
+                            valor_frete = float(m.group(1).replace(".", "").replace(",", "."))
+                            break
+                    if valor_frete is not None:
+                        logger.info(f"[{self.nome}] Extracao via texto API: R${valor_frete:.2f}")
+                except Exception as e:
+                    logger.debug(f"[{self.nome}] Extracao texto API falhou: {e}")
+
+            if valor_frete is None:
+                try:
+                    body_txt = await page.inner_text("body")
+                    body_norm = (body_txt or "").replace("\xa0", " ")
+
+                    erro_validacao = re.search(r'Alerta\s*\{.*?"errors".*?\}', body_norm, re.DOTALL)
+                    if erro_validacao:
+                        self.last_error = f"Rodonaves: erro de validacao - {erro_validacao.group(0)[:300]}"
+                        logger.error(f"[{self.nome}] {self.last_error}")
+                        return None
+
+                    for m in re.finditer(r"R\$\s*([\d.]+,\d{2})", body_norm):
+                        trecho = body_norm[max(0, m.start() - 120): m.end() + 120].lower()
+                        if any(kw in trecho for kw in ("frete", "cotacao", "total geral", "valor total", "prazo")):
+                            valor_frete = float(m.group(1).replace(".", "").replace(",", "."))
+                            break
+
+                    if prazo_dias == 0 and body_norm:
+                        m_prazo = re.search(r"(\d+)\s*dias?", body_norm, re.IGNORECASE)
+                        if m_prazo:
+                            prazo_dias = int(m_prazo.group(1))
+
+                    if valor_frete is not None:
+                        logger.info(f"[{self.nome}] Extracao via body fallback: R${valor_frete:.2f}")
+                except Exception as e:
+                    logger.debug(f"[{self.nome}] Extracao body fallback falhou: {e}")
+
+            if valor_frete is None:
+                self.last_error = "Rodonaves: valor de frete nao encontrado no resultado"
+                logger.warning(f"[{self.nome}] {self.last_error}")
+                try:
+                    trecho = await page.inner_text("body")
+                    logger.info(f"[{self.nome}] Trecho body: {(trecho or '')[:1500]}")
+                except Exception:
+                    pass
+                return None
+
+            return Cotacao(
+                transportadora=self.nome,
+                prazo_dias=prazo_dias,
+                valor_frete=round(float(valor_frete), 2),
+                restricoes="Cotacao via portal cliente.rte.com.br",
+            )
+        finally:
+            page.remove_listener("response", handler)
+
 
     # ── orquestração ───────────────────────────────────────────────────
 
