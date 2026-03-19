@@ -418,10 +418,16 @@ class CoopexProvider(ProviderBase):
                 erro_msg = msg
                 logger.warning(f"[{self.nome}] Aviso SSW: {erro} - {msg}")
 
+        restricao_risco = None
         if erro and 'ERRO' in erro.upper():
-            self.last_error = f"Rota não atendida pelo SSW: {erro_msg}"
-            logger.info(f"[{self.nome}] {self.last_error}")
-            return None
+            # "area de risco" e aviso, nao rejeicao
+            if 'risco' in (erro_msg or '').lower():
+                restricao_risco = erro_msg
+                logger.info(f"[{self.nome}] Aviso de risco (nao fatal): {erro_msg}")
+            else:
+                self.last_error = f"Rota não atendida pelo SSW: {erro_msg}"
+                logger.info(f"[{self.nome}] {self.last_error}")
+                return None
 
         vlr_frete_str = (results.get('vlr_frete', '') or results.get('vlr_total', '') or
                         results.get('valor_frete', '') or results.get('total_geral', '') or
@@ -526,7 +532,7 @@ class CoopexProvider(ProviderBase):
             transportadora=self.nome,
             prazo_dias=prazo_dias,
             valor_frete=valor_frete,
-            restricoes=None,
+            restricoes=restricao_risco,
         )
         logger.info(f"[{self.nome}] Cotação #{nro_cotacao}: R$ {valor_frete:.2f}, {prazo_dias} dias")
         return cotacao
