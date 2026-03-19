@@ -382,7 +382,9 @@ class EucaturProvider(ProviderBase):
                 });
                 return result;
             }''')
-            vlr = results.get('vlr_frete', '') or results.get('vlr_total', '') or results.get('valor_frete', '')
+            vlr = (results.get('vlr_frete', '') or results.get('vlr_total', '') or
+                   results.get('valor_frete', '') or results.get('total_geral', '') or
+                   results.get('total_frete', ''))
             if vlr and vlr != '0,00':
                 logger.info(f"[{self.nome}] vlr_frete encontrado após {_poll+1}s")
                 break
@@ -420,14 +422,28 @@ class EucaturProvider(ProviderBase):
             logger.info(f"[{self.nome}] {self.last_error}")
             return None
 
-        vlr_frete_str = results.get('vlr_frete', '') or results.get('vlr_total', '') or results.get('valor_frete', '')
+        vlr_frete_str = (results.get('vlr_frete', '') or results.get('vlr_total', '') or
+                        results.get('valor_frete', '') or results.get('total_geral', '') or
+                        results.get('total_frete', ''))
+        # Fallback DOM: buscar em todo campo com nome contendo vlr/valor/total/frete/coleta
+        if not vlr_frete_str or vlr_frete_str == '0,00':
+            for name, val in results.items():
+                if not val or val == '0,00':
+                    continue
+                nl = name.lower()
+                if any(kw in nl for kw in ('vlr', 'valor', 'total', 'frete', 'coleta')):
+                    if re.match(r'[\d.]+,\d{2}$', val):
+                        vlr_frete_str = val
+                        logger.info(f"[{self.nome}] valor encontrado em campo DOM '{name}': {val}")
+                        break
         nro_cotacao = results.get('nro_cotacao', '') or results.get('nr_cotacao', '')
         prazo_str = results.get('prazo', '')
 
         # Fallback: extrair valor do frete da resposta XML se DOM não retornou
         if (not vlr_frete_str or vlr_frete_str == '0,00') and xml_responses:
             for xml in xml_responses:
-                for tag in ('vlr_frete', 'vlr_total', 'valor_frete', 'total_frete', 'vlr_total_frete'):
+                for tag in ('vlr_frete', 'vlr_total', 'valor_frete', 'total_frete', 'vlr_total_frete',
+                            'total_geral', 'vlr_total_geral', 'vlr_coleta', 'frt_valor'):
                     m_vlr = re.search(rf'<{tag}>([^<]+)</{tag}>', xml)
                     if m_vlr and m_vlr.group(1).strip() and m_vlr.group(1).strip() != '0,00':
                         vlr_frete_str = m_vlr.group(1).strip()

@@ -238,7 +238,6 @@ class RodonavesProvider(ProviderBase):
         return d
 
     @staticmethod
-    @staticmethod
     def _extrair_de_json(data) -> tuple:
         """Extrai (valor_frete, prazo_dias) de resposta JSON da API Rodonaves."""
         valor_frete = None
@@ -289,6 +288,7 @@ class RodonavesProvider(ProviderBase):
         return valor_frete, prazo_dias
 
 
+    @staticmethod
     def _peso_str(cub: dict) -> str:
         """Peso por volume em kg (mínimo 1), arredondado para inteiro."""
         try:
