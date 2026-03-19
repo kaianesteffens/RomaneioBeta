@@ -66,3 +66,5 @@ app/cache/
 
 # Scripts de teste
 app/test_*.py
+_apply_patch.py
+_new_login.py
