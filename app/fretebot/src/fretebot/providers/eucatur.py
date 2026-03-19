@@ -417,10 +417,16 @@ class EucaturProvider(ProviderBase):
                 logger.warning(f"[{self.nome}] Aviso SSW: {erro} - {msg}")
 
         # Se SSW retornou erro de rota não atendida, descartar cotação
+        restricao_risco = None
         if erro and 'ERRO' in erro.upper():
-            self.last_error = f"Rota não atendida pelo SSW: {erro_msg}"
-            logger.info(f"[{self.nome}] {self.last_error}")
-            return None
+            # "area de risco" e aviso, nao rejeicao
+            if 'risco' in (erro_msg or '').lower():
+                restricao_risco = erro_msg
+                logger.info(f"[{self.nome}] Aviso de risco (nao fatal): {erro_msg}")
+            else:
+                self.last_error = f"Rota não atendida pelo SSW: {erro_msg}"
+                logger.info(f"[{self.nome}] {self.last_error}")
+                return None
 
         vlr_frete_str = (results.get('vlr_frete', '') or results.get('vlr_total', '') or
                         results.get('valor_frete', '') or results.get('total_geral', '') or
@@ -523,7 +529,7 @@ class EucaturProvider(ProviderBase):
             except ValueError:
                 logger.warning(f"[{self.nome}] Prazo não parseável: {prazo_str}")
 
-        restricoes = None
+        restricoes = restricao_risco
 
         cotacao = Cotacao(
             transportadora=self.nome,
