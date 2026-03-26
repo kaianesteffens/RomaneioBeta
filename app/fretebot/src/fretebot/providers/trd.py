@@ -1432,6 +1432,11 @@ class TRDProvider(ProviderBase):
                     await self._page.wait_for_timeout(500)
 
                 if not cnpj_ok:
+                    # Fallback: usar método robusto com múltiplos seletores + JS
+                    logger.warning(f"[{self.nome}] Loop simples falhou, tentando _preencher_cnpj_destinatario_etapa1...")
+                    cnpj_ok = await self._preencher_cnpj_destinatario_etapa1(cnpj_dest_digits)
+
+                if not cnpj_ok:
                     self.last_error = "TRD: não foi possível preencher CNPJ do destinatário na etapa 1"
                     logger.error(f"[{self.nome}] {self.last_error}")
                     return None

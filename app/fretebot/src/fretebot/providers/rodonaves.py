@@ -223,6 +223,28 @@ class RodonavesProvider(ProviderBase):
     def _digits(value: str) -> str:
         return re.sub(r"\D", "", str(value or ""))
 
+    async def _fill_field(self, page, field_id: str, value: str) -> None:
+        """Fill campo por ID via Playwright, com fallback JS se overlay bloquear."""
+        try:
+            await page.locator(f"#{field_id}").fill(value, timeout=5000)
+        except Exception:
+            logger.warning(f"[{self.nome}] fill #{field_id} bloqueado, usando JS")
+            await page.evaluate(
+                """({fieldId, val}) => {
+                    const el = document.getElementById(fieldId);
+                    if (!el) return;
+                    const setter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value'
+                    )?.set;
+                    if (setter) setter.call(el, val);
+                    else el.value = val;
+                    el.dispatchEvent(new Event('input', {bubbles: true}));
+                    el.dispatchEvent(new Event('change', {bubbles: true}));
+                    el.dispatchEvent(new Event('blur', {bubbles: true}));
+                }""",
+                {"fieldId": field_id, "val": value},
+            )
+
     @staticmethod
     def _format_cnpj(digits: str) -> str:
         d = re.sub(r"\D", "", str(digits or ""))
@@ -414,7 +436,11 @@ class RodonavesProvider(ProviderBase):
 
     async def _init_browser(self):
         if self._context:
-            if self._browser and not self._browser.is_connected():
+            # Verifica se o processo Chrome ainda está vivo
+            if self._chrome_proc and self._chrome_proc.poll() is not None:
+                logger.warning(f"[{self.nome}] Chrome process morreu (exit={self._chrome_proc.returncode}), reinicializando...")
+                await self.cleanup()
+            elif self._browser and not self._browser.is_connected():
                 logger.warning(f"[{self.nome}] Browser desconectado, reinicializando...")
                 await self.cleanup()
             else:
@@ -829,7 +855,8 @@ class RodonavesProvider(ProviderBase):
     ) -> None:
         page = self._page
 
-        # Remove overlays que interceptam cliques (cookie banner, navbar fixa, modais)
+        # Remove overlays que interceptam cliques (cookie banner, navbar fixa, modais,
+        # e elementos com position:fixed/absolute via CSS — não só inline style)
         try:
             await page.evaluate("""() => {
                 const cookieBtn = document.getElementById('adopt-controller-button');
@@ -839,20 +866,27 @@ class RodonavesProvider(ProviderBase):
                 const nav = document.getElementById('mainNav');
                 if (nav) nav.style.position = 'relative';
                 // Remove qualquer modal-backdrop residual
-                document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+                document.querySelectorAll('.modal-backdrop, .overlay, [class*="overlay"], [class*="modal"]').forEach(el => {
+                    if (el.tagName.toLowerCase() !== 'html' && el.tagName.toLowerCase() !== 'body') {
+                        el.remove();
+                    }
+                });
                 document.body.classList.remove('modal-open');
                 document.body.style.overflow = '';
                 document.body.style.paddingRight = '';
-                // Remove banners/overlays genéricos fixos
-                document.querySelectorAll('[style*="position: fixed"], [style*="position:fixed"]').forEach(el => {
+                // Remove elementos fixos/absolutos que cobrem a página (via computedStyle, não só inline)
+                for (const el of document.querySelectorAll('*')) {
                     const tag = el.tagName.toLowerCase();
-                    if (tag !== 'html' && tag !== 'body' && !el.id?.includes('recaptcha')) {
-                        const rect = el.getBoundingClientRect();
-                        if (rect.width > 200 && rect.height > 50) {
-                            el.style.display = 'none';
-                        }
+                    if (tag === 'html' || tag === 'body' || tag === 'script' || tag === 'style') continue;
+                    if (el.id && el.id.includes('recaptcha')) continue;
+                    const cs = window.getComputedStyle(el);
+                    const pos = cs.position;
+                    if (pos !== 'fixed' && pos !== 'sticky') continue;
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width > 200 && rect.height > 50) {
+                        el.style.display = 'none';
                     }
-                });
+                }
             }""")
         except Exception:
             pass
@@ -991,12 +1025,14 @@ class RodonavesProvider(ProviderBase):
             }""")
 
         # ─── Primeira linha de volume (IDs fixos: amountPacks1, height1, ...) ───
+        # Usa _fill_field com fallback JS: overlays (cookie banner, navbar fixa)
+        # podem interceptar cliques do Playwright, causando timeout no fill().
         primeiro = cubagens[0]
-        await page.locator("#amountPacks1").fill(str(primeiro["quantidade"]))
-        await page.locator("#height1").fill(str(primeiro["altura_cm"]))
-        await page.locator("#width1").fill(str(primeiro["largura_cm"]))
-        await page.locator("#length1").fill(str(primeiro["comprimento_cm"]))
-        await page.locator("#weight1").fill(self._peso_str(primeiro))
+        await self._fill_field(page, "amountPacks1", str(primeiro["quantidade"]))
+        await self._fill_field(page, "height1", str(primeiro["altura_cm"]))
+        await self._fill_field(page, "width1", str(primeiro["largura_cm"]))
+        await self._fill_field(page, "length1", str(primeiro["comprimento_cm"]))
+        await self._fill_field(page, "weight1", self._peso_str(primeiro))
 
         # ─── Linhas adicionais de volume ───
         for idx, linha in enumerate(cubagens[1:], start=2):
@@ -1004,11 +1040,11 @@ class RodonavesProvider(ProviderBase):
             await page.wait_for_timeout(800)
 
             # Novos campos seguem padrão: amountPacks{n}, height{n}, ...
-            await page.locator(f"#amountPacks{idx}").fill(str(linha["quantidade"]))
-            await page.locator(f"#height{idx}").fill(str(linha["altura_cm"]))
-            await page.locator(f"#width{idx}").fill(str(linha["largura_cm"]))
-            await page.locator(f"#length{idx}").fill(str(linha["comprimento_cm"]))
-            await page.locator(f"#weight{idx}").fill(self._peso_str(linha))
+            await self._fill_field(page, f"amountPacks{idx}", str(linha["quantidade"]))
+            await self._fill_field(page, f"height{idx}", str(linha["altura_cm"]))
+            await self._fill_field(page, f"width{idx}", str(linha["largura_cm"]))
+            await self._fill_field(page, f"length{idx}", str(linha["comprimento_cm"]))
+            await self._fill_field(page, f"weight{idx}", self._peso_str(linha))
 
         # Reforça número destino (autocomplete pode sobrescrever)
         try:

@@ -509,7 +509,7 @@ class AGEXProvider(ProviderBase):
 
             # Avançar destino -> carga de forma robusta
             avancou = False
-            max_tentativas = 8
+            max_tentativas = 4
             for tentativa in range(1, max_tentativas + 1):
                 # Verificar se botão está habilitado antes de clicar
                 btn_enabled = await page.evaluate(
@@ -532,13 +532,12 @@ class AGEXProvider(ProviderBase):
                 except Exception:
                     await page.get_by_role("button", name="Continuar").click()
 
-                wait_ms = 2000 + (tentativa * 500)  # espera progressiva
-                await page.wait_for_timeout(wait_ms)
+                await page.wait_for_timeout(2500)
 
                 valor_total_loc = page.locator("input[name='valorTotal']")
                 if await valor_total_loc.count() > 0:
                     try:
-                        await valor_total_loc.first.wait_for(timeout=8000)
+                        await valor_total_loc.first.wait_for(timeout=5000)
                         avancou = True
                         break
                     except Exception:
