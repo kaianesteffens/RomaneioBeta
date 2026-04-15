@@ -770,7 +770,7 @@ class RodonavesProvider(ProviderBase):
                 await page.goto(
                     "https://cliente.rte.com.br/?showLogin=true",
                     wait_until="domcontentloaded",
-                    timeout=10000,
+                    timeout=15000,
                 )
                 break
             except Exception as goto_err:
@@ -781,13 +781,22 @@ class RodonavesProvider(ProviderBase):
                 raise
 
         # Aguarda jQuery estar disponível (necessário para o AJAX)
-        try:
-            await page.wait_for_function(
-                "typeof jQuery !== 'undefined' && typeof jQuery.ajax === 'function'",
-                timeout=10000,
-            )
-        except Exception:
-            raise RuntimeError(f"Login Rodonaves falhou — jQuery não carregou (URL: {page.url})")
+        for _jquery_attempt in range(2):
+            try:
+                await page.wait_for_function(
+                    "typeof jQuery !== 'undefined' && typeof jQuery.ajax === 'function'",
+                    timeout=10000,
+                )
+                break
+            except Exception:
+                if _jquery_attempt == 0:
+                    logger.warning(f"[{self.nome}] jQuery não carregou, recarregando página...")
+                    try:
+                        await page.reload(wait_until="domcontentloaded", timeout=10000)
+                    except Exception:
+                        pass
+                    continue
+                raise RuntimeError(f"Login Rodonaves falhou — jQuery não carregou (URL: {page.url})")
 
         # Chama API de login diretamente via AJAX (bypassa formulário, validações,
         # cookie banners, overlays e problemas de fill/click do Playwright)
@@ -1335,6 +1344,45 @@ class RodonavesProvider(ProviderBase):
                         logger.info(f"[{self.nome}] Extracao via body fallback: R${valor_frete:.2f}")
                 except Exception as e:
                     logger.debug(f"[{self.nome}] Extracao body fallback falhou: {e}")
+
+            # Estratégia 5: aguardar mais tempo se o DOM ainda pode estar carregando
+            if valor_frete is None and not page.is_closed() and not api_result:
+                logger.info(f"[{self.nome}] Nenhum resultado encontrado, aguardando mais 10s...")
+                for _extra_poll in range(20):
+                    await page.wait_for_timeout(500)
+                    try:
+                        has_result = await page.evaluate("""() => {
+                            const cells = document.querySelectorAll('td.col-result');
+                            if (cells.length > 0) return true;
+                            const qr = document.getElementById('quotationResult');
+                            if (qr && qr.innerHTML.trim().length > 50) return true;
+                            return false;
+                        }""")
+                        if has_result:
+                            result_data = await page.evaluate("""() => {
+                                const texts = [];
+                                const cells = document.querySelectorAll('td.col-result');
+                                for (const cell of cells) texts.push(cell.innerText.trim());
+                                if (texts.length === 0) {
+                                    const qr = document.getElementById('quotationResult');
+                                    if (qr && qr.innerText.trim()) texts.push(qr.innerText.trim());
+                                }
+                                return texts;
+                            }""")
+                            for txt in (result_data or []):
+                                if valor_frete is None:
+                                    m_val = re.search(r"R\$\s*([\d.]+,\d{2})", txt)
+                                    if m_val:
+                                        valor_frete = float(m_val.group(1).replace(".", "").replace(",", "."))
+                                if prazo_dias == 0:
+                                    m_prazo = re.search(r"(\d+)\s*dias?", txt, re.IGNORECASE)
+                                    if m_prazo:
+                                        prazo_dias = int(m_prazo.group(1))
+                            if valor_frete is not None:
+                                logger.info(f"[{self.nome}] Extracao via polling extra: R${valor_frete:.2f}")
+                                break
+                    except Exception:
+                        break
 
             if valor_frete is None:
                 self.last_error = "Rodonaves: valor de frete nao encontrado no resultado"

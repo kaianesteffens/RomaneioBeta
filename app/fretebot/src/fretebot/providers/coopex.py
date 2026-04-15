@@ -506,7 +506,44 @@ class CoopexProvider(ProviderBase):
                         logger.info(f"[{self.nome}] vlr_frete extraído via regex genérico XML: {vlr_frete_str}")
                         break
 
+        # Fallback 4: buscar qualquer valor monetário nos XMLs (sem contexto 'frete')
+        if (not vlr_frete_str or vlr_frete_str == '0,00') and xml_responses:
+            for xml in xml_responses:
+                for m_tag in re.finditer(r'<(\w+)>([\d.,]+)</\1>', xml):
+                    tag_name = m_tag.group(1).lower()
+                    tag_val = m_tag.group(2).strip()
+                    if any(skip in tag_name for skip in ('erro', 'prazo', 'cep', 'cnpj', 'cpf', 'ie', 'nro', 'qtd', 'peso', 'cubagem', 'volume', 'ddd', 'fone')):
+                        continue
+                    if ',' in tag_val and tag_val != '0,00' and len(tag_val) >= 4:
+                        vlr_frete_str = tag_val
+                        logger.info(f"[{self.nome}] vlr_frete extraído de XML tag <{tag_name}>: {vlr_frete_str}")
+                        break
+                if vlr_frete_str and vlr_frete_str != '0,00':
+                    break
+
+        # Fallback 5: extrair todo texto visível da página e procurar valor monetário
         if not vlr_frete_str or vlr_frete_str == '0,00':
+            try:
+                page_text = await page.evaluate('() => document.body?.innerText || ""')
+                if page_text:
+                    for m_val in re.finditer(r'R?\$?\s*([\d.]+,\d{2})', page_text):
+                        val_candidate = m_val.group(1).strip()
+                        if val_candidate and val_candidate != '0,00':
+                            start = max(0, m_val.start() - 100)
+                            end = min(len(page_text), m_val.end() + 100)
+                            context = page_text[start:end].lower()
+                            if any(kw in context for kw in ('frete', 'total', 'valor', 'coleta', 'cotação', 'cotacao')):
+                                vlr_frete_str = val_candidate
+                                logger.info(f"[{self.nome}] vlr_frete extraído do texto da página: {vlr_frete_str}")
+                                break
+            except Exception as e:
+                logger.debug(f"[{self.nome}] Fallback texto completo falhou: {e}")
+
+        if not vlr_frete_str or vlr_frete_str == '0,00':
+            # Log de diagnóstico: XMLs capturados para análise futura
+            if xml_responses:
+                for idx, xml in enumerate(xml_responses):
+                    logger.warning(f"[{self.nome}] XML #{idx+1} capturado ({len(xml)} chars): {xml[:500]}")
             self.last_error = f"Sem valor de frete retornado (campos DOM: vlr_frete={vlr_frete_str!r}, nro_cotacao={nro_cotacao!r}, prazo={prazo_str!r})"
             logger.warning(f"[{self.nome}] {self.last_error}")
             return None

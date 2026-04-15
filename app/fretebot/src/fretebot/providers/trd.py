@@ -1535,17 +1535,20 @@ class TRDProvider(ProviderBase):
             # ETAPA 2: DADOS DA CARGA
             logger.info(f"[{self.nome}] Preenchendo ETAPA 2...")
             
-            # Valor da mercadoria
-            valor_br = f"{float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            try:
-                loc_valor = self._page.locator('#valorMercadoriaInput')
-                await loc_valor.click(timeout=3000)
-                await loc_valor.fill(valor_br)
-                await loc_valor.press("Tab")
-            except Exception:
-                self.last_error = "TRD: não foi possível preencher Valor da mercadoria"
-                logger.error(f"[{self.nome}] {self.last_error}")
-                return None
+            # Valor da mercadoria (com retry e fallback robusto)
+            await self._page.wait_for_timeout(500)
+            if not await self._preencher_valor_mercadoria_etapa2(valor):
+                logger.warning(f"[{self.nome}] Valor mercadoria falhou no 1º try, retentando após 2s...")
+                await self._page.wait_for_timeout(2000)
+                if not await self._preencher_valor_mercadoria_etapa2(valor):
+                    alerts = await self._coletar_alertas_ui()
+                    extra_alert = f" ({'; '.join(alerts)})" if alerts else ""
+                    self.last_error = f"TRD: não foi possível preencher Valor da mercadoria{extra_alert}"
+                    logger.error(f"[{self.nome}] {self.last_error}")
+                    diag = await self._capturar_diagnostico_etapa2("valor_mercadoria_falhou")
+                    if diag:
+                        logger.info(f"[{self.nome}] Diagnóstico salvo: {diag}")
+                    return None
             await self._page.wait_for_timeout(100)
             
             # Peso

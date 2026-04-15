@@ -523,6 +523,64 @@ class BraspressPlaywrightProvider(ProviderBase):
                 logger.error(f"[Braspress] {self.last_error}: {form_check}")
                 return None
 
+            # Verificar e corrigir CEP Destino antes de calcular
+            cep_dest_check = self._digits(str(form_check.get("cepDest", "")))
+            if len(cep_dest_check) != 8:
+                logger.warning(f"[Braspress] CEP Destino vazio/incorreto antes de calcular: '{form_check.get('cepDest')}', re-preenchendo...")
+                dest_digits = self._digits(destino)
+                try:
+                    loc_dest = page.locator("#cepDestino")
+                    await loc_dest.click(timeout=5000)
+                    await loc_dest.press("Control+a")
+                    await loc_dest.type(dest_digits, delay=50)
+                    await page.keyboard.press("Tab")
+                    await page.wait_for_timeout(500)
+                except Exception:
+                    await page.evaluate("""(cep) => {
+                        const el = document.getElementById('cepDestino');
+                        if (!el) return;
+                        el.value = '';
+                        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                        if (setter) setter.call(el, cep);
+                        else el.value = cep;
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                        el.dispatchEvent(new Event('blur', {bubbles: true}));
+                    }""", dest_digits)
+                    await page.wait_for_timeout(500)
+                # Verificar novamente
+                cep_dest_recheck = await page.evaluate("() => document.getElementById('cepDestino')?.value || ''")
+                if len(self._digits(str(cep_dest_recheck))) != 8:
+                    self.last_error = f"CEP Destino não preenchido após retry: '{cep_dest_recheck}'"
+                    logger.error(f"[Braspress] {self.last_error}")
+                    return None
+
+            # Verificar e corrigir CEP Origem
+            cep_orig_check = self._digits(str(form_check.get("cepOrig", "")))
+            if len(cep_orig_check) != 8:
+                logger.warning(f"[Braspress] CEP Origem vazio/incorreto antes de calcular: '{form_check.get('cepOrig')}', re-preenchendo...")
+                orig_digits = self._digits(origem)
+                try:
+                    loc_orig = page.locator("#cepOrigem")
+                    await loc_orig.click(timeout=5000)
+                    await loc_orig.press("Control+a")
+                    await loc_orig.type(orig_digits, delay=50)
+                    await page.keyboard.press("Tab")
+                    await page.wait_for_timeout(500)
+                except Exception:
+                    await page.evaluate("""(cep) => {
+                        const el = document.getElementById('cepOrigem');
+                        if (!el) return;
+                        el.value = '';
+                        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                        if (setter) setter.call(el, cep);
+                        else el.value = cep;
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                        el.dispatchEvent(new Event('blur', {bubbles: true}));
+                    }""", orig_digits)
+                    await page.wait_for_timeout(500)
+
             await page.locator("#btnCalcular").click()
             # Polling robusto: aguardar resultado aparecer em qualquer bloco da página.
             # Alguns cenários retornam tabela fora de #step4Result.
