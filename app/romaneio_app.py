@@ -34,6 +34,8 @@ from PySide6.QtWidgets import (
     QListWidget,
     QInputDialog,
     QCheckBox,
+    QStackedWidget,
+    QSizePolicy,
 )
 
 import asyncio
@@ -51,6 +53,8 @@ from cotacao_transportadoras import (
 from updater import check_for_update, apply_update, get_repo_from_config, needs_restart, restart_app
 from license import get_saved_license, save_license, validate_license, get_machine_id, LicenseStatus
 from error_reporter import install_global_hooks, report_error, report_error_message
+from extrator_nfe import extrair_arquivo as extrair_nfe_arquivo, NotaFiscal, identificar_transportadora, formatar_nota_resumo, parsear_info_complementar
+from rastreamento import rastrear_multiplas, ResultadoRastreio, obter_link_rastreio
 
 
 # Eventos customizados para comunicação entre threads
@@ -99,6 +103,26 @@ class LoginStatusEvent(QEvent):
         self.nome = nome
         self.status = status
 
+
+
+class RastreioResultEvent(QEvent):
+    """Evento para atualizar resultado de rastreamento na UI."""
+    EventType = QEvent.Type(QEvent.registerEventType())
+
+    def __init__(self, indice: int, total: int, resultado: "ResultadoRastreio"):
+        super().__init__(self.EventType)
+        self.indice = indice
+        self.total = total
+        self.resultado = resultado
+
+
+class RastreioFinishedEvent(QEvent):
+    """Evento para indicar que o rastreamento terminou."""
+    EventType = QEvent.Type(QEvent.registerEventType())
+
+    def __init__(self, resultados: list):
+        super().__init__(self.EventType)
+        self.resultados = resultados
 
 # ---------------------------------------------------------------------------
 # Helpers de formatação automática para campos do formulário fornecedor
@@ -1039,8 +1063,71 @@ class RomaneioWindow(QMainWindow):
         login_status_row.addStretch(1)
         header_layout.addLayout(login_status_row)
 
-        self.tabs = QTabWidget()
-        self.tabs.setObjectName("MainTabs")
+        # --- QStackedWidget (Home + paginas individuais) ---
+        self.stack = QStackedWidget()
+        self.stack.setObjectName("MainStack")
+
+        # Pagina 0: Tela de Boas-Vindas
+        home_page = QWidget()
+        home_layout = QVBoxLayout(home_page)
+        home_layout.setContentsMargins(40, 30, 40, 20)
+        home_layout.setSpacing(24)
+
+        home_title = QLabel("O que deseja fazer?")
+        home_title.setObjectName("HomeTitleLabel")
+        home_title.setAlignment(Qt.AlignCenter)
+        home_layout.addWidget(home_title)
+
+        home_subtitle = QLabel("Escolha um recurso abaixo para come\u00e7ar")
+        home_subtitle.setObjectName("HomeSubtitleLabel")
+        home_subtitle.setAlignment(Qt.AlignCenter)
+        home_layout.addWidget(home_subtitle)
+
+        cards_grid = QGridLayout()
+        cards_grid.setSpacing(20)
+        cards_grid.setColumnStretch(0, 1)
+        cards_grid.setColumnStretch(1, 1)
+        cards_grid.setRowStretch(0, 1)
+        cards_grid.setRowStretch(1, 1)
+
+        home_cards = [
+            ("\U0001f4c4", "ROMANEIO", "Extrair pedidos de PDF\ne visualizar romaneio", 1),
+            ("\U0001f4b0", "CALCULAR FRETE", "Cotar frete em m\u00faltiplas\ntransportadoras", 2),
+            ("\U0001f4e6", "FRETE FORNECEDORES", "Cotar frete de fornecedor\ncom dados manuais", 3),
+            ("\U0001f69a", "RASTREIO", "Rastrear entregas via\nXML/PDF de NF-e", 4),
+        ]
+        self._home_card_buttons = []
+        for i, (icon, title_text, desc, page_idx) in enumerate(home_cards):
+            card_btn = QPushButton()
+            card_btn.setObjectName("HomeCard")
+            card_btn_layout = QVBoxLayout(card_btn)
+            card_btn_layout.setContentsMargins(20, 24, 20, 24)
+            card_btn_layout.setSpacing(8)
+            lbl_icon = QLabel(icon)
+            lbl_icon.setObjectName("HomeCardIcon")
+            lbl_icon.setAlignment(Qt.AlignCenter)
+            card_btn_layout.addWidget(lbl_icon)
+            lbl_title = QLabel(title_text)
+            lbl_title.setObjectName("HomeCardTitle")
+            lbl_title.setAlignment(Qt.AlignCenter)
+            card_btn_layout.addWidget(lbl_title)
+            lbl_desc = QLabel(desc)
+            lbl_desc.setObjectName("HomeCardDesc")
+            lbl_desc.setAlignment(Qt.AlignCenter)
+            lbl_desc.setWordWrap(True)
+            card_btn_layout.addWidget(lbl_desc)
+            card_btn.setMinimumSize(180, 140)
+            card_btn.setMaximumHeight(200)
+            card_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            card_btn.setCursor(Qt.PointingHandCursor)
+            card_btn.clicked.connect(lambda checked=False, idx=page_idx: self._show_page(idx))
+            row, col = divmod(i, 2)
+            cards_grid.addWidget(card_btn, row, col)
+            self._home_card_buttons.append(card_btn)
+
+        home_layout.addLayout(cards_grid)
+        home_layout.addStretch(1)
+        self.stack.addWidget(home_page)  # index 0 = home
 
         self.btn_select = QPushButton("Selecionar PDF")
         self.btn_select.setObjectName("PrimaryButton")
@@ -1298,9 +1385,69 @@ class RomaneioWindow(QMainWindow):
         tab_forn_layout.addWidget(forn_left, 1)
         tab_forn_layout.addWidget(forn_right, 1)
 
-        self.tabs.addTab(tab_pdf, "ROMANEIO")
-        self.tabs.addTab(tab_colado, "CALCULAR FRETE")
-        self.tabs.addTab(tab_fornecedor, "FRETE FORNECEDORES")
+        # --- Tab Rastreio ---
+        tab_rastreio = QWidget()
+        tab_rastreio_layout = QVBoxLayout(tab_rastreio)
+        tab_rastreio_layout.setContentsMargins(12, 12, 12, 12)
+        tab_rastreio_layout.setSpacing(10)
+
+        # Barra superior - botoes
+        rastreio_top_row = QHBoxLayout()
+        rastreio_top_row.setSpacing(8)
+        self.btn_select_nfe = QPushButton("Selecionar XML/PDF")
+        self.btn_select_nfe.setObjectName("PrimaryButton")
+        self.btn_select_nfe.clicked.connect(self._selecionar_nfe)
+        self.btn_rastrear = QPushButton("Rastrear Entregas")
+        self.btn_rastrear.clicked.connect(self._iniciar_rastreamento)
+        self.btn_rastrear.setEnabled(False)
+        self.btn_limpar_nfe = QPushButton("Limpar")
+        self.btn_limpar_nfe.setObjectName("SecondaryButton")
+        self.btn_limpar_nfe.clicked.connect(self._limpar_rastreio)
+        self.btn_abrir_screenshots = QPushButton("Abrir Pasta de Screenshots")
+        self.btn_abrir_screenshots.setObjectName("SecondaryButton")
+        self.btn_abrir_screenshots.clicked.connect(self._abrir_pasta_screenshots)
+        self.btn_abrir_screenshots.setVisible(False)
+        rastreio_top_row.addWidget(self.btn_select_nfe)
+        rastreio_top_row.addWidget(self.btn_rastrear)
+        rastreio_top_row.addWidget(self.btn_limpar_nfe)
+        rastreio_top_row.addStretch(1)
+        rastreio_top_row.addWidget(self.btn_abrir_screenshots)
+        tab_rastreio_layout.addLayout(rastreio_top_row)
+
+        self.rastreio_progress_bar = IndeterminateBar()
+        self.rastreio_progress_bar.setVisible(False)
+        tab_rastreio_layout.addWidget(self.rastreio_progress_bar)
+
+        # Area de scroll com cards por NF-e
+        self._rastreio_scroll = QScrollArea()
+        self._rastreio_scroll.setWidgetResizable(True)
+        self._rastreio_scroll.setObjectName("RastreioScroll")
+        self._rastreio_scroll_content = QWidget()
+        self._rastreio_cards_layout = QVBoxLayout(self._rastreio_scroll_content)
+        self._rastreio_cards_layout.setContentsMargins(4, 4, 4, 4)
+        self._rastreio_cards_layout.setSpacing(10)
+        self._rastreio_cards_layout.addStretch(1)
+        self._rastreio_scroll.setWidget(self._rastreio_scroll_content)
+
+        # Placeholder quando nao ha notas
+        self._rastreio_placeholder = QLabel(
+            "Selecione arquivos XML (NF-e) ou PDF (DANFE) para visualizar as informa\u00e7\u00f5es do pedido e rastrear entregas."
+        )
+        self._rastreio_placeholder.setObjectName("SubtitleLabel")
+        self._rastreio_placeholder.setAlignment(Qt.AlignCenter)
+        self._rastreio_placeholder.setWordWrap(True)
+        self._rastreio_cards_layout.insertWidget(0, self._rastreio_placeholder)
+
+        tab_rastreio_layout.addWidget(self._rastreio_scroll, 1)
+
+        page_romaneio = self._wrap_page_with_back("\U0001f4c4 ROMANEIO", tab_pdf)
+        self.stack.addWidget(page_romaneio)  # index 1
+        page_calcular = self._wrap_page_with_back("\U0001f4b0 CALCULAR FRETE", tab_colado)
+        self.stack.addWidget(page_calcular)  # index 2
+        page_fornecedor = self._wrap_page_with_back("\U0001f4e6 FRETE FORNECEDORES", tab_fornecedor)
+        self.stack.addWidget(page_fornecedor)  # index 3
+        page_rastreio = self._wrap_page_with_back("\U0001f69a RASTREIO", tab_rastreio)
+        self.stack.addWidget(page_rastreio)  # index 4
 
         footer = QHBoxLayout()
         footer.setSpacing(10)
@@ -1310,7 +1457,7 @@ class RomaneioWindow(QMainWindow):
         footer.addWidget(lbl_app_name)
 
         root.addWidget(header)
-        root.addWidget(self.tabs)
+        root.addWidget(self.stack, 1)
         root.addLayout(footer)
 
         self._apply_style()
@@ -1326,9 +1473,31 @@ class RomaneioWindow(QMainWindow):
             #FooterLabel { font-size: 11px; color: #8896ab; }
             #InputText { background: #ffffff; color: #1f2a44; border: 1px solid #cfd8ea; border-radius: 8px; padding: 8px; font-family: Consolas; font-size: 10.5pt; }
             #ResultText { background: #0f172a; color: #e2e8f0; border: 1px solid #1f2a44; border-radius: 10px; padding: 10px; font-family: Consolas; font-size: 11pt; }
-            QTabWidget#MainTabs::pane { border: 1px solid #dde3f0; border-radius: 10px; background: #ffffff; }
-            QTabBar::tab { background: #e9eef7; color: #1f2a44; border: 1px solid #dde3f0; padding: 8px 12px; margin-right: 4px; border-top-left-radius: 8px; border-top-right-radius: 8px; }
-            QTabBar::tab:selected { background: #ffffff; border-bottom-color: #ffffff; }
+            #MainStack { background: transparent; }
+            #HomeCard { background: #ffffff; border: 2px solid #dde3f0; border-radius: 16px; text-align: center; }
+            #HomeCard:hover { border-color: #1f6feb; background: #f0f5ff; }
+            #HomeCard:pressed { background: #e0ebff; border-color: #1a5ed6; }
+            #HomeTitleLabel { font-size: 26px; font-weight: 700; color: #16213d; }
+            #HomeSubtitleLabel { font-size: 14px; color: #5a6b8a; margin-bottom: 10px; }
+            #HomeCardIcon { font-size: 36px; }
+            #HomeCardTitle { font-size: 16px; font-weight: 700; color: #16213d; }
+            #HomeCardDesc { font-size: 12px; color: #5a6b8a; line-height: 1.4; }
+            #PageHeader { background: transparent; border: none; }
+            #BackButton { background: #e9eef7; color: #1f2a44; border: 1px solid #b0bdd0; border-radius: 8px; padding: 6px 14px; font-size: 13px; font-weight: 600; }
+            #BackButton:hover { background: #dde6f5; }
+            #PageTitleLabel { font-size: 18px; font-weight: 700; color: #16213d; }
+            #PageContent { background: #ffffff; border: 1px solid #dde3f0; border-radius: 10px; }
+            #RastreioScroll { background: transparent; border: none; }
+            #RastreioScroll QWidget { background: transparent; }
+            #RastreioCard { background: #ffffff; border: 1px solid #dde3f0; border-radius: 10px; }
+            #RastreioBlockTitle { font-size: 12px; font-weight: 700; color: #1f6feb; text-transform: uppercase; }
+            #RastreioBlockLabel { font-size: 12px; font-weight: 600; color: #5a6b8a; }
+            #RastreioBlockValue { font-size: 12px; color: #1f2a44; }
+            #RastreioCardHeader { font-size: 14px; font-weight: 700; color: #16213d; }
+            #RastreioStatusEntregue { font-size: 13px; font-weight: 700; color: #067647; }
+            #RastreioStatusTransito { font-size: 13px; font-weight: 700; color: #b45309; }
+            #RastreioStatusErro { font-size: 13px; font-weight: 700; color: #b42318; }
+            #RastreioStatusPendente { font-size: 13px; font-weight: 600; color: #8896ab; }
             QPushButton { background: #1f6feb; color: #ffffff; border: none; border-radius: 8px; padding: 10px 14px; font-weight: 600; }
             QPushButton:hover { background: #1a5ed6; }
             QPushButton#SecondaryButton { background: #e9eef7; color: #1f2a44; }
@@ -1340,6 +1509,39 @@ class RomaneioWindow(QMainWindow):
             #FornUnit { font-size: 12px; color: #5a6b8a; }
             """
         )
+
+
+    def _wrap_page_with_back(self, title_text: str, content_widget: QWidget) -> QWidget:
+        page = QWidget()
+        page.setObjectName("PageContent")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        # Header com botao voltar e titulo
+        page_header = QFrame()
+        page_header.setObjectName("PageHeader")
+        header_layout = QHBoxLayout(page_header)
+        header_layout.setContentsMargins(12, 8, 12, 8)
+        header_layout.setSpacing(10)
+        btn_back = QPushButton("\u2190 Voltar")
+        btn_back.setObjectName("BackButton")
+        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.clicked.connect(lambda: self._show_page(0))
+        lbl_title = QLabel(title_text)
+        lbl_title.setObjectName("PageTitleLabel")
+        header_layout.addWidget(btn_back)
+        header_layout.addWidget(lbl_title)
+        header_layout.addStretch(1)
+        layout.addWidget(page_header)
+        layout.addWidget(content_widget, 1)
+        return page
+
+    def _show_page(self, index: int):
+        self.stack.setCurrentIndex(index)
+        # Pre-login so quando acessar Calcular Frete (2) ou Frete Fornecedores (3)
+        if index in (2, 3) and not self._pre_login_done:
+            self._pre_login_done = True
+            threading.Thread(target=self._run_pre_login, daemon=True).start()
 
     def _selecionar_arquivo(self):
         arquivo, _ = QFileDialog.getOpenFileName(
@@ -1368,7 +1570,7 @@ class RomaneioWindow(QMainWindow):
         self.btn_select.setEnabled(True)
 
     def _copiar_resultado(self):
-        if self.tabs.currentIndex() == 0:
+        if self.stack.currentIndex() == 1:
             texto_ui = (self.romaneio_calculado_text.toPlainText() or "").strip()
         else:
             texto_ui = (self.result_text.toPlainText() or "").strip()
@@ -1409,7 +1611,7 @@ class RomaneioWindow(QMainWindow):
 
         self.html_original = html_result
         self.romaneio_calculado_text.setPlainText(html_result.replace('<br>', '\n'))
-        self.tabs.setCurrentIndex(0)
+        self._show_page(1)
         self.label_info.setText(f"OK: {len(self.pedidos)} pedido(s) extraido(s) de {Path(arquivo).name}")
         self.label_info.setStyleSheet("color: #067647;")
 
@@ -1428,7 +1630,7 @@ class RomaneioWindow(QMainWindow):
         self.progress_bar.setVisible(True)
         self.progress_bar.start_anim()
         self.result_text.setPlainText("Iniciando cotações...\nAguardando primeiras respostas...")
-        self.tabs.setCurrentIndex(1)
+        self._show_page(1)
         self.label_info.setText("Executando cotações de transportadoras...")
         self.label_info.setStyleSheet("color: #1f6feb;")
         threading.Thread(target=self._run_async_cotacao, daemon=True).start()
@@ -1624,6 +1826,14 @@ class RomaneioWindow(QMainWindow):
         )
 
     def customEvent(self, event):
+        # --- Rastreio events ---
+        if isinstance(event, RastreioResultEvent):
+            self._on_rastreio_result(event.indice, event.total, event.resultado)
+            return
+        elif isinstance(event, RastreioFinishedEvent):
+            self._on_rastreio_finished(event.resultados)
+            return
+
         is_forn = self._modo_cotacao == "fornecedor"
         _result = self.forn_result_text if is_forn else self.result_text
         _progress = self.forn_progress_bar if is_forn else self.progress_bar
@@ -1631,7 +1841,7 @@ class RomaneioWindow(QMainWindow):
         if isinstance(event, UdpateResultEvent):
             _result.setPlainText(event.result)
             if not is_forn:
-                self.tabs.setCurrentIndex(1)
+                self._show_page(1)
             self.label_info.setText("Cota\u00e7\u00f5es finalizadas")
             self.label_info.setStyleSheet("color: #067647;")
             self._verificar_erro_divergencia_uf(event.result)
@@ -1721,8 +1931,309 @@ class RomaneioWindow(QMainWindow):
             except Exception:
                 pass
 
-        t = threading.Thread(target=_cleanup_background, daemon=True)
+        t = threading.Thread(target=_cleanup_background, daemon=False)
         t.start()
+        t.join(timeout=15)  # Aguarda até 15s para cleanup + orphan killer
+
+
+    def _selecionar_nfe(self):
+        """Abre diálogo para selecionar arquivos XML/PDF de NF-e."""
+        arquivos, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Selecionar NF-e (XML ou DANFE PDF)",
+            "",
+            "NF-e files (*.xml *.pdf);;XML files (*.xml);;PDF files (*.pdf);;All files (*.*)"
+        )
+        if not arquivos:
+            return
+
+        erros = []
+        novas = 0
+        for arq in arquivos:
+            try:
+                notas = extrair_nfe_arquivo(arq)
+                if not notas:
+                    erros.append(f"{Path(arq).name}: nenhuma NF-e encontrada")
+                    continue
+                for nf in notas:
+                    if nf.chave_acesso and any(
+                        n.chave_acesso == nf.chave_acesso for n in self._notas_rastreio
+                    ):
+                        continue
+                    self._notas_rastreio.append(nf)
+                    novas += 1
+            except Exception as e:
+                erros.append(f"{Path(arq).name}: {e}")
+
+        if erros:
+            QMessageBox.warning(
+                self, "Aviso",
+                "Alguns arquivos não puderam ser processados:\n\n" + "\n".join(erros)
+            )
+
+        self._atualizar_lista_notas_rastreio()
+        if novas > 0:
+            self.label_info.setText(f"{novas} nota(s) carregada(s) — iniciando rastreamento...")
+            self.label_info.setStyleSheet("color: #1f6feb;")
+            self._iniciar_rastreamento()
+
+    def _limpar_rastreio(self):
+        """Limpa as notas e resultados de rastreio."""
+        self._notas_rastreio.clear()
+        self._resultados_rastreio.clear()
+        self._rastreio_card_widgets.clear()
+        while self._rastreio_cards_layout.count() > 1:
+            item = self._rastreio_cards_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        self._rastreio_placeholder = QLabel(
+            "Selecione arquivos XML (NF-e) ou PDF (DANFE) para visualizar as informações do pedido e rastrear entregas."
+        )
+        self._rastreio_placeholder.setObjectName("SubtitleLabel")
+        self._rastreio_placeholder.setAlignment(Qt.AlignCenter)
+        self._rastreio_placeholder.setWordWrap(True)
+        self._rastreio_cards_layout.insertWidget(0, self._rastreio_placeholder)
+        self.btn_rastrear.setEnabled(False)
+        self.btn_abrir_screenshots.setVisible(False)
+        self.rastreio_progress_bar.stop_anim()
+        self.rastreio_progress_bar.setVisible(False)
+        self.label_info.setText("Rastreio limpo")
+        self.label_info.setStyleSheet("color: #6b7a96;")
+
+    def _criar_card_nfe(self, indice, nf):
+        """Cria um card visual para uma NF-e com blocos de pedido e rastreamento."""
+        card = QFrame()
+        card.setObjectName("RastreioCard")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(14, 12, 14, 12)
+        card_layout.setSpacing(8)
+
+        transp = identificar_transportadora(nf)
+        transp_display = (nf.transportadora_nome or transp.upper() or "NÃO IDENTIFICADA")
+        header = QLabel(f"[{indice}] NF-e {nf.numero} — {transp_display}")
+        header.setObjectName("RastreioCardHeader")
+        card_layout.addWidget(header)
+
+        blocos_row = QHBoxLayout()
+        blocos_row.setSpacing(10)
+
+        # Bloco: Informações do Pedido
+        bloco_pedido = QFrame()
+        bloco_pedido.setStyleSheet("background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;")
+        pedido_layout = QVBoxLayout(bloco_pedido)
+        pedido_layout.setContentsMargins(10, 8, 10, 8)
+        pedido_layout.setSpacing(4)
+
+        lbl_pedido_title = QLabel("📋 INFORMAÇÕES DO PEDIDO")
+        lbl_pedido_title.setObjectName("RastreioBlockTitle")
+        pedido_layout.addWidget(lbl_pedido_title)
+
+        info = parsear_info_complementar(nf.info_complementar)
+        if info.get("pedido_compra"):
+            pedido_layout.addWidget(self._make_info_row("Pedido Compra:", info["pedido_compra"]))
+        if info.get("pedido_venda"):
+            pedido_layout.addWidget(self._make_info_row("Pedido Venda:", info["pedido_venda"]))
+        if nf.destinatario_nome:
+            dest = nf.destinatario_nome
+            if nf.destinatario_cidade and nf.destinatario_uf:
+                dest += f" ({nf.destinatario_cidade}/{nf.destinatario_uf})"
+            pedido_layout.addWidget(self._make_info_row("Destinatário:", dest))
+        if info.get("local_entrega"):
+            pedido_layout.addWidget(self._make_info_row("Local Entrega:", info["local_entrega"]))
+        if nf.valor_total:
+            vf = f"R$ {nf.valor_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            pedido_layout.addWidget(self._make_info_row("Valor NF:", vf))
+        if nf.volumes:
+            pedido_layout.addWidget(self._make_info_row("Volumes:", str(nf.volumes)))
+        if nf.peso_bruto:
+            pedido_layout.addWidget(self._make_info_row("Peso:", f"{nf.peso_bruto:.2f} kg"))
+        if info.get("agendamento"):
+            pedido_layout.addWidget(self._make_info_row("Agendamento:", info["agendamento"]))
+        if info.get("horario"):
+            pedido_layout.addWidget(self._make_info_row("Horário:", info["horario"]))
+        if not info and not nf.destinatario_nome:
+            lbl_sem = QLabel("Sem informações complementares")
+            lbl_sem.setObjectName("RastreioBlockValue")
+            lbl_sem.setStyleSheet("color: #8896ab; font-style: italic;")
+            pedido_layout.addWidget(lbl_sem)
+        pedido_layout.addStretch(1)
+        blocos_row.addWidget(bloco_pedido, 1)
+
+        # Bloco: Rastreamento
+        bloco_rastreio = QFrame()
+        bloco_rastreio.setStyleSheet("background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;")
+        rastreio_layout = QVBoxLayout(bloco_rastreio)
+        rastreio_layout.setContentsMargins(10, 8, 10, 8)
+        rastreio_layout.setSpacing(4)
+
+        lbl_rastreio_title = QLabel("🚚 RASTREAMENTO")
+        lbl_rastreio_title.setObjectName("RastreioBlockTitle")
+        rastreio_layout.addWidget(lbl_rastreio_title)
+
+        lbl_status = QLabel("⏳ Aguardando rastreamento...")
+        lbl_status.setObjectName("RastreioStatusPendente")
+        rastreio_layout.addWidget(lbl_status)
+
+        rastreio_detail_container = QVBoxLayout()
+        rastreio_detail_container.setSpacing(4)
+        rastreio_layout.addLayout(rastreio_detail_container)
+
+        rastreio_layout.addStretch(1)
+        blocos_row.addWidget(bloco_rastreio, 1)
+
+        card_layout.addLayout(blocos_row)
+
+        card._rastreio_status_label = lbl_status
+        card._rastreio_detail_container = rastreio_detail_container
+        card._bloco_rastreio = bloco_rastreio
+
+        return card
+
+    def _make_info_row(self, label, value):
+        """Cria uma linha label: valor para dentro dos blocos."""
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 1, 0, 1)
+        row_layout.setSpacing(6)
+        lbl = QLabel(label)
+        lbl.setObjectName("RastreioBlockLabel")
+        lbl.setFixedWidth(110)
+        lbl.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        val = QLabel(value)
+        val.setObjectName("RastreioBlockValue")
+        val.setWordWrap(True)
+        row_layout.addWidget(lbl)
+        row_layout.addWidget(val, 1)
+        return row
+
+    def _atualizar_lista_notas_rastreio(self):
+        """Recria os cards de NF-e na área de scroll."""
+        self._rastreio_card_widgets.clear()
+        while self._rastreio_cards_layout.count() > 1:
+            item = self._rastreio_cards_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+        if not self._notas_rastreio:
+            self._rastreio_placeholder = QLabel(
+                "Selecione arquivos XML (NF-e) ou PDF (DANFE) para visualizar as informações do pedido e rastrear entregas."
+            )
+            self._rastreio_placeholder.setObjectName("SubtitleLabel")
+            self._rastreio_placeholder.setAlignment(Qt.AlignCenter)
+            self._rastreio_placeholder.setWordWrap(True)
+            self._rastreio_cards_layout.insertWidget(0, self._rastreio_placeholder)
+            self.btn_rastrear.setEnabled(False)
+            return
+        if hasattr(self, "_rastreio_placeholder") and self._rastreio_placeholder:
+            self._rastreio_placeholder.deleteLater()
+            self._rastreio_placeholder = None
+        for i, nf in enumerate(self._notas_rastreio, 1):
+            card = self._criar_card_nfe(i, nf)
+            self._rastreio_cards_layout.insertWidget(i - 1, card)
+            self._rastreio_card_widgets.append(card)
+        self.btn_rastrear.setEnabled(True)
+
+    def _iniciar_rastreamento(self):
+        """Inicia o rastreamento das NF-es carregadas."""
+        if not self._notas_rastreio:
+            QMessageBox.warning(self, "Aviso", "Nenhuma NF-e carregada para rastrear")
+            return
+        self.btn_rastrear.setEnabled(False)
+        self.btn_select_nfe.setEnabled(False)
+        self.rastreio_progress_bar.setVisible(True)
+        self.rastreio_progress_bar.start_anim()
+        self.btn_abrir_screenshots.setVisible(False)
+        self.label_info.setText("Rastreando entregas...")
+        self.label_info.setStyleSheet("color: #1f6feb;")
+        threading.Thread(target=self._run_rastreamento_async, daemon=True).start()
+
+    def _run_rastreamento_async(self):
+        """Executa o rastreamento em thread separada."""
+        try:
+            with self._loop_lock:
+                asyncio.set_event_loop(self._loop)
+                resultados = self._loop.run_until_complete(self._rastrear_notas_async())
+            self._post_event_safe(RastreioFinishedEvent(resultados))
+        except Exception as exc:
+            print(f"[FreteBot] Erro no rastreamento: {exc}", file=sys.stderr, flush=True)
+            self._post_event_safe(RastreioFinishedEvent([]))
+
+    async def _rastrear_notas_async(self):
+        """Rastreia todas as NF-es carregadas."""
+        notas_para_rastrear = []
+        for nf in self._notas_rastreio:
+            transp = identificar_transportadora(nf)
+            notas_para_rastrear.append({
+                "transportadora": transp,
+                "numero_nfe": nf.numero,
+                "cnpj_emitente": nf.emitente_cnpj,
+                "chave_acesso": nf.chave_acesso,
+            })
+        def _progress_callback(indice, total, resultado):
+            self._post_event_safe(RastreioResultEvent(indice, total, resultado))
+        resultados = await rastrear_multiplas(notas_para_rastrear, callback=_progress_callback)
+        return resultados
+
+    def _on_rastreio_result(self, indice, total, resultado):
+        """Atualiza o card da NF-e com o resultado do rastreamento."""
+        self.label_info.setText(f"Rastreando... {indice}/{total}")
+        self.label_info.setStyleSheet("color: #1f6feb;")
+        if indice < 1 or indice > len(self._rastreio_card_widgets):
+            return
+        card = self._rastreio_card_widgets[indice - 1]
+        status_label = card._rastreio_status_label
+        detail_container = card._rastreio_detail_container
+        if resultado.erro:
+            status_label.setText(f"❌ Erro: {resultado.erro}")
+            status_label.setObjectName("RastreioStatusErro")
+        elif resultado.entregue:
+            status_label.setText("✅ ENTREGUE")
+            status_label.setObjectName("RastreioStatusEntregue")
+            if resultado.previsao_entrega:
+                detail_container.addWidget(self._make_info_row("Data entrega:", resultado.previsao_entrega))
+            if resultado.screenshot_path:
+                detail_container.addWidget(self._make_info_row("Screenshot:", Path(resultado.screenshot_path).name))
+        else:
+            status_label.setText(f"📦 {resultado.status_texto or 'Em trânsito'}")
+            status_label.setObjectName("RastreioStatusTransito")
+            if resultado.previsao_entrega:
+                detail_container.addWidget(self._make_info_row("Previsão:", resultado.previsao_entrega))
+            if resultado.link_rastreio:
+                lbl_link = QLabel(f'<a href="{resultado.link_rastreio}">Abrir rastreio</a>')
+                lbl_link.setOpenExternalLinks(True)
+                lbl_link.setStyleSheet("font-size: 12px;")
+                detail_container.addWidget(lbl_link)
+        status_label.style().unpolish(status_label)
+        status_label.style().polish(status_label)
+
+    def _on_rastreio_finished(self, resultados):
+        """Chamado quando todo o rastreamento terminou."""
+        self._resultados_rastreio = resultados
+        self.rastreio_progress_bar.stop_anim()
+        self.rastreio_progress_bar.setVisible(False)
+        self.btn_rastrear.setEnabled(True)
+        self.btn_select_nfe.setEnabled(True)
+        entregues = sum(1 for r in resultados if r.entregue)
+        com_screenshot = sum(1 for r in resultados if r.screenshot_path)
+        total = len(resultados)
+        self.label_info.setText(
+            f"Rastreamento concluído: {entregues}/{total} entregue(s)"
+            + (f" — {com_screenshot} screenshot(s)" if com_screenshot else "")
+        )
+        self.label_info.setStyleSheet("color: #067647;")
+        if com_screenshot:
+            self.btn_abrir_screenshots.setVisible(True)
+
+    def _abrir_pasta_screenshots(self):
+        """Abre a pasta de screenshots no explorador de arquivos."""
+        appdata = os.getenv("APPDATA")
+        if appdata:
+            pasta = Path(appdata) / "FreteBot" / "rastreamento"
+        else:
+            pasta = Path.cwd() / "FreteBot_rastreamento"
+        pasta.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(pasta))
 
     def _abrir_configuracoes(self):
         dlg = ConfiguracoesDialog(
