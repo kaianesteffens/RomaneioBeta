@@ -115,8 +115,7 @@ async def _rastrear_braspress(
     """Rastreio Braspress via HTTP direto (blue.braspress.com bloqueia Chrome headless)."""
     cnpj_limpo = re.sub(r'\D', '', cnpj_emitente) if cnpj_emitente else ""
     track_url = f"https://blue.braspress.com/site/w/tracking/find?cpfCnpj={cnpj_limpo}&pedidoNf={numero_nfe}"
-    public_url = "https://www.braspress.com/rastreie-sua-encomenda/"
-    resultado.link_rastreio = public_url
+    resultado.link_rastreio = track_url
 
     try:
         async with httpx.AsyncClient(
