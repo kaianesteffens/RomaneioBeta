@@ -1,4 +1,4 @@
-﻿"""
+"""
 Modulo de rastreamento de entregas via Playwright.
 
 Abre o site de rastreamento da transportadora, verifica status de entrega,
@@ -24,6 +24,13 @@ from fretebot.providers.base import launch_browser_resilient
 
 logger = get_logger(__name__)
 
+_TRANSPORTADORAS_IGNORADAS_RASTREIO = {"correios", "azul", "bornelli"}
+
+
+def _chave_acesso_valida(chave_acesso: str) -> bool:
+    """Valida se a chave de acesso tem 44 dígitos."""
+    return len(re.sub(r'\D', '', chave_acesso or "")) == 44
+
 
 @dataclass
 class ResultadoRastreio:
@@ -42,12 +49,11 @@ _TRACKING_URLS: dict[str, str] = {
     "braspress": "https://www.braspress.com/rastreie-sua-encomenda/",
     "trd": "",       # site fora do ar (DNS nao resolve)
     "agex": "",      # site fora do ar (DNS nao resolve)
-    "eucatur": "https://ssw.inf.br/2/rastreamento_danfe?sigla_emp=EUC",
+    "eucatur": "https://ssw.inf.br/2/rastreamento_danfe?sigla_emp=EUC&sc=N",
     "bauer": "",     # pagina de rastreamento removida (404)
-    "coopex": "https://ssw.inf.br/2/rastreamento_danfe?sigla_emp=COP",
-    "bornelli": "https://ssw.inf.br/2/rastreamento_danfe?sigla_emp=AZU",
-    "viopex": "https://ssw.inf.br/2/rastreamento_danfe?sigla_emp=VIO",
-    "mengue": "https://ssw.inf.br/2/rastreamento_danfe?sigla_emp=MEN",
+    "coopex": "https://ssw.inf.br/2/rastreamento_danfe?sigla_emp=COP&sc=N",
+    "viopex": "https://ssw.inf.br/2/rastreamento_danfe?sigla_emp=VIO&sc=N",
+    "mengue": "https://ssw.inf.br/2/rastreamento_danfe?sigla_emp=MEN&sc=N",
 }
 
 # Siglas SSW por transportadora (para rastreamento_danfe)
@@ -61,6 +67,12 @@ _SSW_SIGLAS: dict[str, str] = {
 
 
 def _download_dir() -> Path:
+    """Diretório para salvar screenshots de rastreamento."""
+    cfg_dir = (os.getenv("FRETEBOT_RASTREIO_DIR") or "").strip()
+    if cfg_dir:
+        d = Path(cfg_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        return d
     appdata = os.getenv("APPDATA")
     if appdata:
         d = Path(appdata) / "FreteBot" / "rastreamento"
@@ -86,17 +98,22 @@ async def rastrear_nfe(
         link_rastreio=obter_link_rastreio(transportadora),
     )
     _handlers = {
+        "correios": _rastrear_ignorado,
+        "azul": _rastrear_ignorado,
+        "bornelli": _rastrear_ignorado,
         "braspress": _rastrear_braspress,
         "trd": _rastrear_indisponivel,
         "agex": _rastrear_indisponivel,
         "eucatur": _rastrear_ssw,
         "bauer": _rastrear_indisponivel,
+        "alfa": _rastrear_indisponivel,
         "coopex": _rastrear_ssw,
-        "bornelli": _rastrear_ssw,
         "viopex": _rastrear_ssw,
         "mengue": _rastrear_ssw,
     }
-    handler = _handlers.get(transportadora, _rastrear_generico)
+    handler = _handlers.get(transportadora)
+    if handler is None:
+        handler = _rastrear_ssw if _chave_acesso_valida(chave_acesso) else _rastrear_generico
     try:
         await handler(resultado, numero_nfe, cnpj_emitente, chave_acesso)
     except Exception as e:
@@ -173,8 +190,12 @@ async def _rastrear_braspress(
             logger.info(f"[RASTREIO-BRASPRESS] NF {numero_nfe}: {resultado.status_texto}")
 
     except Exception as e:
-        logger.warning(f"[RASTREIO-BRASPRESS] NF {numero_nfe}: erro HTTP: {e}")
-        resultado.status_texto = f"Erro ao rastrear: {e}"
+        msg = str(e or "").strip()
+        logger.warning(f"[RASTREIO-BRASPRESS] NF {numero_nfe}: erro: {msg}")
+        if "ERR_NAME_NOT_RESOLVED" in msg or "getaddrinfo" in msg or "ERR_NETWORK_CHANGED" in msg:
+            resultado.status_texto = "Rastreamento indisponível no momento"
+        else:
+            resultado.status_texto = f"Erro ao rastrear: {msg or 'falha desconhecida'}"
 
 
 async def _braspress_screenshot(resultado: ResultadoRastreio, numero_nfe: str, track_url: str) -> None:
@@ -243,10 +264,19 @@ async def _rastrear_ssw(
         return
 
     chave_limpa = _re.sub(r'\D', '', chave_acesso)
-    base_url = "https://ssw.inf.br/2/rastreamento_danfe"
     if sigla:
-        base_url += f"?sigla_emp={sigla}"
-    resultado.link_rastreio = base_url
+        candidate_urls = [
+            f"https://ssw.inf.br/2/rastreamento_danfe?sigla_emp={sigla}&sc=N",
+            f"https://ssw.inf.br/2/rastreamento_danfe?sigla_emp={sigla}",
+            f"https://sistema.ssw.inf.br/2/rastreamento_danfe?sigla_emp={sigla}&sc=N",
+            f"https://sistema.ssw.inf.br/2/rastreamento_danfe?sigla_emp={sigla}",
+        ]
+    else:
+        candidate_urls = [
+            "https://ssw.inf.br/2/rastreamento_danfe?sc=N",
+            "https://ssw.inf.br/2/rastreamento_danfe",
+        ]
+    resultado.link_rastreio = candidate_urls[0]
 
     browser = None
     try:
@@ -258,12 +288,25 @@ async def _rastrear_ssw(
             ctx = await browser.new_context(viewport={"width": 1366, "height": 900})
             page = await ctx.new_page()
 
-        logger.info(f"[RASTREIO-{resultado.transportadora}] Navegando para {base_url}")
-        await page.goto(base_url, wait_until="domcontentloaded", timeout=30000)
-        await asyncio.sleep(2)
+        page_loaded = False
+        for base_url in candidate_urls:
+            try:
+                logger.info(f"[RASTREIO-{resultado.transportadora}] Navegando para {base_url}")
+                await page.goto(base_url, wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(1.5)
+                if await page.query_selector('#danfe, input[name="danfe"], input[id*="danfe" i]'):
+                    resultado.link_rastreio = base_url
+                    page_loaded = True
+                    break
+            except Exception:
+                continue
+
+        if not page_loaded:
+            resultado.status_texto = "Página de rastreamento indisponível no momento"
+            return
 
         # Preencher campo DANFE (chave de 44 digitos)
-        danfe_field = await page.query_selector('#danfe')
+        danfe_field = await page.query_selector('#danfe, input[name="danfe"], input[id*="danfe" i]')
         if not danfe_field:
             resultado.status_texto = "Campo DANFE nao encontrado na pagina SSW"
             return
@@ -272,7 +315,9 @@ async def _rastrear_ssw(
         await asyncio.sleep(0.5)
 
         # Clicar RASTREAR e aguardar redirecionamento para SSWDetalhado
-        btn = await page.query_selector('#btn_rastrear')
+        btn = await page.query_selector(
+            '#btn_rastrear, a#btn_rastrear, a:has-text("RASTREAR"), button:has-text("RASTREAR")'
+        )
         if btn:
             await btn.click()
         else:
@@ -328,8 +373,12 @@ async def _rastrear_ssw(
             logger.info(f"[RASTREIO-{resultado.transportadora}] NF {numero_nfe}: {resultado.status_texto}")
 
     except Exception as e:
-        logger.warning(f"[RASTREIO-{resultado.transportadora}] NF {numero_nfe}: erro SSW: {e}")
-        resultado.status_texto = f"Erro ao rastrear: {e}"
+        msg = str(e or "").strip()
+        logger.warning(f"[RASTREIO-{resultado.transportadora}] NF {numero_nfe}: erro SSW: {msg}")
+        if "ERR_NAME_NOT_RESOLVED" in msg or "ERR_NETWORK_CHANGED" in msg or "getaddrinfo" in msg:
+            resultado.status_texto = "Rastreamento indisponível no momento"
+        else:
+            resultado.status_texto = f"Erro ao rastrear: {msg or 'falha desconhecida'}"
     finally:
         if browser:
             try:
@@ -349,10 +398,21 @@ async def _rastrear_indisponivel(
     chave_acesso: str,
 ) -> None:
     """Handler para transportadoras cujo site de rastreamento esta fora do ar."""
-    resultado.status_texto = "Rastreamento n\u00e3o dispon\u00edvel para esta transportadora"
+    resultado.status_texto = "Rastreamento não disponível para esta transportadora"
     resultado.link_rastreio = ""
     logger.info(f"[RASTREIO-{resultado.transportadora}] NF {numero_nfe}: rastreamento nao disponivel")
 
+
+async def _rastrear_ignorado(
+    resultado: ResultadoRastreio,
+    numero_nfe: str,
+    cnpj_emitente: str,
+    chave_acesso: str,
+) -> None:
+    """Ignora transportadoras explicitamente fora do escopo de rastreamento."""
+    resultado.status_texto = "Rastreamento ignorado para esta transportadora"
+    resultado.link_rastreio = ""
+    logger.info(f"[RASTREIO-{resultado.transportadora}] NF {numero_nfe}: rastreamento ignorado")
 
 
 async def _rastrear_generico(
