@@ -15,12 +15,14 @@ class AGEXProvider(ProviderBase):
     """Provider AGEX Transportes via Playwright."""
 
     LOGIN_URL = "https://cliente.agex.com.br/login"
+    COTACAO_URL = "https://cliente.agex.com.br/cotacao"
     DEFAULT_TIMEOUT_MS = 30000
 
     def __init__(
         self,
         cnpj: str,
         senha: str,
+        email: str = "",
         cnpj_remetente: Optional[str] = None,
         cnpj_destinatario: Optional[str] = None,
         cep_origem: Optional[str] = None,
@@ -36,6 +38,7 @@ class AGEXProvider(ProviderBase):
     ) -> None:
         super().__init__(nome="AGEX")
         self.cnpj = cnpj
+        self.email = email
         self.senha = senha
         self.cnpj_remetente = cnpj_remetente or cnpj
         self.cnpj_destinatario = cnpj_destinatario
@@ -324,56 +327,59 @@ class AGEXProvider(ProviderBase):
         return False
 
     async def _login(self) -> bool:
+        """Login com e-mail e senha (site atualizado 2025)."""
         if self._logged_in:
             return True
 
-        # Tenta login até 2x (page reload entre tentativas)
+        if not self.email:
+            # sem email configurado: tenta cotacao publica
+            return True
+
         for tentativa in range(1, 3):
             try:
-                logger.info(f"[{self.nome}] Fazendo login (tentativa {tentativa})...")
                 await self._page.goto(
                     self.LOGIN_URL, wait_until="domcontentloaded", timeout=60000
                 )
+                await self._page.wait_for_timeout(1000)
+                # Fechar modal Atencao
                 try:
-                    await self._page.locator("path").nth(1).click(timeout=3000)
-                except PlaywrightTimeoutError:
+                    fechar_btn = self._page.get_by_role("button", name="Fechar")
+                    await fechar_btn.wait_for(state="visible", timeout=3000)
+                    await fechar_btn.click()
+                    await self._page.wait_for_timeout(500)
+                except Exception:
                     pass
-
-                cnpj_input = self._page.locator('input[name="document"]')
-                await cnpj_input.wait_for(timeout=self.DEFAULT_TIMEOUT_MS)
-
-                if not await self._preencher_cnpj_e_aguardar_senha():
-                    await self._salvar_debug(f"login_sem_senha_t{tentativa}")
-                    logger.warning(
-                        f"[{self.nome}] Campo de senha não apareceu (tentativa {tentativa})"
-                    )
-                    if tentativa < 2:
-                        # Recarrega página para nova tentativa
-                        continue
-                    self.last_error = "Campo de senha não apareceu após 2 tentativas"
-                    return False
-
-                senha_input = self._page.locator('input[type="password"]')
+                email_input = self._page.locator('input[name="email"]')
+                await email_input.wait_for(timeout=self.DEFAULT_TIMEOUT_MS)
+                await email_input.fill(self.email)
+                senha_input = self._page.locator('input[name="password"]')
+                await senha_input.wait_for(state="visible", timeout=8000)
                 await senha_input.fill(self.senha)
-                await self._page.wait_for_timeout(200)
-                await self._page.get_by_role("button", name="Iniciar sessão").click()
+                await self._page.get_by_role("button", name="Entrar").click()
                 try:
-                    await self._page.wait_for_url("**/inicio", timeout=self.DEFAULT_TIMEOUT_MS)
-                except PlaywrightTimeoutError:
-                    await self._page.wait_for_url(
-                        "**/cotacao**", timeout=self.DEFAULT_TIMEOUT_MS
-                    )
-                logger.info(f"[{self.nome}] Login realizado com sucesso")
+                    await self._page.wait_for_url("**/inicio**", timeout=self.DEFAULT_TIMEOUT_MS)
+                except Exception:
+                    try:
+                        await self._page.wait_for_url("**/cotacao**", timeout=10000)
+                    except Exception:
+                        if "login" in self._page.url.lower():
+                            body_text = await self._page.inner_text("body")
+                            if "inválid" in body_text.lower() or "incorrect" in body_text.lower():
+                                self.last_error = "Credenciais AGEX invalidas (e-mail ou senha)"
+                                return False
+                            if tentativa < 2:
+                                continue
+                            self.last_error = "Login nao redirecionou apos preencher credenciais"
+                            return False
                 self._logged_in = True
                 return True
             except Exception as e:
-                logger.warning(f"[{self.nome}] Login tentativa {tentativa} falhou: {e}")
                 if tentativa < 2:
                     continue
                 self.last_error = f"Erro no login: {e}"
-                logger.error(f"[{self.nome}] Erro no login após 2 tentativas: {e}")
                 return False
         return False
+
 
     async def pre_login(self):
         """Inicializa browser e faz login antecipadamente."""
