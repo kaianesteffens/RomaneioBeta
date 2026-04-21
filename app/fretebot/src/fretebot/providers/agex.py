@@ -844,76 +844,78 @@ class AGEXProvider(ProviderBase):
     async def _extrair_resultado(self) -> Optional[tuple[float, int, str]]:
         page = self._page
 
-        # Aguardar resultado ou indisponibilidade via polling JS no browser
-        # (evita round-trips Python↔Browser a cada iteração)
+        # Aguardar resultado no layout antigo (#resultado) OU no layout novo
         try:
             status = await page.evaluate("""() => new Promise((resolve) => {
                 const check = () => {
                     const el = document.getElementById('resultado');
                     if (el && el.offsetParent !== null) return resolve('ok');
                     const txt = (document.body.innerText || '').toLowerCase();
-                    if (txt.includes('não conseguimos buscar o preço') ||
+                    if (txt.includes('resultado da cota\u00e7\u00e3o') ||
+                        txt.includes('resultado da cotacao'))
+                        return resolve('ok_new');
+                    if (txt.includes('n\u00e3o conseguimos buscar o pre\u00e7o') ||
                         txt.includes('nao conseguimos buscar o preco') ||
                         txt.includes('entre em contato com nosso comercial'))
                         return resolve('indisponivel');
                 };
                 check();
                 const id = setInterval(check, 300);
-                setTimeout(() => { clearInterval(id); resolve('timeout'); }, 20000);
+                setTimeout(() => { clearInterval(id); resolve('timeout'); }, 30000);
             })""")
         except Exception:
             status = "timeout"
 
         if status == "indisponivel":
-            self.last_error = "Cotação não disponível automaticamente para esta rota"
+            self.last_error = "Cota\u00e7\u00e3o n\u00e3o dispon\u00edvel automaticamente para esta rota"
             logger.info(f"[{self.nome}] {self.last_error}")
             await self._salvar_debug("indisponivel")
             return None
 
-        if status != "ok":
-            self.last_error = "Seção #resultado não apareceu na página"
+        if status not in ("ok", "ok_new"):
+            self.last_error = "P\u00e1gina de resultado da AGEX n\u00e3o apareceu"
             logger.error(f"[{self.nome}] {self.last_error}")
             await self._salvar_debug("sem_resultado")
             return None
 
-        # Extrair via seletores diretos do HTML real (#resultado spans)
-        result_data = await page.evaluate(
-            """() => {
-                const section = document.getElementById('resultado');
-                if (!section) return null;
+        result_data = await page.evaluate("""() => {
+            const out = {};
+            const section = document.getElementById('resultado');
+            if (section) {
                 const spans = section.querySelectorAll('span');
-                const out = {};
-                const prevMap = {};
                 for (const sp of spans) {
                     const parent = sp.closest('p') || sp.parentElement;
                     const parentText = (parent ? parent.textContent : '').toLowerCase();
-                    const val = sp.textContent.trim();
+                    const val = (sp.textContent || '').trim();
                     if (!val) continue;
                     if (parentText.includes('frete')) out.frete = val;
-                    else if (parentText.includes('número') || parentText.includes('numero')) out.numero = val;
+                    else if (parentText.includes('n\u00famero') || parentText.includes('numero')) out.numero = val;
                     else if (parentText.includes('data') && parentText.includes('entrega')) out.dataEntrega = val;
                 }
-                return out;
-            }"""
-        )
-        logger.info(f"[{self.nome}] Dados extraídos de #resultado: {result_data}")
+            }
+            const bodyText = (document.body && document.body.innerText) ? document.body.innerText : '';
+            if (!out.bodyText) out.bodyText = bodyText;
+            return out;
+        }""")
+        logger.info(f"[{self.nome}] Dados extra\u00eddos de #resultado: {result_data}")
 
         valor_frete = None
         if isinstance(result_data, dict) and result_data.get('frete'):
             try:
-                valor_frete = self._parse_brl(
-                    result_data['frete'].replace('R$', '').strip()
-                )
+                valor_frete = self._parse_brl(result_data['frete'].replace('R$', '').strip())
             except Exception:
                 pass
 
-        # Fallback: regex no body inteiro
         if valor_frete is None:
-            texto = await page.inner_text("body")
+            texto = ""
+            if isinstance(result_data, dict):
+                texto = str(result_data.get('bodyText') or "")
+            if not texto:
+                texto = await page.inner_text("body")
             valor_frete = self._extrair_valor_frete_do_texto(texto)
 
         if valor_frete is None:
-            self.last_error = "Valor do frete não encontrado na página de resultado"
+            self.last_error = "Valor do frete n\u00e3o encontrado na p\u00e1gina de resultado"
             logger.error(f"[{self.nome}] {self.last_error}")
             await self._salvar_debug("sem_valor")
             return None
@@ -924,16 +926,30 @@ class AGEXProvider(ProviderBase):
             numero = result_data.get('numero', '')
             data_entrega = result_data.get('dataEntrega', '')
 
+        body_text = str(result_data.get('bodyText') or "") if isinstance(result_data, dict) else ""
+        if body_text:
+            if not numero:
+                m_num = re.search(r"(?i)cota\u00e7[a\u00e3]o\s*:\s*(\d+)", body_text)
+                if m_num:
+                    numero = m_num.group(1)
+            if not data_entrega:
+                m_entrega = re.search(r"(?i)previs[a\u00e3]o\s+de\s+entrega\s*(\d{2}/\d{2}/\d{2,4})", body_text)
+                if m_entrega:
+                    data_entrega = m_entrega.group(1)
+
         prazo_dias = 0
         if data_entrega:
             try:
                 from datetime import datetime as dt
-                entrega = dt.strptime(data_entrega, "%d/%m/%Y")
+                if re.match(r"^\d{2}/\d{2}/\d{2}$", data_entrega):
+                    entrega = dt.strptime(data_entrega, "%d/%m/%y")
+                else:
+                    entrega = dt.strptime(data_entrega, "%d/%m/%Y")
                 prazo_dias = max(0, (entrega - dt.now()).days)
             except Exception:
                 pass
 
-        restricoes = f"Cotação #{numero}" if numero else "Cotação AGEX"
+        restricoes = f"Cota\u00e7\u00e3o #{numero}" if numero else "Cota\u00e7\u00e3o AGEX"
         if data_entrega:
             restricoes += f" - Entrega: {data_entrega}"
 
