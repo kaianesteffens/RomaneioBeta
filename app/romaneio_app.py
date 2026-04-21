@@ -1633,7 +1633,7 @@ class RomaneioWindow(QMainWindow):
         self.progress_bar.setVisible(True)
         self.progress_bar.start_anim()
         self.result_text.setPlainText("Iniciando cotações...\nAguardando primeiras respostas...")
-        self._show_page(1)
+        self._show_page(2)
         self.label_info.setText("Executando cotações de transportadoras...")
         self.label_info.setStyleSheet("color: #1f6feb;")
         threading.Thread(target=self._run_async_cotacao, daemon=True).start()
@@ -1844,7 +1844,7 @@ class RomaneioWindow(QMainWindow):
         if isinstance(event, UdpateResultEvent):
             _result.setPlainText(event.result)
             if not is_forn:
-                self._show_page(1)
+                self._show_page(2)
             self.label_info.setText("Cota\u00e7\u00f5es finalizadas")
             self.label_info.setStyleSheet("color: #067647;")
             self._verificar_erro_divergencia_uf(event.result)
