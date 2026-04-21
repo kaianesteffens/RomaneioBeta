@@ -106,7 +106,7 @@ async def rastrear_nfe(
         "agex": _rastrear_indisponivel,
         "eucatur": _rastrear_ssw,
         "bauer": _rastrear_indisponivel,
-        "alfa": _rastrear_indisponivel,
+        "alfa": _rastrear_alfa,
         "coopex": _rastrear_ssw,
         "viopex": _rastrear_ssw,
         "mengue": _rastrear_ssw,
@@ -390,6 +390,131 @@ async def _rastrear_ssw(
 # ---------------------------------------------------------------------------
 #  Transportadoras sem rastreamento disponivel
 # ---------------------------------------------------------------------------
+
+async def _rastrear_alfa(
+    resultado: ResultadoRastreio,
+    numero_nfe: str,
+    cnpj_emitente: str,
+    chave_acesso: str,
+) -> None:
+    """Rastreio Alfa Transportes via portal público (sem login necessário)."""
+    _ALFA_TRACK_URL = "https://arearestrita.alfatransportes.com.br/rastreio/transbordo-site/"
+    _MESES_PT = {
+        "janeiro": "01", "fevereiro": "02", "março": "03", "abril": "04",
+        "maio": "05", "junho": "06", "julho": "07", "agosto": "08",
+        "setembro": "09", "outubro": "10", "novembro": "11", "dezembro": "12",
+    }
+
+    cnpj_limpo = re.sub(r'\D', '', cnpj_emitente) if cnpj_emitente else ""
+    resultado.link_rastreio = (
+        f"{_ALFA_TRACK_URL}?cnpj={cnpj_limpo}&tipo=1&nota={numero_nfe}"
+        if cnpj_limpo else _ALFA_TRACK_URL
+    )
+
+    if not cnpj_limpo or not numero_nfe:
+        resultado.status_texto = "CNPJ ou número de NF ausentes para rastreamento"
+        return
+
+    browser = None
+    try:
+        browser = await launch_browser_resilient(headless=True)
+        contexts = browser.contexts
+        if contexts:
+            page = contexts[0].pages[0] if contexts[0].pages else await contexts[0].new_page()
+        else:
+            ctx = await browser.new_context(viewport={"width": 1366, "height": 900})
+            page = await ctx.new_page()
+
+        url = f"{_ALFA_TRACK_URL}?cnpj={cnpj_limpo}&tipo=1&nota={numero_nfe}"
+        logger.info(f"[RASTREIO-ALFA] NF {numero_nfe}: navegando para {url}")
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(2)
+
+        body_text = await page.inner_text("body")
+        body_upper = body_text.upper()
+
+        # NF não encontrada ou dados inválidos
+        if "NÃO ENCONTRAMOS NENHUM RASTREAMENTO" in body_upper or (
+            "DADOS INVÁLIDOS" in body_upper and "ENCONTRAMOS" in body_upper
+        ):
+            resultado.status_texto = "NF não encontrada no sistema de rastreamento"
+            logger.info(f"[RASTREIO-ALFA] NF {numero_nfe}: não encontrada")
+            return
+
+        # Detectar entregue
+        termos_entregue = ["ENTREGUE", "ENTREGA REALIZADA", "ENTREGA EFETUADA"]
+        entregue = any(t in body_upper for t in termos_entregue)
+
+        # Extrair previsão de entrega no formato "DD de Mês de YYYY"
+        previsao = ""
+        m_prev = re.search(
+            r'Data Prevista para entrega:\s*(\d{1,2}\s+de\s+\w+\s+de\s+\d{4})',
+            body_text,
+            re.IGNORECASE,
+        )
+        if m_prev:
+            data_str = m_prev.group(1).strip()
+            partes = re.match(r'(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})', data_str, re.IGNORECASE)
+            if partes:
+                dia, mes_nome, ano = partes.groups()
+                mes_num = _MESES_PT.get(mes_nome.lower(), "")
+                previsao = f"{int(dia):02d}/{mes_num}/{ano}" if mes_num else data_str
+        resultado.previsao_entrega = previsao
+
+        # Extrair último evento da tabela de transbordo
+        lines = [l.strip() for l in body_text.split('\n') if l.strip()]
+        in_table = False
+        status_lines: list[str] = []
+        for line in lines:
+            if re.search(r'Transbordo\s+Data\s+Hora', line, re.IGNORECASE):
+                in_table = True
+                continue
+            if in_table:
+                if re.search(
+                    r'^(?:Dados Envolvidos|REMETENTE|Em processo|Data Prevista|Voltar)',
+                    line,
+                    re.IGNORECASE,
+                ):
+                    break
+                # Remove data+hora do final da linha: "DD de Mês de YYYY     HH:MM"
+                status_text = re.sub(
+                    r'\s+\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\s+\d{1,2}:\d{2}\s*$',
+                    '',
+                    line,
+                ).strip()
+                if status_text:
+                    status_lines.append(status_text)
+        last_status = status_lines[-1] if status_lines else ""
+
+        if entregue:
+            resultado.entregue = True
+            resultado.status_texto = "ENTREGUE" + (f" — Previsão: {previsao}" if previsao else "")
+            screenshot_path = _gerar_path_screenshot(numero_nfe)
+            await page.screenshot(path=str(screenshot_path), full_page=True)
+            resultado.screenshot_path = str(screenshot_path)
+            logger.info(f"[RASTREIO-ALFA] NF {numero_nfe}: ENTREGUE. Screenshot: {screenshot_path}")
+        else:
+            resultado.entregue = False
+            if last_status:
+                resultado.status_texto = last_status + (f" — Previsão: {previsao}" if previsao else "")
+            else:
+                resultado.status_texto = "Em trânsito" + (f" — Previsão: {previsao}" if previsao else "")
+            logger.info(f"[RASTREIO-ALFA] NF {numero_nfe}: {resultado.status_texto}")
+
+    except Exception as e:
+        msg = str(e or "").strip()
+        logger.warning(f"[RASTREIO-ALFA] NF {numero_nfe}: erro: {msg}")
+        if "ERR_NAME_NOT_RESOLVED" in msg or "ERR_NETWORK_CHANGED" in msg or "getaddrinfo" in msg:
+            resultado.status_texto = "Rastreamento indisponível no momento"
+        else:
+            resultado.status_texto = f"Erro ao rastrear: {msg or 'falha desconhecida'}"
+    finally:
+        if browser:
+            try:
+                await browser.close()
+            except Exception:
+                pass
+
 
 async def _rastrear_indisponivel(
     resultado: ResultadoRastreio,
