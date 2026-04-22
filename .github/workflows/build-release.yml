@@ -1,0 +1,101 @@
+name: Build and Release FreteBot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        working-directory: installer
+        shell: cmd
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Increment version
+        id: version
+        shell: pwsh
+        run: |
+          $cur   = (Get-Content "appersion.txt").Trim()
+          $parts = $cur.Split('.')
+          $major = $parts[0]
+          $minor = [int]$parts[1] + 1
+          $newVer = "$major.$minor"
+          Set-Content "appersion.txt" -Value $newVer -NoNewline
+          echo "version=$newVer" >> $env:GITHUB_OUTPUT
+          Write-Host "Versao: $cur -> $newVer"
+
+      - name: Build with PyInstaller
+        working-directory: installer
+        shell: cmd
+        run: python -m PyInstaller --clean --noconfirm FreteBot.spec
+
+      - name: Copy CONFIG.example.toml
+        shell: pwsh
+        run: |
+          $dest = "installer\dist\FreteBot\_internal\CONFIG.example.toml"
+          $src  = "app\CONFIG.example.toml"
+          if (!(Test-Path $dest) -and (Test-Path $src)) {
+            Copy-Item $src $dest
+            Write-Host "CONFIG.example.toml copiado para _internal"
+          }
+
+      - name: Create update ZIP
+        id: zip
+        shell: pwsh
+        run: |
+          $ver  = "${{ steps.version.outputs.version }}"
+          $name = "FreteBot-Update-$ver.zip"
+          $path = "installer\$name"
+          Compress-Archive -Path "installer\dist\FreteBot\*" -DestinationPath $path -Force
+          echo "zip_path=$path" >> $env:GITHUB_OUTPUT
+          echo "zip_name=$name" >> $env:GITHUB_OUTPUT
+          $mb = [math]::Round((Get-Item $path).Length / 1MB, 1)
+          Write-Host "ZIP criado: $path ($mb MB)"
+
+      - name: Commit version bump
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add app/version.txt
+          git commit -m "v${{ steps.version.outputs.version }}: bump version [skip ci]"
+          git push origin HEAD
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          $ver = "${{ steps.version.outputs.version }}"
+          $tag = "v$ver"
+          $zip = "${{ steps.zip.outputs.zip_path }}"
+
+          gh release create $tag `
+            --repo "kaianesteffens/RomaneioBeta-releases" `
+            --title "Romaneio Beta v$ver" `
+            --latest `
+            --notes "Correcoes automaticas - v$ver"
+
+          gh release upload $tag $zip `
+            --repo "kaianesteffens/RomaneioBeta-releases"
+
+          Write-Host "Release v$ver publicado em RomaneioBeta-releases"
