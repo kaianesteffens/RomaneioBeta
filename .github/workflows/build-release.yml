@@ -34,12 +34,12 @@ jobs:
         id: version
         shell: pwsh
         run: |
-          $cur   = (Get-Content "appersion.txt").Trim()
+          $cur   = (Get-Content "app\version.txt").Trim()
           $parts = $cur.Split('.')
           $major = $parts[0]
           $minor = [int]$parts[1] + 1
           $newVer = "$major.$minor"
-          Set-Content "appersion.txt" -Value $newVer -NoNewline
+          Set-Content "app\version.txt" -Value $newVer -NoNewline
           echo "version=$newVer" >> $env:GITHUB_OUTPUT
           Write-Host "Versao: $cur -> $newVer"
 
