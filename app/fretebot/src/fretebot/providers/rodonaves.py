@@ -1097,7 +1097,8 @@ class RodonavesProvider(ProviderBase):
                 logger.warning(f"[{self.nome}] Não conseguiu clicar no checkbox de e-mail")
 
         # ─── reCAPTCHA ───
-        await self._mostrar_janela()
+        if not self.headless:
+            await self._mostrar_janela()
         await page.wait_for_timeout(300)
         try:
             await page.locator("#calculateQuotationBtn").scroll_into_view_if_needed()
@@ -1165,12 +1166,13 @@ class RodonavesProvider(ProviderBase):
             if not token.strip():
                 logger.warning(f"[{self.nome}] reCAPTCHA: timeout {self.CAPTCHA_MAX_WAIT_S}s — tentando submeter mesmo assim")
 
-        # Oculta a janela novamente (sempre, mesmo se CAPTCHA nao foi confirmado)
-        await self._ocultar_janela()
+        # Oculta a janela novamente (só se não headless)
+        if not self.headless:
+            await self._ocultar_janela()
         if token.strip():
-            logger.info(f"[{self.nome}] CAPTCHA resolvido, janela ocultada")
+            logger.info(f"[{self.nome}] CAPTCHA resolvido")
         else:
-            logger.info(f"[{self.nome}] Janela ocultada (CAPTCHA nao confirmado, tentando submeter)")
+            logger.info(f"[{self.nome}] CAPTCHA nao confirmado, tentando submeter mesmo assim")
 
         # Log de debug: estado dos campos antes de submeter
         try:
