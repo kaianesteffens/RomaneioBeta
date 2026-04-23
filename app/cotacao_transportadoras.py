@@ -1026,7 +1026,7 @@ class TransportadoraSession:
                     cnpj_pagador = str(rcfg.get("cnpj_pagador", "")).strip()
                     if dominio and usuario and senha and cnpj_pagador:
                         foco_rodonaves = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "rodonaves"
-                        headless_rodonaves = False if foco_rodonaves else bool(rcfg.get("headless", False))
+                        headless_rodonaves = False if foco_rodonaves else bool(rcfg.get("headless", True))
                         self.providers["rodonaves"] = RodonavesProvider(
                             dominio=dominio,
                             usuario=usuario,
@@ -1750,7 +1750,7 @@ async def _executar_cotacoes_com_dados(
                     cnpj_pagador = _digits(str(rcfg.get("cnpj_pagador", "") or ""))
                     if dominio and usuario and senha and len(cnpj_pagador) == 14:
                         foco_rodonaves = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "rodonaves"
-                        headless_rodonaves = False if foco_rodonaves else bool(rcfg.get("headless", False))
+                        headless_rodonaves = False if foco_rodonaves else bool(rcfg.get("headless", True))
                         provider = sessao.providers.get("rodonaves") if sessao else None
                         if provider is not None:
                             headless_atual = bool(getattr(provider, "headless", headless_rodonaves))
