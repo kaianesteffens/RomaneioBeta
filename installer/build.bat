@@ -17,6 +17,12 @@ echo.
 set "PYDIR=%~dp0python-3.12"
 set "PY=%PYDIR%\python.exe"
 
+if defined CI (
+    set "FB_PAUSE_CMD=rem"
+) else (
+    set "FB_PAUSE_CMD=pause"
+)
+
 REM ── 1. Baixar Python embutido se nao existir ─────────────────
 if not exist "%PY%" (
     echo [1/5] Baixando Python 3.12 embutido...
@@ -25,7 +31,7 @@ if not exist "%PY%" (
     curl -L -o "%~dp0python312.zip" "https://www.python.org/ftp/python/3.12.8/python-3.12.8-embed-amd64.zip"
     if %ERRORLEVEL% neq 0 (
         echo ERRO: Falha ao baixar Python. Verifique sua conexao.
-        pause
+        %FB_PAUSE_CMD%
         exit /b 1
     )
 
@@ -60,7 +66,7 @@ echo [2/5] Instalando dependencias Python...
 "%PY%" -m pip install -r requirements.txt --quiet
 if %ERRORLEVEL% neq 0 (
     echo ERRO: Falha ao instalar dependencias!
-    pause
+    %FB_PAUSE_CMD%
     exit /b 1
 )
 "%PY%" -m pip install pyinstaller --quiet
@@ -73,7 +79,7 @@ if not defined CUR_VER set "CUR_VER=1.0"
 for /f %%v in ('powershell -NoProfile -Command "$v='%CUR_VER%'.Trim(); $parts=$v.Split('.'); $major=$parts[0]; $minor=[int]$parts[1]+1; Write-Output \"$major.$minor\""') do set APP_VERSION=%%v
 if not defined APP_VERSION (
     echo ERRO: Falha ao calcular a versão do build.
-    pause
+    %FB_PAUSE_CMD%
     exit /b 1
 )
 >"%VERSION_FILE%" echo !APP_VERSION!
@@ -101,7 +107,7 @@ echo [4/5] Gerando executavel com PyInstaller...
 "%PY%" -m PyInstaller --clean --noconfirm FreteBot.spec
 if %ERRORLEVEL% neq 0 (
     echo ERRO: PyInstaller falhou!
-    pause
+    %FB_PAUSE_CMD%
     exit /b 1
 )
 echo [OK] Executavel gerado em dist\FreteBot\
@@ -142,7 +148,7 @@ if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" (
 "%ISCC%" /DMyAppName="!APP_NAME!" /DMyAppVersion=!APP_VERSION! /DMyOutputBaseFilename="!OUTPUT_BASENAME!" /DMySetupIconFile="%~dp0assets\romaneio.ico" FreteBot-installer.iss
 if %ERRORLEVEL% neq 0 (
     echo ERRO: Inno Setup falhou!
-    pause
+    %FB_PAUSE_CMD%
     exit /b 1
 )
 echo [OK] Instalador gerado!
@@ -160,6 +166,6 @@ if exist "!INSTALLER_PATH!" (
 )
 echo ============================================================
 echo.
-pause
+%FB_PAUSE_CMD%
 
 endlocal

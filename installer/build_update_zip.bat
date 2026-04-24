@@ -16,11 +16,17 @@ echo.
 set "DIST_DIR=%~dp0dist\FreteBot"
 set "VERSION_FILE=%~dp0..\app\version.txt"
 
+if defined CI (
+    set "FB_PAUSE_CMD=rem"
+) else (
+    set "FB_PAUSE_CMD=pause"
+)
+
 REM Verificar se dist existe
 if not exist "%DIST_DIR%\FreteBot.exe" (
     echo ERRO: dist\FreteBot\FreteBot.exe nao encontrado.
     echo Execute build.bat primeiro!
-    pause
+    %FB_PAUSE_CMD%
     exit /b 1
 )
 
@@ -41,7 +47,7 @@ powershell -NoProfile -Command "Compress-Archive -Path '%DIST_DIR%\*' -Destinati
 
 if %ERRORLEVEL% neq 0 (
     echo ERRO: Falha ao criar ZIP!
-    pause
+    %FB_PAUSE_CMD%
     exit /b 1
 )
 
@@ -65,6 +71,6 @@ echo  4. Anexe o arquivo: !ZIP_NAME!
 echo  5. Publique a release
 echo ============================================================
 echo.
-pause
+%FB_PAUSE_CMD%
 
 endlocal

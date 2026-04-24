@@ -9,6 +9,8 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      HAS_RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN != '' }}
 
     steps:
       - name: Checkout
@@ -17,59 +19,51 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Run build.bat (official flow)
+        working-directory: installer
+        shell: cmd
+        env:
+          CI: 1
+        run: build.bat
+
+      - name: Run build_update_zip.bat
+        working-directory: installer
+        shell: cmd
+        env:
+          CI: 1
+        run: build_update_zip.bat
+
+      - name: Resolve generated artifact paths
+        id: meta
+        shell: pwsh
+        run: |
+          $ver = (Get-Content "app\version.txt").Trim()
+          $setup = "installer\installer\Romaneio-Beta-Setup-$ver.exe"
+          $zip = "installer\installer\FreteBot-Update-$ver.zip"
+          $distExe = "installer\dist\FreteBot\FreteBot.exe"
+
+          if (!(Test-Path $distExe)) { throw "Executavel nao encontrado: $distExe" }
+          if (!(Test-Path $zip)) { throw "ZIP de update nao encontrado: $zip" }
+          if (!(Test-Path $setup)) { throw "Instalador Windows nao encontrado: $setup" }
+
+          echo "version=$ver" >> $env:GITHUB_OUTPUT
+          Write-Host "Versao: $ver"
+          Write-Host "Setup:  $setup"
+          Write-Host "ZIP:    $zip"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
         with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        working-directory: installer
-        shell: cmd
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: Increment version
-        id: version
-        shell: pwsh
-        run: |
-          $cur   = (Get-Content "app\version.txt").Trim()
-          $parts = $cur.Split('.')
-          $major = $parts[0]
-          $minor = [int]$parts[1] + 1
-          $newVer = "$major.$minor"
-          Set-Content "app\version.txt" -Value $newVer -NoNewline
-          echo "version=$newVer" >> $env:GITHUB_OUTPUT
-          Write-Host "Versao: $cur -> $newVer"
-
-      - name: Build with PyInstaller
-        working-directory: installer
-        shell: cmd
-        run: python -m PyInstaller --clean --noconfirm FreteBot.spec
-
-      - name: Copy CONFIG.example.toml
-        shell: pwsh
-        run: |
-          $dest = "installer\dist\FreteBot\_internal\CONFIG.example.toml"
-          $src  = "app\CONFIG.example.toml"
-          if (!(Test-Path $dest) -and (Test-Path $src)) {
-            Copy-Item $src $dest
-            Write-Host "CONFIG.example.toml copiado para _internal"
-          }
-
-      - name: Create update ZIP
-        id: zip
-        shell: pwsh
-        run: |
-          $ver  = "${{ steps.version.outputs.version }}"
-          $name = "FreteBot-Update-$ver.zip"
-          $path = "installer\$name"
-          Compress-Archive -Path "installer\dist\FreteBot\*" -DestinationPath $path -Force
-          echo "zip_path=$path" >> $env:GITHUB_OUTPUT
-          echo "zip_name=$name" >> $env:GITHUB_OUTPUT
-          $mb = [math]::Round((Get-Item $path).Length / 1MB, 1)
-          Write-Host "ZIP criado: $path ($mb MB)"
+          name: romaneio-beta-windows-v${{ steps.meta.outputs.version }}
+          if-no-files-found: error
+          path: |
+            installer/dist/FreteBot/**
+            installer/installer/Romaneio-Beta-Setup-${{ steps.meta.outputs.version }}.exe
+            installer/installer/FreteBot-Update-${{ steps.meta.outputs.version }}.zip
 
       - name: Commit version bump
         shell: bash
@@ -77,25 +71,40 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add app/version.txt
-          git commit -m "v${{ steps.version.outputs.version }}: bump version [skip ci]"
-          git push origin HEAD
+          if git diff --cached --quiet; then
+            echo "Sem alteracao de versao para commit"
+            exit 0
+          fi
+          git commit -m "v${{ steps.meta.outputs.version }}: bump version [skip ci]"
+          git push origin HEAD || echo "::warning::Falha ao enviar commit de versao para origin."
 
       - name: Create GitHub Release
+        if: env.HAS_RELEASES_TOKEN == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
         run: |
-          $ver = "${{ steps.version.outputs.version }}"
+          $ver = "${{ steps.meta.outputs.version }}"
           $tag = "v$ver"
-          $zip = "${{ steps.zip.outputs.zip_path }}"
+          $zip = "installer/installer/FreteBot-Update-$ver.zip"
+          $setup = "installer/installer/Romaneio-Beta-Setup-$ver.exe"
 
-          gh release create $tag `
+          gh release view $tag --repo "kaianesteffens/RomaneioBeta-releases" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag `
+              --repo "kaianesteffens/RomaneioBeta-releases" `
+              --title "Romaneio Beta v$ver" `
+              --latest `
+              --notes "Build automatico Windows - v$ver"
+          }
+
+          gh release upload $tag $zip $setup `
             --repo "kaianesteffens/RomaneioBeta-releases" `
-            --title "Romaneio Beta v$ver" `
-            --latest `
-            --notes "Correcoes automaticas - v$ver"
+            --clobber
 
-          gh release upload $tag $zip `
-            --repo "kaianesteffens/RomaneioBeta-releases"
+          Write-Host "Release v$ver publicado/atualizado em RomaneioBeta-releases"
 
-          Write-Host "Release v$ver publicado em RomaneioBeta-releases"
+      - name: Skip external release (no token)
+        if: env.HAS_RELEASES_TOKEN != 'true'
+        shell: pwsh
+        run: Write-Host "RELEASES_TOKEN nao definido; apenas artefatos do workflow foram gerados."
