@@ -112,14 +112,30 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [OK] Executavel gerado em dist\FreteBot\
 
-REM ── 5. Copiar CONFIG.example.toml para dist (se necessário) ──
-if not exist "dist\\FreteBot\\_internal\\CONFIG.example.toml" (
-    if exist \"%~dp0..\\app\\CONFIG.example.toml\" (
-        copy /Y \"%~dp0..\\app\\CONFIG.example.toml\" \"dist\\FreteBot\\_internal\\CONFIG.example.toml\" >nul
-        echo [OK] CONFIG.example.toml copiado para dist\\_internal
+REM ── 5. Garantir arquivos de configuracao no dist ─────────────────
+if not exist "dist\FreteBot\_internal\CONFIG.example.toml" (
+    if exist "%~dp0..\app\CONFIG.example.toml" (
+        copy /Y "%~dp0..\app\CONFIG.example.toml" "dist\FreteBot\_internal\CONFIG.example.toml" >nul
+        echo [OK] CONFIG.example.toml copiado para dist\_internal
+    ) else (
+        echo [AVISO] app\CONFIG.example.toml nao encontrado.
     )
 ) else (
-    echo [OK] CONFIG.example.toml ja presente em dist\\_internal
+    echo [OK] CONFIG.example.toml ja presente em dist\_internal
+)
+
+if not exist "dist\FreteBot\_internal\CONFIG.toml" (
+    if exist "%~dp0..\app\CONFIG.toml" (
+        copy /Y "%~dp0..\app\CONFIG.toml" "dist\FreteBot\_internal\CONFIG.toml" >nul
+        echo [OK] CONFIG.toml copiado de app para dist\_internal
+    ) else if exist "dist\FreteBot\_internal\CONFIG.example.toml" (
+        copy /Y "dist\FreteBot\_internal\CONFIG.example.toml" "dist\FreteBot\_internal\CONFIG.toml" >nul
+        echo [OK] CONFIG.toml gerado a partir de CONFIG.example.toml
+    ) else (
+        echo [AVISO] Nao foi possivel gerar dist\FreteBot\_internal\CONFIG.toml
+    )
+) else (
+    echo [OK] CONFIG.toml ja presente em dist\_internal
 )
 
 REM ── 6. Compilar instalador com Inno Setup ────────────────────
