@@ -32,26 +32,24 @@ _token: str = ""
 _initialized = False
 
 
+def _load_toml_file(path: Path) -> dict:
+    """Carrega TOML aceitando UTF-8 com/sem BOM."""
+    raw = path.read_text(encoding="utf-8-sig")
+    try:
+        import toml  # type: ignore[import-untyped]
+        data = toml.loads(raw)
+    except ImportError:
+        import tomli as _tomli  # type: ignore[import-not-found]
+        data = _tomli.loads(raw)
+    return data if isinstance(data, dict) else {}
+
+
 def _load_config() -> None:
     """Carrega error_gist_id e error_report_token do CONFIG.toml."""
     global _gist_id, _token, _initialized
     if _initialized:
         return
     _initialized = True
-    try:
-        import toml
-    except ImportError:
-        try:
-            import tomli as _tomli  # fallback
-            class _TomlCompat:
-                @staticmethod
-                def load(path):
-                    with open(path, "rb") as f:
-                        return _tomli.load(f)
-            toml = _TomlCompat()
-        except ImportError:
-            print("[error_reporter] AVISO: módulo toml/tomli não disponível", file=sys.stderr, flush=True)
-            return
     try:
         # Mesmo esquema de busca que o restante do app
         for candidate in [
@@ -60,7 +58,7 @@ def _load_config() -> None:
             Path(__file__).parent / "CONFIG.toml",
         ]:
             if candidate.exists():
-                cfg = toml.load(candidate)
+                cfg = _load_toml_file(candidate)
                 fb = cfg.get("fretebot", {})
                 _gist_id = fb.get("error_gist_id", "")
                 _token = fb.get("error_report_token", "")
