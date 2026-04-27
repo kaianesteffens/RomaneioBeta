@@ -339,7 +339,7 @@ CAMPOS_CREDENCIAIS: dict[str, list[tuple[str, str, bool]]] = {
     ],
     "trd": [("email", "Email", False), ("senha", "Senha", True)],
     "agex": [
-        ("cnpj", "CNPJ", False),
+        ("email", "Email", False),
         ("senha", "Senha", True),
         ("cnpj_remetente", "CNPJ Remetente", False),
     ],
@@ -472,7 +472,7 @@ def _criar_config_empresa_vazia(nome: str) -> None:
                       "quantidade": 1, "ufs_atendidas": ["PR", "RS", "SC"]},
             "trd": {"habilitado": False, "email": "", "senha": "", "headless": True,
                     "ufs_atendidas": ["RS", "SC", "PR", "SP", "MG", "ES", "RJ"]},
-            "agex": {"habilitado": False, "cnpj": "", "senha": "", "cnpj_remetente": "",
+            "agex": {"habilitado": False, "email": "", "senha": "", "cnpj_remetente": "",
                      "cnpj_destinatario": "", "headless": True,
                      "ufs_atendidas": ["PR", "SP", "GO", "DF", "TO", "PA", "MT", "MS"]},
             "eucatur": {"habilitado": False, "dominio": "", "usuario": "", "senha": "",
@@ -817,7 +817,12 @@ class ConfiguracoesDialog(QDialog):
             fields: dict[str, QLineEdit] = {}
             for chave, label, eh_senha in campos:
                 le = QLineEdit()
-                le.setText(str(tcfg.get(chave, "") or ""))
+                valor = str(tcfg.get(chave, "") or "")
+                if nome == "agex" and chave == "email" and not valor:
+                    legado = str(tcfg.get("cnpj", "") or "").strip()
+                    if "@" in legado:
+                        valor = legado
+                le.setText(valor)
                 if eh_senha:
                     le.setEchoMode(QLineEdit.Password)
                 le.setObjectName("CredField")
@@ -1649,10 +1654,16 @@ class RomaneioWindow(QMainWindow):
     def _obter_cnpj_empresa(self) -> str:
         """Busca o CNPJ da empresa na configura\u00e7\u00e3o das transportadoras."""
         transp = self._sessao.config.get("transportadoras", {}) or {}
-        for nome in ("braspress", "agex"):
-            cnpj = re.sub(r"\D", "", str((transp.get(nome) or {}).get("cnpj", "") or ""))
+        cnpj = re.sub(r"\D", "", str((transp.get("braspress") or {}).get("cnpj", "") or ""))
+        if len(cnpj) == 14:
+            return cnpj
+
+        agex_cfg = transp.get("agex") or {}
+        for chave in ("cnpj_remetente", "cnpj"):
+            cnpj = re.sub(r"\D", "", str(agex_cfg.get(chave, "") or ""))
             if len(cnpj) == 14:
                 return cnpj
+
         for nome in ("bauer", "rodonaves"):
             cnpj = re.sub(r"\D", "", str((transp.get(nome) or {}).get("cnpj_pagador", "") or ""))
             if len(cnpj) == 14:

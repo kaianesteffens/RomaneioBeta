@@ -38,7 +38,7 @@ ufs_atendidas = ["RS", "SC", "PR", "SP", "MG", "ES", "RJ"]
 
 [transportadoras.agex]
 habilitado = true
-cnpj = "00.000.000/0000-00"
+email = "seu-email@empresa.com"
 senha = "SENHA_AGEX"
 cnpj_remetente = "00.000.000/0000-00"
 cnpj_destinatario = ""
