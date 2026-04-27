@@ -2403,6 +2403,96 @@ def _preparar_runtime_qt() -> None:
         break
 
 
+_SINGLE_INSTANCE_MUTEX_HANDLE = None
+
+
+def _executavel_instalacao_canonica() -> Path:
+    local_appdata = os.getenv("LOCALAPPDATA", "").strip()
+    if not local_appdata:
+        return Path(sys.executable).resolve()
+    return Path(local_appdata) / "Programs" / "Romaneio Beta" / Path(sys.executable).name
+
+
+def _avisar_instalacao_paralela(caminho_canonico: Path) -> None:
+    msg = (
+        "Detectamos mais de uma cópia do FreteBot neste computador.\n\n"
+        f"A instalação oficial é:\n{caminho_canonico}\n\n"
+        "Esta cópia será encerrada para evitar conflito."
+    )
+    try:
+        import ctypes
+        MB_OK = 0x00000000
+        MB_ICONWARNING = 0x00000030
+        ctypes.windll.user32.MessageBoxW(None, msg, "FreteBot", MB_OK | MB_ICONWARNING)
+    except Exception:
+        print(f"[FreteBot] {msg}", file=sys.stderr, flush=True)
+
+
+def _garantir_instalacao_unica() -> bool:
+    """Força execução pela instalação canônica para evitar cópias paralelas."""
+    if not getattr(sys, "frozen", False):
+        return True
+    if os.name != "nt":
+        return True
+
+    try:
+        exe_atual = Path(sys.executable).resolve()
+        exe_canonico = _executavel_instalacao_canonica().resolve()
+
+        if exe_atual == exe_canonico:
+            return True
+
+        if exe_canonico.exists():
+            try:
+                os.startfile(str(exe_canonico))
+            except Exception:
+                pass
+            _avisar_instalacao_paralela(exe_canonico)
+            return False
+    except Exception:
+        return True
+
+    return True
+
+
+def _garantir_instancia_unica() -> bool:
+    """Impede mais de uma instância do app por máquina/sessão de usuário."""
+    global _SINGLE_INSTANCE_MUTEX_HANDLE
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_mutex = kernel32.CreateMutexW
+        create_mutex.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+        create_mutex.restype = wintypes.HANDLE
+
+        _SINGLE_INSTANCE_MUTEX_HANDLE = create_mutex(None, False, "Local\\FreteBot.Singleton.v1")
+        if not _SINGLE_INSTANCE_MUTEX_HANDLE:
+            return True
+
+        ERROR_ALREADY_EXISTS = 183
+        return ctypes.get_last_error() != ERROR_ALREADY_EXISTS
+    except Exception:
+        return True
+
+
+def _avisar_instancia_ativa() -> None:
+    msg = (
+        "O FreteBot já está em execução neste computador.\n\n"
+        "Feche a janela atual antes de abrir outra instância."
+    )
+    try:
+        import ctypes
+        MB_OK = 0x00000000
+        MB_ICONWARNING = 0x00000030
+        ctypes.windll.user32.MessageBoxW(None, msg, "FreteBot", MB_OK | MB_ICONWARNING)
+    except Exception:
+        print(f"[FreteBot] {msg}", file=sys.stderr, flush=True)
+
+
 def main():
     # Redireciona stderr para arquivo de crash ANTES de qualquer import falhar
     _crash_log = None
@@ -2458,6 +2548,13 @@ def main():
             sys.stderr = _FilteredStderr(_raw_file)
     except Exception:
         pass
+
+    if not _garantir_instalacao_unica():
+        return
+
+    if not _garantir_instancia_unica():
+        _avisar_instancia_ativa()
+        return
 
     import traceback as _tb
     try:
