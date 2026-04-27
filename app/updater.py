@@ -42,6 +42,18 @@ class UpdateInfo:
     html_url: str             # URL da release no GitHub
 
 
+def _load_toml_file(path: Path) -> dict[str, Any]:
+    """Carrega TOML aceitando UTF-8 com/sem BOM."""
+    raw = path.read_text(encoding="utf-8-sig")
+    try:
+        import toml  # type: ignore[import-untyped]
+        data = toml.loads(raw)
+    except ImportError:
+        import tomli  # type: ignore[import-not-found]
+        data = tomli.loads(raw)
+    return data if isinstance(data, dict) else {}
+
+
 def _github_api(url: str) -> Any:
     """Faz GET na API do GitHub e retorna JSON."""
     req = Request(url, headers={
@@ -73,7 +85,6 @@ def get_repo_from_config() -> str:
 
     # Tenta ler do CONFIG.toml
     try:
-        import toml  # type: ignore[import-untyped]
         config_paths: list[Path] = []
         appdata = os.getenv("APPDATA")
         if appdata:
@@ -82,11 +93,12 @@ def get_repo_from_config() -> str:
         config_paths.append(base / "CONFIG.toml")
 
         for cp in config_paths:
-            if cp.exists():
-                cfg = toml.load(cp)
-                repo = cfg.get("fretebot", {}).get("github_repo", "")
-                if repo:
-                    return str(repo).strip()
+            if not cp.exists():
+                continue
+            cfg = _load_toml_file(cp)
+            repo = cfg.get("fretebot", {}).get("github_repo", "")
+            if repo:
+                return str(repo).strip()
     except Exception:
         pass
     return ""

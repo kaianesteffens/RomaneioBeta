@@ -124,10 +124,10 @@ romaneio_app.py (startup)
   → check_for_update(repo, versao_atual)
     → GET /repos/{owner}/{repo}/releases/latest
     → compara versões numericamente
-  → se há update: apply_update(info)
+  → se há update: apply_update(info) automaticamente (sem prompt Yes/No)
     → baixa ZIP do asset da release
     → extrai sobre a pasta atual
-  → needs_restart() → restart_app()
+  → restart_app() (reinício automático)
 ```
 
 ### Sistema de Licença
@@ -217,6 +217,8 @@ class ProviderBase(ABC):
 ## Configuração (`CONFIG.toml`)
 
 Lido de (em ordem): `%APPDATA%\FreteBot\CONFIG.toml` → `{_MEIPASS}\CONFIG.toml` → pasta do script.
+
+**Compatibilidade obrigatória:** a leitura deve aceitar `UTF-8` com ou sem BOM (`utf-8-sig`) para evitar falha silenciosa em updater/licença/error reporter.
 
 ```toml
 [fretebot]
@@ -361,6 +363,11 @@ re.search(r'<erro>(\w+)</erro>', xml)
 
 ### config.py
 O `config.py` do pacote `fretebot` **não usa `tomllib`**. A leitura do CONFIG.toml é feita em `fretebot/config.py` (dataclass simples) e nos módulos que precisam (`error_reporter.py`, `updater.py`, etc.) usando o pacote `toml`.
+
+### CONFIG.toml com BOM
+Em algumas máquinas/edições manuais, o `CONFIG.toml` pode ser salvo com BOM (`EF BB BF`).
+
+**Padrão obrigatório:** módulos que leem `CONFIG.toml` (`updater.py`, `license.py`, `error_reporter.py`) devem carregar com `utf-8-sig` antes do parse TOML.
 
 ### Startup Qt (crash nativo no launch)
 Em builds empacotados, o app pode fechar com erro nativo (`0xC0000005`) durante o bootstrap do Qt se herdar paths/plugins de outros ambientes ou drivers OpenGL problemáticos.

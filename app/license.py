@@ -24,6 +24,18 @@ from urllib.request import Request, urlopen
 _HTTP_TIMEOUT = 15
 _GRACE_DAYS = 7  # dias de funcionamento offline após última validação
 
+
+def _load_toml_file(path: Path) -> dict:
+    """Carrega TOML aceitando UTF-8 com/sem BOM."""
+    raw = path.read_text(encoding="utf-8-sig")
+    try:
+        import toml  # type: ignore[import-untyped]
+        data = toml.loads(raw)
+    except ImportError:
+        import tomli  # type: ignore[import-not-found]
+        data = tomli.loads(raw)
+    return data if isinstance(data, dict) else {}
+
 # Onde salvar dados de licença localmente
 def _license_dir() -> Path:
     appdata = os.getenv("APPDATA")
@@ -134,7 +146,6 @@ def _get_gist_url() -> str:
         return url
 
     try:
-        import toml
         config_paths: list[Path] = []
         appdata = os.getenv("APPDATA")
         if appdata:
@@ -143,11 +154,12 @@ def _get_gist_url() -> str:
         config_paths.append(base / "CONFIG.toml")
 
         for cp in config_paths:
-            if cp.exists():
-                cfg = toml.load(cp)
-                url = cfg.get("fretebot", {}).get("license_url", "")
-                if url:
-                    return str(url).strip()
+            if not cp.exists():
+                continue
+            cfg = _load_toml_file(cp)
+            url = cfg.get("fretebot", {}).get("license_url", "")
+            if url:
+                return str(url).strip()
     except Exception:
         pass
     return ""
@@ -181,28 +193,28 @@ def _fetch_licenses_fresh() -> dict:
 def _get_gist_config() -> tuple[str, str]:
     """Retorna (license_gist_id, token) do CONFIG.toml."""
     try:
-        import toml
         for candidate in [
             Path(os.getenv("APPDATA", "")) / "FreteBot" / "CONFIG.toml",
             Path(getattr(sys, "_MEIPASS", "")) / "CONFIG.toml",
             Path(__file__).parent / "CONFIG.toml",
         ]:
-            if candidate.exists():
-                cfg = toml.load(candidate)
-                fb = cfg.get("fretebot", {})
-                # Extrai o gist ID da license_url
-                url = fb.get("license_url", "")
-                gist_id = ""
-                if url and "gist.githubusercontent.com" in url:
-                    # URL: https://gist.githubusercontent.com/USER/GIST_ID/raw/file
-                    parts = url.split("/")
-                    for i, p in enumerate(parts):
-                        if p == "raw" and i >= 1:
-                            gist_id = parts[i - 1]
-                            break
-                token = fb.get("error_report_token", "")
-                if gist_id and token:
-                    return gist_id, token
+            if not candidate.exists():
+                continue
+            cfg = _load_toml_file(candidate)
+            fb = cfg.get("fretebot", {})
+            # Extrai o gist ID da license_url
+            url = fb.get("license_url", "")
+            gist_id = ""
+            if url and "gist.githubusercontent.com" in url:
+                # URL: https://gist.githubusercontent.com/USER/GIST_ID/raw/file
+                parts = url.split("/")
+                for i, p in enumerate(parts):
+                    if p == "raw" and i >= 1:
+                        gist_id = parts[i - 1]
+                        break
+            token = fb.get("error_report_token", "")
+            if gist_id and token:
+                return gist_id, token
     except Exception:
         pass
     return "", ""

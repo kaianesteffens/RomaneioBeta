@@ -2662,48 +2662,40 @@ def main():
             if _repo:
                 _update_info = check_for_update(_repo, _cur_ver)
                 if _update_info:
-                    _resp = QMessageBox.question(
-                        None,
-                        "Atualização Disponível",
-                        f"Nova versão disponível: v{_update_info.version}\n"
-                        f"Versão atual: v{_cur_ver}\n\n"
-                        f"{(_update_info.release_notes or 'Sem notas de versão.')[:500]}\n\n"
-                        f"Deseja atualizar agora?",
-                        QMessageBox.Yes | QMessageBox.No,
-                        QMessageBox.Yes,
+                    _progress_dlg = QMessageBox(
+                        QMessageBox.Information,
+                        "Atualização Automática",
+                        (
+                            f"Nova versão encontrada: v{_update_info.version}.\n"
+                            "Aplicando atualização automática..."
+                        ),
+                        QMessageBox.NoButton,
                     )
-                    if _resp == QMessageBox.Yes:
-                        _progress_dlg = QMessageBox(
-                            QMessageBox.Information,
-                            "Atualizando...",
-                            "Baixando atualização...",
-                            QMessageBox.NoButton,
-                        )
-                        _progress_dlg.show()
+                    _progress_dlg.show()
+                    QApplication.processEvents()
+
+                    def _update_cb(msg: str):
+                        _progress_dlg.setText(msg)
                         QApplication.processEvents()
 
-                        def _update_cb(msg: str):
-                            _progress_dlg.setText(msg)
-                            QApplication.processEvents()
+                    _ok = apply_update(_update_info, callback=_update_cb)
+                    _progress_dlg.close()
 
-                        _ok = apply_update(_update_info, callback=_update_cb)
-                        _progress_dlg.close()
-
-                        if _ok:
-                            QMessageBox.information(
-                                None,
-                                "Atualização Concluída",
-                                f"FreteBot será atualizado para v{_update_info.version}!\n"
-                                "O aplicativo vai fechar e reabrir automaticamente.",
-                            )
-                            restart_app()  # Lança o .bat e fecha o app
-                        else:
-                            QMessageBox.warning(
-                                None,
-                                "Atualização Falhou",
-                                "Não foi possível aplicar a atualização.\n"
-                                "O aplicativo continuará com a versão atual.",
-                            )
+                    if _ok:
+                        QMessageBox.information(
+                            None,
+                            "Atualização Concluída",
+                            f"FreteBot foi atualizado para v{_update_info.version}.\n"
+                            "O aplicativo vai reiniciar automaticamente.",
+                        )
+                        restart_app()  # Lança o .bat e fecha o app
+                    else:
+                        QMessageBox.warning(
+                            None,
+                            "Atualização Falhou",
+                            "Não foi possível aplicar a atualização automática.\n"
+                            "O aplicativo continuará com a versão atual.",
+                        )
         except Exception as _upd_err:
             report_error(context="verificacao_atualizacao")
             print(f"[FreteBot] Verificação de atualização falhou: {_upd_err}", file=sys.stderr, flush=True)
