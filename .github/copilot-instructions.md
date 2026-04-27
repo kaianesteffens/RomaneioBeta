@@ -374,6 +374,29 @@ Em builds empacotados, o app pode fechar com erro nativo (`0xC0000005`) durante 
   - `QApplication.setAttribute(Qt.AA_UseSoftwareOpenGL, True)` antes de `QApplication(...)`.
 - Registrar no log de startup quando `QApplication` for criada com sucesso para facilitar diagnóstico em `%APPDATA%\FreteBot\fretebot.log`.
 
+### Instância única do app
+Para evitar conflitos de sessão e corrupção de estado, o app deve permitir apenas **uma instância por máquina/sessão**.
+
+**Padrão obrigatório no startup (`romaneio_app.py`):**
+- Chamar `_garantir_instancia_unica()` logo no início do `main()`, antes de inicializar Qt.
+- Usar mutex nomeado do Windows (`Local\\FreteBot.Singleton.v1`) para bloquear segunda execução.
+- Se detectar instância existente, mostrar aviso amigável (`_avisar_instancia_ativa()`) e encerrar a nova instância sem seguir o bootstrap.
+
+### Instalação única (sem cópias paralelas)
+Para evitar conflitos entre cópias em pastas diferentes, o app deve rodar pela instalação canônica do usuário.
+
+**Padrão obrigatório no startup (`romaneio_app.py`):**
+- Chamar `_garantir_instalacao_unica()` **antes** de `_garantir_instancia_unica()`.
+- Definir instalação canônica em `%LOCALAPPDATA%\Programs\Romaneio Beta\FreteBot.exe`.
+- Se o executável atual não for o canônico e o canônico existir:
+  - abrir a instalação canônica,
+  - avisar o usuário (`_avisar_instalacao_paralela()`),
+  - encerrar a cópia paralela.
+
+**Padrão obrigatório no instalador (`installer/FreteBot-installer.iss`):**
+- Detectar instalação existente e perguntar: **Atualizar** (recomendado) ou **Substituir** (limpa).
+- Em modo **Substituir**, limpar `{app}` via `[InstallDelete]` antes de copiar os arquivos.
+
 ---
 
 ## 🔄 Auto-atualização destas instruções

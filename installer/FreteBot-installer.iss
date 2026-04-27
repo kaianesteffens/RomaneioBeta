@@ -35,6 +35,7 @@ AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppSupportURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
+UsePreviousAppDir=yes
 DefaultGroupName={#MyAppName}
 OutputDir={#AddBackslash(SourcePath)}installer
 OutputBaseFilename={#MyOutputBaseFilename}
@@ -81,12 +82,47 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 ; Executar após instalação
 Filename: "{app}\{#MyAppExeName}"; Description: "Executar {#MyAppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
+[InstallDelete]
+; Modo "Substituir": remove a instalação atual antes de copiar os novos arquivos
+Type: filesandordirs; Name: "{app}"; Check: DeveSubstituirInstalacao
+
 [UninstallDelete]
 Type: filesandordirs; Name: "{userappdata}\FreteBot\cache"
 
 [Code]
-// Verificar se já existe CONFIG.toml do usuário e não sobrescrever
-function InitializeSetup(): Boolean;
+var
+  _substituirInstalacao: Boolean;
+
+function DeveSubstituirInstalacao(): Boolean;
 begin
-  Result := True;
+  Result := _substituirInstalacao;
+end;
+
+function _existeInstalacaoAtual(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\{#MyAppExeName}'));
+end;
+
+procedure InitializeWizard();
+var
+  _resp: Integer;
+  _msg: string;
+begin
+  _substituirInstalacao := False;
+
+  if _existeInstalacaoAtual() then
+  begin
+    _msg :=
+      'Já existe uma instalação do Romaneio Beta neste computador.' + #13#10 + #13#10 +
+      'Sim: Atualizar (recomendado).' + #13#10 +
+      'Não: Substituir (instalação limpa).' + #13#10 +
+      'Cancelar: Sair da instalação.';
+
+    _resp := SuppressibleMsgBox(_msg, mbConfirmation, MB_YESNOCANCEL, IDYES);
+
+    if _resp = IDCANCEL then
+      Abort
+    else if _resp = IDNO then
+      _substituirInstalacao := True;
+  end;
 end;
