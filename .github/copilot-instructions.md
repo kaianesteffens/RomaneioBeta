@@ -362,6 +362,18 @@ re.search(r'<erro>(\w+)</erro>', xml)
 ### config.py
 O `config.py` do pacote `fretebot` **não usa `tomllib`**. A leitura do CONFIG.toml é feita em `fretebot/config.py` (dataclass simples) e nos módulos que precisam (`error_reporter.py`, `updater.py`, etc.) usando o pacote `toml`.
 
+### Startup Qt (crash nativo no launch)
+Em builds empacotados, o app pode fechar com erro nativo (`0xC0000005`) durante o bootstrap do Qt se herdar paths/plugins de outros ambientes ou drivers OpenGL problemáticos.
+
+**Padrão obrigatório no startup (`romaneio_app.py`):**
+- Chamar `_preparar_runtime_qt()` **antes** de criar `QApplication`.
+- Limpar variáveis herdadas: `QT_PLUGIN_PATH`, `QML2_IMPORT_PATH`, `QML_IMPORT_PATH`.
+- Forçar fallback seguro de renderização:
+  - `QT_OPENGL=software`
+  - `QT_ANGLE_PLATFORM=d3d11`
+  - `QApplication.setAttribute(Qt.AA_UseSoftwareOpenGL, True)` antes de `QApplication(...)`.
+- Registrar no log de startup quando `QApplication` for criada com sucesso para facilitar diagnóstico em `%APPDATA%\FreteBot\fretebot.log`.
+
 ---
 
 ## 🔄 Auto-atualização destas instruções

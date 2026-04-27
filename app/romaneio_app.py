@@ -2364,6 +2364,45 @@ def _instalar_thread_excepthook():
     threading.excepthook = _hook
 
 
+def _preparar_runtime_qt() -> None:
+    """Ajusta ambiente Qt no app empacotado para evitar conflitos de plugin/GPU."""
+    if not getattr(sys, "frozen", False):
+        return
+
+    # Evita falhas nativas de driver OpenGL em algumas máquinas Windows.
+    os.environ.setdefault("QT_OPENGL", "software")
+    os.environ.setdefault("QT_ANGLE_PLATFORM", "d3d11")
+
+    # Remove caminhos herdados de outros softwares Qt (Conda/QGIS/etc).
+    for var in ("QT_PLUGIN_PATH", "QML2_IMPORT_PATH", "QML_IMPORT_PATH"):
+        if var in os.environ:
+            os.environ.pop(var, None)
+
+    exe_dir = Path(sys.executable).resolve().parent
+    meipass = Path(getattr(sys, "_MEIPASS", "") or "")
+    candidatos_plugins: list[Path] = []
+
+    if meipass:
+        candidatos_plugins.extend([
+            meipass / "PySide6" / "plugins",
+            meipass / "plugins",
+        ])
+
+    candidatos_plugins.extend([
+        exe_dir / "_internal" / "PySide6" / "plugins",
+        exe_dir / "PySide6" / "plugins",
+    ])
+
+    for plugin_dir in candidatos_plugins:
+        if not plugin_dir.exists():
+            continue
+        os.environ["QT_PLUGIN_PATH"] = str(plugin_dir)
+        platform_dir = plugin_dir / "platforms"
+        if platform_dir.exists():
+            os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(platform_dir)
+        break
+
+
 def main():
     # Redireciona stderr para arquivo de crash ANTES de qualquer import falhar
     _crash_log = None
@@ -2425,6 +2464,7 @@ def main():
         _instalar_thread_excepthook()
         setup_global_exception_handler()
         install_global_hooks()  # DEPOIS dos outros hooks, para envolver todos
+        _startup_logger = None
 
         # Log de inicialização (diagnóstico: versão, caminhos, etc.)
         try:
@@ -2449,8 +2489,13 @@ def main():
         except Exception as _log_err:
             print(f"[FreteBot] Falha ao configurar logging: {_log_err}", file=sys.stderr, flush=True)
 
+        _preparar_runtime_qt()
+        QApplication.setAttribute(Qt.AA_UseSoftwareOpenGL, True)
+        QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
         app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(True)
+        if _startup_logger is not None:
+            _startup_logger.info("QApplication criada com sucesso")
 
         # ── Verificação de licença ──
         try:
