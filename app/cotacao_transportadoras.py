@@ -128,7 +128,7 @@ ufs_atendidas = ["RS", "SC", "PR", "SP", "MG", "ES", "RJ"]
 
 [transportadoras.agex]
 habilitado = false
-cnpj = ""
+email = ""
 senha = ""
 cnpj_remetente = ""
 cnpj_destinatario = ""
@@ -984,14 +984,22 @@ class TransportadoraSession:
         if AGEXProvider is not None:
             acfg = _cfg_secao("agex")
             if acfg.get("habilitado", True):
-                cnpj = str(acfg.get("cnpj", "")).strip()
+                email = str(acfg.get("email", "")).strip()
+                if not email:
+                    legacy_login = str(acfg.get("cnpj", "")).strip()
+                    if "@" in legacy_login:
+                        email = legacy_login
                 senha = str(acfg.get("senha", "")).strip()
-                if cnpj and senha:
+                if email and senha:
                     foco_agex = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "agex"
                     headless_agex = False if foco_agex else bool(acfg.get("headless", True))
+                    cnpj_cfg = str(acfg.get("cnpj", "")).strip()
+                    cnpj_rem_cfg = str(acfg.get("cnpj_remetente", "")).strip() or cnpj_cfg
                     self.providers["agex"] = AGEXProvider(
-                        cnpj=cnpj, senha=senha,
-                        cnpj_remetente=str(acfg.get("cnpj_remetente", "")).strip() or cnpj,
+                        cnpj=cnpj_cfg,
+                        email=email,
+                        senha=senha,
+                        cnpj_remetente=cnpj_rem_cfg,
                         cnpj_destinatario=str(acfg.get("cnpj_destinatario", "")).strip(),
                         headless=headless_agex,
                     )
@@ -1570,12 +1578,17 @@ async def _executar_cotacoes_com_dados(
                 elif not _uf_atendida(acfg.get("ufs_atendidas"), uf_destino):
                     _log_diag(f"AGEX ignorada (UF {uf_destino} não atendida)")
                 else:
-                    cnpj = str(acfg.get("cnpj", "")).strip()
+                    email = str(acfg.get("email", "")).strip()
+                    if not email:
+                        legacy_login = str(acfg.get("cnpj", "")).strip()
+                        if "@" in legacy_login:
+                            email = legacy_login
                     senha = str(acfg.get("senha", "")).strip()
-                    if cnpj and senha:
+                    if email and senha:
                         foco_agex = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "agex"
                         headless_agex = False if foco_agex else bool(acfg.get("headless", True))
-                        cnpj_rem = _digits(str(acfg.get("cnpj_remetente", "")).strip() or cnpj)
+                        cnpj_cfg = str(acfg.get("cnpj", "")).strip()
+                        cnpj_rem = _digits(str(acfg.get("cnpj_remetente", "")).strip() or cnpj_cfg)
                         cnpj_dest = cnpj_destinatario
                         descricao_mercadoria = str(acfg.get("descricao_mercadoria", "Mercadoria"))
                         tipo_produto = str(acfg.get("tipo_produto", "Artigos Esportivos"))
@@ -1618,7 +1631,8 @@ async def _executar_cotacoes_com_dados(
                                     provider = None
                             if provider is None:
                                 provider = AGEXProvider(
-                                    cnpj=cnpj,
+                                    cnpj=cnpj_cfg,
+                                    email=email,
                                     senha=senha,
                                     cnpj_remetente=cnpj_rem,
                                     cnpj_destinatario=cnpj_dest,
@@ -1665,7 +1679,7 @@ async def _executar_cotacoes_com_dados(
                             )
                             tasks.append(("AGEX", provider, _agex_kwargs))
                     else:
-                        _log_diag("AGEX não configurada (CNPJ/senha ausentes)")
+                        _log_diag("AGEX não configurada (email/senha ausentes)")
       except Exception as e:
         _log_diag(f"Erro ao preparar AGEX: {e}")
         erros_setup.append(ResultadoCotacao(transportadora="AGEX", status="erro", detalhes=str(e)))

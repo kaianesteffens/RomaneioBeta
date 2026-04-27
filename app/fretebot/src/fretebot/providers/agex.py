@@ -20,8 +20,8 @@ class AGEXProvider(ProviderBase):
 
     def __init__(
         self,
-        cnpj: str,
-        senha: str,
+        cnpj: str = "",
+        senha: str = "",
         email: str = "",
         cnpj_remetente: Optional[str] = None,
         cnpj_destinatario: Optional[str] = None,
@@ -241,91 +241,6 @@ class AGEXProvider(ProviderBase):
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
         )
 
-    async def _preencher_cnpj_e_aguardar_senha(self) -> bool:
-        """Preenche CNPJ e tenta revelar campo de senha com múltiplas estratégias.
-
-        Retorna True se o campo de senha ficou visível.
-        """
-        page = self._page
-        cnpj_input = page.locator('input[name="document"]')
-        senha_input = page.locator('input[type="password"]')
-
-        # Estratégia 1: fill() padrão do Playwright
-        await cnpj_input.fill(self.cnpj)
-        try:
-            await senha_input.wait_for(state="visible", timeout=8000)
-            return True
-        except Exception:
-            pass
-
-        # Estratégia 2: limpar e digitar caractere a caractere (aciona eventos React/Angular)
-        logger.info(f"[{self.nome}] fill() não revelou senha, tentando type() char-a-char...")
-        await cnpj_input.click()
-        await cnpj_input.press("Control+a")
-        await cnpj_input.press("Backspace")
-        await cnpj_input.type(self.cnpj, delay=50)
-        await page.wait_for_timeout(300)
-        # Dispara blur/change que SPAs podem exigir
-        await cnpj_input.press("Tab")
-        await page.wait_for_timeout(1000)
-        try:
-            await senha_input.wait_for(state="visible", timeout=8000)
-            return True
-        except Exception:
-            pass
-
-        # Estratégia 3: forçar eventos via JS (input, change, blur)
-        logger.info(f"[{self.nome}] type() não revelou senha, forçando eventos JS...")
-        await page.evaluate("""(cnpj) => {
-            const el = document.querySelector('input[name="document"]');
-            if (!el) return;
-            const nativeSet = Object.getOwnPropertyDescriptor(
-                window.HTMLInputElement.prototype, 'value'
-            ).set;
-            nativeSet.call(el, cnpj);
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            el.dispatchEvent(new Event('blur', { bubbles: true }));
-        }""", self.cnpj)
-        await page.wait_for_timeout(1000)
-        try:
-            await senha_input.wait_for(state="visible", timeout=8000)
-            return True
-        except Exception:
-            pass
-
-        # Estratégia 4: tentar avançar etapa via botões
-        logger.info(f"[{self.nome}] Tentando avançar etapa via botão...")
-        for btn_name in ["Próxima", "Próximo", "Next", "Continuar", "Avançar"]:
-            try:
-                proxima_btn = page.get_by_role("button", name=btn_name)
-                if await proxima_btn.count() > 0 and await proxima_btn.is_visible():
-                    await proxima_btn.click()
-                    await page.wait_for_timeout(1000)
-                    break
-            except Exception:
-                continue
-        try:
-            submit_btn = page.locator('button[type="submit"], input[type="submit"]').first
-            if await submit_btn.count() > 0 and await submit_btn.is_visible():
-                await submit_btn.click()
-                await page.wait_for_timeout(1000)
-        except Exception:
-            pass
-        # Enter no CNPJ como último recurso
-        try:
-            await cnpj_input.press("Enter")
-            await page.wait_for_timeout(1000)
-        except Exception:
-            pass
-        try:
-            await senha_input.wait_for(state="visible", timeout=10000)
-            return True
-        except Exception:
-            pass
-
-        return False
-
     async def _fechar_popups(self) -> None:
         """Fecha qualquer alertdialog ou modal de aviso que esteja bloqueando a tela."""
         page = self._page
@@ -370,14 +285,38 @@ class AGEXProvider(ProviderBase):
             logger.warning(f"[{self.nome}] ViaCEP lookup falhou: {e}")
         return {}
 
+    async def _clicar_botao_fluxo(self, page, labels: tuple[str, ...] = ("Continuar", "Proximo", "Próximo")) -> bool:
+        """Clica no botão principal da etapa, com fallbacks por texto e submit."""
+        for label in labels:
+            try:
+                btn = page.get_by_role("button", name=re.compile(label, re.IGNORECASE)).first
+                if await btn.count() > 0 and await btn.is_visible():
+                    await btn.click()
+                    return True
+            except Exception:
+                continue
+
+        for sel in ("button[type=submit]", "form button[type=submit]"):
+            try:
+                btn = page.locator(sel).first
+                if await btn.count() > 0 and await btn.is_visible():
+                    await btn.click()
+                    return True
+            except Exception:
+                continue
+        return False
+
     async def _login(self) -> bool:
-        """Login com e-mail e senha (site atualizado 2025)."""
+        """Login AGEX via e-mail corporativo + senha."""
         if self._logged_in:
             return True
 
-        if not self.email:
-            # sem email configurado: tenta cotacao publica
-            return True
+        email_cfg = (self.email or "").strip()
+        senha_cfg = (self.senha or "").strip()
+
+        if not email_cfg or not senha_cfg:
+            self.last_error = "AGEX exige email e senha no CONFIG"
+            return False
 
         for tentativa in range(1, 3):
             try:
@@ -385,31 +324,75 @@ class AGEXProvider(ProviderBase):
                     self.LOGIN_URL, wait_until="domcontentloaded", timeout=60000
                 )
                 await self._page.wait_for_timeout(1000)
-                # Fechar qualquer popup/alertdialog que apareça antes do login
                 await self._fechar_popups()
 
-                email_input = self._page.locator('input[name="email"]')
+                if "login" not in (self._page.url or "").lower():
+                    self._logged_in = True
+                    return True
+
+                email_input = self._page.locator(
+                    'input[name="email"], input[type="email"], input[placeholder*="mail" i]'
+                ).first
+                if await email_input.count() == 0:
+                    self.last_error = "Campo de e-mail nao encontrado no login AGEX"
+                    await self._salvar_debug("login_sem_email")
+                    return False
+
+                senha_input = self._page.locator(
+                    'input[name="password"], input[type="password"], input[placeholder*="senha" i]'
+                ).first
                 await email_input.wait_for(timeout=self.DEFAULT_TIMEOUT_MS)
-                await email_input.fill(self.email)
-                senha_input = self._page.locator('input[name="password"]')
-                await senha_input.wait_for(state="visible", timeout=8000)
-                await senha_input.fill(self.senha)
-                await self._page.get_by_role("button", name="Entrar").click()
+                await email_input.fill(email_cfg)
+                await senha_input.wait_for(state="visible", timeout=12000)
+                await senha_input.fill(senha_cfg)
+
+                clicou_login = False
+                for label in ("Entrar", "Iniciar sessão", "Iniciar sessao", "Acessar", "Login"):
+                    try:
+                        btn = self._page.get_by_role("button", name=re.compile(label, re.IGNORECASE)).first
+                        if await btn.count() > 0 and await btn.is_visible():
+                            await btn.click()
+                            clicou_login = True
+                            break
+                    except Exception:
+                        continue
+                if not clicou_login:
+                    submit_btn = self._page.locator('button[type="submit"], input[type="submit"]').first
+                    if await submit_btn.count() > 0:
+                        await submit_btn.click()
+                        clicou_login = True
+                if not clicou_login:
+                    await senha_input.press("Enter")
+
                 try:
                     await self._page.wait_for_url("**/inicio**", timeout=self.DEFAULT_TIMEOUT_MS)
                 except Exception:
                     try:
-                        await self._page.wait_for_url("**/cotacao**", timeout=10000)
+                        await self._page.wait_for_url("**/dashboard**", timeout=10000)
                     except Exception:
-                        if "login" in self._page.url.lower():
-                            body_text = await self._page.inner_text("body")
-                            if "inválid" in body_text.lower() or "incorrect" in body_text.lower():
-                                self.last_error = "Credenciais AGEX invalidas (e-mail ou senha)"
-                                return False
-                            if tentativa < 2:
-                                continue
-                            self.last_error = "Login nao redirecionou apos preencher credenciais"
-                            return False
+                        try:
+                            await self._page.wait_for_url("**/cotacao**", timeout=10000)
+                        except Exception:
+                            pass
+
+                if "login" in (self._page.url or "").lower():
+                    body_lower = (await self._page.inner_text("body")).lower()
+                    if (
+                        "inválid" in body_lower
+                        or "inval" in body_lower
+                        or "incorreta" in body_lower
+                        or "incorreto" in body_lower
+                        or "não autorizado" in body_lower
+                        or "nao autorizado" in body_lower
+                    ):
+                        self.last_error = "Credenciais AGEX invalidas"
+                        return False
+                    if tentativa < 2:
+                        continue
+                    self.last_error = "Login nao redirecionou apos preencher credenciais"
+                    await self._salvar_debug("login_sem_redirect")
+                    return False
+
                 self._logged_in = True
                 return True
             except Exception as e:
@@ -570,28 +553,65 @@ class AGEXProvider(ProviderBase):
                 if not val_atual:
                     await doc_loc.fill(remetente)
             await self._fechar_popups()
-            await page.locator("button[type=submit]").first.click()
+            if not await self._clicar_botao_fluxo(page, ("Continuar", "Proximo", "Próximo")):
+                raise Exception("Botao de continuar nao encontrado na etapa solicitante")
             await page.wait_for_timeout(1500)
 
             # ETAPA 2: Dados da origem (remetente)
             # O endereço do remetente já vem pré-preenchido do perfil da empresa.
             # Basta aguardar a tela aparecer e clicar "Próximo".
             etapa = "remetente"
-            await page.locator("input[name=cep]").first.wait_for(timeout=self.DEFAULT_TIMEOUT_MS)
-            city_val = await page.evaluate(
-                "() => (document.querySelector('input[name=city]') || {}).value || ''"
+            await page.locator("#enderecoColeta, input[name=cep], input[placeholder*='CEP' i]").first.wait_for(
+                timeout=self.DEFAULT_TIMEOUT_MS
             )
-            logger.info(f"[{self.nome}] Step 2 (remetente) carregado: cidade={city_val!r}")
+
+            origem_cep_loc = page.locator(
+                "#enderecoColeta input[name=cep], "
+                "#enderecoColeta input[placeholder*='CEP' i], "
+                "input[name=cep], input[placeholder*='CEP' i]"
+            ).first
+            if await origem_cep_loc.count() > 0:
+                try:
+                    if await origem_cep_loc.is_visible() and await origem_cep_loc.is_enabled() and len(self.cep_origem) == 8:
+                        await origem_cep_loc.click()
+                        await origem_cep_loc.fill("")
+                        await page.keyboard.type(self.cep_origem, delay=40)
+                        await origem_cep_loc.press("Tab")
+                        await page.wait_for_timeout(500)
+                except Exception:
+                    pass
+
+            city_val = await page.evaluate("""() => {
+                const cands = [
+                    document.querySelector('#enderecoColeta input[name=city]'),
+                    document.querySelector('#enderecoColeta input[placeholder="Cidade"]'),
+                    document.querySelector('input[name=city]'),
+                    document.querySelector('input[placeholder="Cidade"]')
+                ].filter(Boolean);
+                return cands.length ? (cands[0].value || '') : '';
+            }""")
+            logger.info(f"[{self.nome}] Step 2 (remetente) carregado; cidade={city_val!r}")
             await self._fechar_popups()
-            await page.locator("button[type=submit]").first.click()
+            if not await self._clicar_botao_fluxo(page, ("Continuar", "Proximo", "Próximo")):
+                raise Exception("Botao de continuar nao encontrado na etapa remetente")
             await page.wait_for_timeout(2000)
 
             # ETAPA 3: Dados do destino (destinatário)
             etapa = "destinatario"
-            await page.locator("input[name=document]").first.wait_for(
+            await page.locator(
+                "#enderecoDestino, input[name=document], input[name=cpfOuCnpj], input[placeholder*='CNPJ' i], input[placeholder*='CPF' i]"
+            ).first.wait_for(
                 timeout=self.DEFAULT_TIMEOUT_MS
             )
-            dest_doc_loc = page.locator("input[name=document]").first
+            dest_scope = page.locator("#enderecoDestino")
+            if await dest_scope.count() > 0:
+                dest_doc_loc = dest_scope.locator(
+                    "input[name=document], input[name=cpfOuCnpj], input[placeholder*='CNPJ' i], input[placeholder*='CPF' i]"
+                ).first
+            else:
+                dest_doc_loc = page.locator(
+                    "input[name=document], input[name=cpfOuCnpj], input[placeholder*='CNPJ' i], input[placeholder*='CPF' i]"
+                ).first
             if await dest_doc_loc.is_enabled():
                 # fill() despacha eventos React corretamente mesmo em masked inputs
                 await dest_doc_loc.click()
@@ -600,7 +620,10 @@ class AGEXProvider(ProviderBase):
                 await dest_doc_loc.press("Tab")
                 await page.wait_for_timeout(300)
             if len(self.cep_destino) == 8:
-                cep_dest_loc = page.locator("input[name=cep]").first
+                if await dest_scope.count() > 0:
+                    cep_dest_loc = dest_scope.locator("input[name=cep], input[placeholder*='CEP' i]").first
+                else:
+                    cep_dest_loc = page.locator("input[name=cep], input[placeholder*='CEP' i]").first
                 await cep_dest_loc.click()
                 # Limpar e digitar char a char para ativar a máscara e o lookup React
                 await cep_dest_loc.fill("")
@@ -610,7 +633,15 @@ class AGEXProvider(ProviderBase):
                 city_val = ""
                 for _ in range(30):
                     city_val = await page.evaluate(
-                        "() => (document.querySelector('input[placeholder=\"Cidade\"]') || {}).value || ''"
+                        """() => {
+                            const cands = [
+                                document.querySelector('#enderecoDestino input[name=city]'),
+                                document.querySelector('#enderecoDestino input[placeholder="Cidade"]'),
+                                document.querySelector('input[name=city]'),
+                                document.querySelector('input[placeholder="Cidade"]')
+                            ].filter(Boolean);
+                            return cands.length ? (cands[0].value || '') : '';
+                        }"""
                     )
                     if city_val and len(city_val) > 1:
                         break
@@ -644,7 +675,8 @@ class AGEXProvider(ProviderBase):
                             await page.wait_for_timeout(100)
                         logger.info(f"[{self.nome}] Endereço preenchido via ViaCEP: {dados_cep.get('localidade')}/{dados_cep.get('uf')}")
             await self._fechar_popups()
-            await page.locator("button[type=submit]").first.click()
+            if not await self._clicar_botao_fluxo(page, ("Continuar", "Proximo", "Próximo")):
+                raise Exception("Botao de continuar nao encontrado na etapa destinatario")
             await page.wait_for_timeout(2000)
 
             # ETAPA 4: Carga
@@ -754,7 +786,8 @@ class AGEXProvider(ProviderBase):
 
             # Continuar para confirmação
             etapa = "confirmar"
-            await page.locator("button[type=submit]").first.click()
+            if not await self._clicar_botao_fluxo(page, ("Continuar", "Proximo", "Próximo", "Confirmar")):
+                raise Exception("Botao de confirmar/continuar nao encontrado apos carga")
             await page.wait_for_timeout(2000)
         except Exception as e:
             if isinstance(e, PlaywrightTimeoutError):
@@ -778,7 +811,7 @@ class AGEXProvider(ProviderBase):
             import re as _re
             confirm_loc = page.locator("button").filter(
                 has_text=_re.compile(
-                    r"confirmar\s+cota[çc][aã]o|solicitar\s+cota[çc][aã]o|confirmar|enviar\s+cota[çc][aã]o",
+                    r"confirmar\s+e\s+ver\s+resultado|confirmar\s+cota[çc][aã]o|solicitar\s+cota[çc][aã]o|confirmar|enviar\s+cota[çc][aã]o",
                     _re.IGNORECASE,
                 )
             )
