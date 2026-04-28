@@ -114,8 +114,14 @@ class TRDProvider(ProviderBase):
                 logger.info(f"[{self.nome}] Fazendo login (tentativa {tentativa})...")
                 await self._page.goto(self.LOGIN_URL, wait_until='domcontentloaded', timeout=60000)
 
+                # Aguarda SSO (Keycloak) completar a cadeia de redirecionamentos antes de buscar campos
+                try:
+                    await self._page.wait_for_load_state('networkidle', timeout=15000)
+                except Exception:
+                    pass  # timeout aceitável; prossegue com verificação dos elementos
+
                 # Verificar se já estamos logados (redirecionou para o dashboard)
-                await self._page.wait_for_timeout(2000)
+                await self._page.wait_for_timeout(500)
                 current_url = self._page.url
                 if 'senior-x/#/' in current_url and '/login' not in current_url:
                     logger.info(f"[{self.nome}] Já logado (redirecionou para dashboard: {current_url})")
@@ -141,7 +147,7 @@ class TRDProvider(ProviderBase):
                 for sel in email_selectors:
                     try:
                         loc = self._page.locator(sel).first
-                        await loc.wait_for(state='visible', timeout=3000)
+                        await loc.wait_for(state='visible', timeout=5000)
                         email_loc = loc
                         logger.info(f"[{self.nome}] Campo de email encontrado via: {sel}")
                         break
@@ -155,7 +161,7 @@ class TRDProvider(ProviderBase):
                             try:
                                 frame_loc = frame.locator(sel).first
                                 if await frame_loc.count() > 0:
-                                    await frame_loc.wait_for(state='visible', timeout=3000)
+                                    await frame_loc.wait_for(state='visible', timeout=5000)
                                     email_loc = frame_loc
                                     self._login_frame = frame
                                     logger.info(f"[{self.nome}] Campo de email encontrado em iframe via: {sel}")
@@ -1244,11 +1250,20 @@ class TRDProvider(ProviderBase):
                 except Exception:
                     return
 
-            self._page.on(
-                "response",
-                lambda response: asyncio.create_task(_capturar_resposta_rede(response)),
-            )
-            
+            def _response_handler(response):
+                asyncio.create_task(_capturar_resposta_rede(response))
+
+            def _registrar_listener():
+                self._page.on("response", _response_handler)
+
+            def _remover_listener():
+                try:
+                    self._page.remove_listener("response", _response_handler)
+                except Exception:
+                    pass
+
+            _registrar_listener()
+
             logger.info(f"[{self.nome}] Navegando para cotação...")
             await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=30000)
             await self._page.wait_for_timeout(500)
@@ -1265,6 +1280,7 @@ class TRDProvider(ProviderBase):
             if session_expired:
                 logger.warning(f"[{self.nome}] Sessão expirada (URL: {current_url}), refazendo login...")
                 self._logged_in = False
+                _remover_listener()
                 if not await self._login():
                     return None
                 # Recriar página após re-login (cookies do contexto mantêm sessão)
@@ -1274,13 +1290,10 @@ class TRDProvider(ProviderBase):
                     pass
                 self._page = await self._context.new_page()
                 await self._page.add_init_script(self._STEALTH_JS)
-                self._page.on(
-                    "response",
-                    lambda response: asyncio.create_task(_capturar_resposta_rede(response)),
-                )
+                _registrar_listener()
                 await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=30000)
                 await self._page.wait_for_timeout(500)
-            
+
             # ETAPA 1: DADOS DO FRETE
             logger.info(f"[{self.nome}] Preenchendo ETAPA 1...")
 
@@ -1723,6 +1736,11 @@ class TRDProvider(ProviderBase):
             self.last_error = str(e)
             logger.error(f"[{self.nome}] Erro na cotação: {e}")
             return None
+        finally:
+            try:
+                _remover_listener()
+            except NameError:
+                pass
 
     async def coteir(self, origem: str, destino: str, peso: float, valor: float,
                     volumes: int = 1, comprimento_cm: int = 0, largura_cm: int = 0,
