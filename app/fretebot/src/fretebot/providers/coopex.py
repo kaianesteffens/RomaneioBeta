@@ -175,7 +175,7 @@ class CoopexProvider(ProviderBase):
             f2.value = '{cnpj_pagador}';
             if (typeof pag === 'function') pag('{cnpj_pagador}');
         }}''')
-        await page.wait_for_timeout(1000)
+        await page.wait_for_timeout(300)
 
         # CEP origem + trigger lookup
         cep_orig = origem.replace('-', '').strip()
@@ -184,7 +184,7 @@ class CoopexProvider(ProviderBase):
             f6.value = '{cep_orig}';
             if (typeof ce2 === 'function') ce2('{cep_orig}');
         }}''')
-        await page.wait_for_timeout(1000)
+        await page.wait_for_timeout(300)
 
         # CEP destino + trigger lookup
         cep_dest = destino.replace('-', '').strip()
@@ -193,7 +193,7 @@ class CoopexProvider(ProviderBase):
             f8.value = '{cep_dest}';
             if (typeof cep === 'function') cep('{cep_dest}');
         }}''')
-        await page.wait_for_timeout(1000)
+        await page.wait_for_timeout(300)
 
         # Frete CIF/FOB, Coletar S, Contribuinte S, Entrega difícil N
         await page.evaluate('''(tipoFrete) => {
@@ -403,6 +403,31 @@ class CoopexProvider(ProviderBase):
 
         logger.info(f"[{self.nome}] Todos os campos resultado DOM: {results}")
 
+        # Se prazo foi encontrado mas vlr_frete ainda está vazio, tenta mais 10s
+        # (SSW às vezes popula os campos em fases distintas)
+        vlr_early = (results.get('vlr_frete', '') or results.get('vlr_total', '') or
+                     results.get('valor_frete', '') or results.get('total_geral', '') or
+                     results.get('total_frete', ''))
+        prazo_early = results.get('prazo', '')
+        if (not vlr_early or vlr_early == '0,00') and prazo_early:
+            logger.info(f"[{self.nome}] Prazo={prazo_early!r} encontrado mas vlr_frete vazio, aguardando mais 10s...")
+            for _extra in range(10):
+                await page.wait_for_timeout(1000)
+                results_extra = await page.evaluate('''() => {
+                    const result = {};
+                    document.querySelectorAll('input').forEach(el => {
+                        if (el.name) result[el.name] = el.value || '';
+                    });
+                    return result;
+                }''')
+                vlr_extra = (results_extra.get('vlr_frete', '') or results_extra.get('vlr_total', '') or
+                             results_extra.get('valor_frete', '') or results_extra.get('total_geral', '') or
+                             results_extra.get('total_frete', ''))
+                if vlr_extra and vlr_extra != '0,00':
+                    logger.info(f"[{self.nome}] vlr_frete encontrado na espera extra: {vlr_extra}")
+                    results = results_extra
+                    break
+
         # Verificar erros na resposta XML
         erro = None
         erro_msg = None
@@ -544,7 +569,13 @@ class CoopexProvider(ProviderBase):
             if xml_responses:
                 for idx, xml in enumerate(xml_responses):
                     logger.warning(f"[{self.nome}] XML #{idx+1} capturado ({len(xml)} chars): {xml[:500]}")
-            self.last_error = f"Sem valor de frete retornado (campos DOM: vlr_frete={vlr_frete_str!r}, nro_cotacao={nro_cotacao!r}, prazo={prazo_str!r})"
+            if prazo_str:
+                self.last_error = (
+                    f"Sem valor de frete retornado (prazo={prazo_str!r} encontrado — "
+                    f"rota possivelmente sem precificação automática no SSW)"
+                )
+            else:
+                self.last_error = f"Sem valor de frete retornado (campos DOM: vlr_frete={vlr_frete_str!r}, nro_cotacao={nro_cotacao!r}, prazo={prazo_str!r})"
             logger.warning(f"[{self.nome}] {self.last_error}")
             return None
 

@@ -93,6 +93,38 @@ class BraspressPlaywrightProvider(ProviderBase):
             for (comp, larg, alt), qtd in agrupadas.items()
         ]
 
+    async def _fechar_modais_genericos(self, page):
+        """Remove modais promocionais (ex: upload CTE / 'otimizar emissão') que bloqueiam o resultado."""
+        try:
+            removed = await page.evaluate("""() => {
+                let count = 0;
+                const modals = document.querySelectorAll('.modal.in, .modal[style*="block"]');
+                for (const m of modals) {
+                    const txt = (m.innerText || '').toLowerCase();
+                    if (
+                        txt.includes('otimizar') ||
+                        txt.includes('cotação online') ||
+                        txt.includes('conhecimento de embarque') ||
+                        txt.includes('visando otimizar')
+                    ) {
+                        m.remove();
+                        count++;
+                    }
+                }
+                if (count > 0) {
+                    document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+                    document.body.classList.remove('modal-open');
+                    document.body.style.removeProperty('overflow');
+                    document.body.style.removeProperty('padding-right');
+                }
+                return count;
+            }""")
+            if removed:
+                logger.info(f"[Braspress] Removeu {removed} modal(is) promocional(is)")
+                await page.wait_for_timeout(200)
+        except Exception:
+            pass
+
     async def _fechar_alert_xml_modal(self, page):
         """Remove o modal #alertXmlModal e backdrop do DOM (incondicional)."""
         try:
@@ -588,6 +620,8 @@ class BraspressPlaywrightProvider(ProviderBase):
             ultimo_status: dict | None = None
             for _poll in range(30):  # até ~40s
                 await page.wait_for_timeout(800)
+                # Fecha modal promocional que pode bloquear o resultado
+                await self._fechar_modais_genericos(page)
                 status = await page.evaluate(
                     """() => {
                         const clean = (v) => (v || '').replace(/\\s+/g, ' ').trim();
@@ -643,6 +677,10 @@ class BraspressPlaywrightProvider(ProviderBase):
                     ):
                         resultado_pronto = True
                         break
+
+            # Fecha modal promocional antes de tentar extrair (pode ter aparecido após calcular)
+            await self._fechar_modais_genericos(page)
+            await self._fechar_alert_xml_modal(page)
 
             if not resultado_pronto:
                 # Log estado atual para debug
