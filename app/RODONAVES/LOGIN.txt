@@ -1,5 +1,0 @@
-<li class="area-vip">
-                                <a href="#" class="btn btn-vip" data-toggle="modal" data-target="#userModal">
-                                    <i class="fa fa-user"></i>&nbsp;&nbsp;  Área vip
-                                </a>
-                            </li>
