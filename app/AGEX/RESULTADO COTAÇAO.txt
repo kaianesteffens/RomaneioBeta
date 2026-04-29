@@ -1,1 +1,49 @@
-<div id="resultado" class="sc-fjhLSj evrxVI"><div class="sc-coYmiO dOCDzg"><span style="box-sizing: border-box; display: inline-block; overflow: hidden; width: initial; height: initial; background: none; opacity: 1; border: 0px; margin: 0px; padding: 0px; position: relative; max-width: 100%;"><span style="box-sizing: border-box; display: block; width: initial; height: initial; background: none; opacity: 1; border: 0px; margin: 0px; padding: 0px; max-width: 100%;"><img alt="" aria-hidden="true" src="data:image/svg+xml,%3csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20version=%271.1%27%20width=%2716%27%20height=%2716%27/%3e" style="display: block; max-width: 100%; width: initial; height: initial; background: none; opacity: 1; border: 0px; margin: 0px; padding: 0px;"></span><img alt="Imagem do status da etapa" srcset="/icons/Pages/PainelCliente/Cotacao/check-green.svg 1x, /icons/Pages/PainelCliente/Cotacao/check-green.svg 2x" src="/icons/Pages/PainelCliente/Cotacao/check-green.svg" decoding="async" data-nimg="intrinsic" style="position: absolute; inset: 0px; box-sizing: border-box; padding: 0px; border: none; margin: auto; display: block; width: 0px; height: 0px; min-width: 100%; max-width: 100%; min-height: 100%; max-height: 100%;"><noscript></noscript></span><p>Resultado</p></div><div class="sc-ewBhFl bWbacR"><div class="sc-bCrHVQ hmvHjd"><div><p>Frete: <span>R$ 118,90</span></p></div><div><p>Número da cotação: <span>2093428</span></p></div><div><p>Data de entrega estimada: <span>06/03/2026</span></p></div></div><div class="sc-iSmSVH kNztzy"><button>Agendar coleta</button><button>Nova cotação</button></div></div></div>
+<!-- AGEX Portal — Resultado da Cotação — capturado em 2026-04-29 -->
+<!-- URL: https://cliente.agex.com.br/cotacao/resultado/{numero_cotacao} -->
+<!-- PORTAL NOVO: página dedicada (antigo era div#resultado na mesma página) -->
+
+<!-- Exemplo real capturado: /cotacao/resultado/2197136 -->
+
+<!-- ── Número da cotação ──────────────────────────────────────────────────── -->
+<span class="text-base font-bold">Cotação: 2197136</span>
+<!-- Extrair: re.search(r"/cotacao/resultado/(\d+)", page.url) — mais confiável -->
+
+<!-- ── Valor do frete ─────────────────────────────────────────────────────── -->
+<!-- Layout:
+     <span class="font-medium text-foreground">Frete</span>
+     <span class="font-medium text-foreground">R$ 244,75</span>  ← este -->
+<!-- Seletor JS: spans.find(s => /^R\$\s*[\d.,]+$/.test(s.textContent.trim())) -->
+
+<!-- ── Datas ───────────────────────────────────────────────────────────────── -->
+<!-- <span class="font-medium text-muted-foreground">11/05/26</span>  ← Previsão entrega (1ª data) -->
+<!-- <span class="font-medium text-muted-foreground">29/04/26</span>  ← Cotado em -->
+<!-- <span class="font-medium text-muted-foreground">09/05/26</span>  ← Válida até -->
+<!-- Seletor JS: spans.find(s => /^\d{2}\/\d{2}\/\d{2,4}$/.test(s.textContent.trim())) -->
+<!-- Formato: DD/MM/YY (2 dígitos no ano) -->
+
+<!-- ── Aguardar resultado ──────────────────────────────────────────────────── -->
+<!-- page.wait_for_url("**/cotacao/resultado/**", timeout=60000) -->
+
+<!-- ── Estrutura completa da página (simplificada) ────────────────────────── -->
+<!--
+  <h1>Resultado da cotação</h1>
+  <div>
+    <span class="text-base font-bold">Cotação: 2197136</span>
+    <span class="font-medium text-foreground">Frete</span>
+    <span class="font-medium text-foreground">R$ 244,75</span>
+    <span class="font-medium text-muted-foreground">Previsão de entrega</span>
+    <span class="font-medium text-muted-foreground">11/05/26</span>
+    <span class="font-medium text-muted-foreground">Cotado em</span>
+    <span class="font-medium text-muted-foreground">29/04/26</span>
+    <span class="font-medium text-muted-foreground">Cotação válida até</span>
+    <span class="font-medium text-muted-foreground">09/05/26</span>
+    <p class="rounded-md bg-yellow-100 p-4 text-sm text-yellow-9">
+      O valor de R$ 244,75 é válido para contratação até dia 09/05/26...
+    </p>
+    <button>Agendar coleta</button>  → href="/coleta/{numero}"
+  </div>
+  <div>
+    <h2>Detalhes desta cotação</h2>
+    ... solicitante, pagador, endereço coleta, endereço destino, carga ...
+  </div>
+-->
