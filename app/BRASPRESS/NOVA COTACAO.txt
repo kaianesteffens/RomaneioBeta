@@ -1,1 +1,0 @@
-<a class="btn btn-success" type="button" id="btnNovo">Nova Cotacao</a>

@@ -1,8 +1,0 @@
-<tr>
-							<td><span class="label label-primary label-result">27/02/2026</span></td>
-							<td><span class="label label-primary label-result">5</span></td>
-							<td><span class="label label-primary label-result">22,01</span></td>
-							<td><span class="label label-primary label-result">20/02/2026</span></td>
-							<td><span class="label label-primary label-result">346317388</span></td>
-							<td><span class="label label-primary label-result">OK</span></td>
-						</tr>
