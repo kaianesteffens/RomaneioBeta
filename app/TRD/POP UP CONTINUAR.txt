@@ -1,4 +1,0 @@
-<div class="modal-footer ng-scope">
-  <button ng-click="ok()" class="btn btn-primary ng-binding">Continuar</button>
-  <button ng-click="cancel()" class="btn btn-link">Cancelar</button>
-</div>
