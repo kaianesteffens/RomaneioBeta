@@ -285,7 +285,7 @@ class AGEXProvider(ProviderBase):
             logger.warning(f"[{self.nome}] ViaCEP lookup falhou: {e}")
         return {}
 
-    async def _clicar_botao_fluxo(self, page, labels: tuple[str, ...] = ("Continuar", "Proximo", "Próximo")) -> bool:
+    async def _clicar_botao_fluxo(self, page, labels: tuple[str, ...] = ("Próximo", "Proximo", "Continuar")) -> bool:
         """Clica no botão principal da etapa, com fallbacks por texto e submit."""
         for label in labels:
             try:
@@ -365,10 +365,10 @@ class AGEXProvider(ProviderBase):
                     await senha_input.press("Enter")
 
                 try:
-                    await self._page.wait_for_url("**/inicio**", timeout=self.DEFAULT_TIMEOUT_MS)
+                    await self._page.wait_for_url("**/dashboard**", timeout=self.DEFAULT_TIMEOUT_MS)
                 except Exception:
                     try:
-                        await self._page.wait_for_url("**/dashboard**", timeout=10000)
+                        await self._page.wait_for_url("**/inicio**", timeout=10000)
                     except Exception:
                         try:
                             await self._page.wait_for_url("**/cotacao**", timeout=10000)
@@ -402,7 +402,6 @@ class AGEXProvider(ProviderBase):
                 return False
         return False
 
-
     async def pre_login(self):
         """Inicializa browser e faz login antecipadamente."""
         await self._init_browser()
@@ -410,8 +409,6 @@ class AGEXProvider(ProviderBase):
 
     async def cleanup(self):
         """Fecha o browser."""
-        # Ordem: page → context → browser → playwright (Node.js driver)
-        # Parar playwright por último evita EPIPE no Node.js
         try:
             if self._page and not self._page.is_closed():
                 await self._page.close()
@@ -447,348 +444,372 @@ class AGEXProvider(ProviderBase):
         except Exception as e:
             logger.warning(f"[{self.nome}] Falha ao salvar debug: {e}")
 
-    async def _selecionar_pagador_radix(self, page, tipo_pagador: str) -> None:
-        """Seleciona tipo pagador (SELECT nativo da interface atual do AGEX)."""
-        # Interface atual usa <SELECT> nativo sem name/id visível na tela
-        sel = page.locator("select").first
-        if await sel.count() > 0:
-            opts = await page.evaluate("""() => {
-                const sel = document.querySelector('select');
-                if (!sel) return [];
-                return Array.from(sel.options).map(o => ({value: o.value, text: o.text.trim()}));
-            }""")
-            logger.info(f"[{self.nome}] AGEX SELECT options: {opts}")
-            # Fragmentos para matching parcial (sem acentos, case-insensitive)
-            fragmento_map = {
-                "remetente": "emetente",
-                "destinatario": "estinat",
-                "terceiro": "erceiro",
-            }
-            fragmento = fragmento_map.get(tipo_pagador.lower(), "emetente")
-            matched = next(
-                (o for o in opts if fragmento.lower() in o["text"].lower()
-                 or fragmento.lower() in o["value"].lower()),
-                None
+    async def _set_react_select(self, page, value: str, selector: str = "select") -> bool:
+        """Define valor em <select> React via native setter para disparar onChange."""
+        try:
+            result = await page.evaluate(
+                """([sel, val]) => {
+                    const selects = Array.from(document.querySelectorAll(sel));
+                    const visible = selects.filter(s => s.offsetParent !== null);
+                    if (!visible.length) return false;
+                    const setter = Object.getOwnPropertyDescriptor(
+                        window.HTMLSelectElement.prototype, 'value'
+                    ).set;
+                    setter.call(visible[0], val);
+                    visible[0].dispatchEvent(new Event('change', { bubbles: true }));
+                    return true;
+                }""",
+                [selector, value],
             )
-            if matched and matched["value"]:
-                await sel.select_option(value=matched["value"])
-            elif matched:
-                await sel.select_option(label=matched["text"])
-            else:
-                # Fallback: selecionar primeiro option não-vazio
-                non_empty = next((o for o in opts if o["value"]), None)
-                if non_empty:
-                    await sel.select_option(value=non_empty["value"])
-            await page.wait_for_timeout(200)
-            return
-        # Fallback: Radix Select (interface antiga ou futura)
-        combo = page.locator("[id$='-form-item'][aria-expanded], button[role='combobox']").first
-        if await combo.count() > 0:
-            await combo.click()
-            await page.wait_for_timeout(300)
-            texto_map = {
-                "remetente": "Remetente",
-                "destinatario": "Destinatario",
-                "terceiro": "Terceiro",
-            }
-            texto = texto_map.get(tipo_pagador.lower(), "Remetente")
-            opt = page.locator("[role=option]").filter(has_text=texto).first
-            if await opt.count() > 0:
-                await opt.click()
-                await page.wait_for_timeout(200)
+            return bool(result)
+        except Exception as e:
+            logger.warning(f"[{self.nome}] _set_react_select falhou: {e}")
+            return False
 
-    async def _preencher_endereco_cep(self, page, cep: str) -> None:
-        """Preenche campo CEP e aguarda lookup de cidade/estado."""
-        cep_loc = page.locator("input[name=cep]").first
-        await cep_loc.fill(cep)
-        await cep_loc.press("Tab")
-        # Aguardar lookup de CEP (até 5s)
-        for _ in range(20):
-            city_val = await page.evaluate(
-                "() => (document.querySelector('input[name=city]') || {}).value || ''"
+    async def _set_react_input(self, page, selector: str, value: str) -> bool:
+        """Define valor em <input> React via native setter para disparar onChange."""
+        try:
+            result = await page.evaluate(
+                """([sel, val]) => {
+                    const input = document.querySelector(sel);
+                    if (!input) return false;
+                    const setter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value'
+                    ).set;
+                    setter.call(input, val);
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    return true;
+                }""",
+                [selector, value],
             )
-            if city_val and len(city_val) > 1:
-                break
-            await page.wait_for_timeout(250)
+            return bool(result)
+        except Exception as e:
+            logger.warning(f"[{self.nome}] _set_react_input({selector}) falhou: {e}")
+            return False
+
+    async def _selecionar_pagador(self, page, tipo_pagador: str) -> None:
+        """Seleciona tipo pagador no <select> nativo do portal AGEX."""
+        # Portal novo: <select> sem name/id; primeiro select visível da página
+        fragmento_map = {
+            "remetente": "emetente",
+            "destinatario": "estinat",
+            "terceiro": "erceiro",
+        }
+        fragmento = fragmento_map.get(tipo_pagador.lower(), "emetente")
+
+        opts = await page.evaluate("""() => {
+            const selects = Array.from(document.querySelectorAll('select'))
+                .filter(s => s.offsetParent !== null);
+            if (!selects.length) return [];
+            return Array.from(selects[0].options).map(o => ({
+                value: o.value, text: o.text.trim()
+            }));
+        }""")
+        logger.info(f"[{self.nome}] Pagador SELECT options: {opts}")
+
+        matched = next(
+            (o for o in opts
+             if fragmento.lower() in o["text"].lower() or fragmento.lower() in o["value"].lower()),
+            None,
+        )
+        target = matched["value"] if matched and matched["value"] else (
+            matched["text"] if matched else None
+        )
+        if not target:
+            # Fallback: primeiro option não-vazio
+            non_empty = next((o for o in opts if o["value"]), None)
+            target = non_empty["value"] if non_empty else None
+
+        if target:
+            await self._set_react_select(page, target)
+        await page.wait_for_timeout(200)
 
     async def _preencher_cotacao(
         self, remetente: str, destinatario: str, peso: float, valor: float,
         tipo_pagador: str = "remetente",
     ) -> None:
         page = self._page
-        etapa = "abrir_cotacoes"
+        etapa = "abrir_cotacao"
         try:
-            # Nova interface usa /cotacao (não /cotacao/cotar)
+            # ── Navegar para /cotacao ──────────────────────────────────────────
             await page.goto(
-                "https://cliente.agex.com.br/cotacao",
+                self.COTACAO_URL,
                 wait_until="domcontentloaded",
                 timeout=self.DEFAULT_TIMEOUT_MS,
             )
             await page.wait_for_timeout(800)
 
-            # Verificar se foi redirecionado para login
-            current_url = page.url
-            logger.info(f"[{self.nome}] URL após goto cotação: {current_url}")
-            if "login" in current_url.lower():
+            if "login" in (page.url or "").lower():
                 logger.warning(f"[{self.nome}] Sessão expirou, refazendo login...")
                 self._logged_in = False
                 if not await self._login():
                     raise Exception("Re-login falhou")
                 await page.goto(
-                    "https://cliente.agex.com.br/cotacao",
+                    self.COTACAO_URL,
                     wait_until="domcontentloaded",
                     timeout=self.DEFAULT_TIMEOUT_MS,
                 )
                 await page.wait_for_timeout(800)
 
-            # ETAPA 1: Tipo Pagador (nova interface: Radix Select)
-            etapa = "solicitante"
+            # ── ETAPA 1: Tipo Pagador ─────────────────────────────────────────
+            etapa = "tipo_pagador"
             await self._fechar_popups()
-            await self._selecionar_pagador_radix(page, tipo_pagador)
-            # CNPJ do pagador (input[name=document]) — já deve vir preenchido,
-            # mas garantimos que está correto.
-            doc_loc = page.locator("input[name=document]").first
-            if await doc_loc.count() > 0:
-                val_atual = await doc_loc.input_value()
-                if not val_atual:
-                    await doc_loc.fill(remetente)
-            await self._fechar_popups()
-            if not await self._clicar_botao_fluxo(page, ("Continuar", "Proximo", "Próximo")):
-                raise Exception("Botao de continuar nao encontrado na etapa solicitante")
-            await page.wait_for_timeout(1500)
+            # Aguardar o select de pagador ficar visível
+            try:
+                await page.locator("select").first.wait_for(
+                    state="visible", timeout=self.DEFAULT_TIMEOUT_MS
+                )
+            except PlaywrightTimeoutError:
+                logger.warning(f"[{self.nome}] Select pagador não apareceu; tentando continuar")
 
-            # ETAPA 2: Dados da origem (remetente)
-            # O endereço do remetente já vem pré-preenchido do perfil da empresa.
-            # Basta aguardar a tela aparecer e clicar "Próximo".
-            etapa = "remetente"
-            await page.locator("#enderecoColeta, input[name=cep], input[placeholder*='CEP' i]").first.wait_for(
-                timeout=self.DEFAULT_TIMEOUT_MS
-            )
-
-            origem_cep_loc = page.locator(
-                "#enderecoColeta input[name=cep], "
-                "#enderecoColeta input[placeholder*='CEP' i], "
-                "input[name=cep], input[placeholder*='CEP' i]"
-            ).first
-            if await origem_cep_loc.count() > 0:
-                try:
-                    if await origem_cep_loc.is_visible() and await origem_cep_loc.is_enabled() and len(self.cep_origem) == 8:
-                        await origem_cep_loc.click()
-                        await origem_cep_loc.fill("")
-                        await page.keyboard.type(self.cep_origem, delay=40)
-                        await origem_cep_loc.press("Tab")
-                        await page.wait_for_timeout(500)
-                except Exception:
-                    pass
-
-            city_val = await page.evaluate("""() => {
-                const cands = [
-                    document.querySelector('#enderecoColeta input[name=city]'),
-                    document.querySelector('#enderecoColeta input[placeholder="Cidade"]'),
-                    document.querySelector('input[name=city]'),
-                    document.querySelector('input[placeholder="Cidade"]')
-                ].filter(Boolean);
-                return cands.length ? (cands[0].value || '') : '';
-            }""")
-            logger.info(f"[{self.nome}] Step 2 (remetente) carregado; cidade={city_val!r}")
-            await self._fechar_popups()
-            if not await self._clicar_botao_fluxo(page, ("Continuar", "Proximo", "Próximo")):
-                raise Exception("Botao de continuar nao encontrado na etapa remetente")
-            await page.wait_for_timeout(2000)
-
-            # ETAPA 3: Dados do destino (destinatário)
-            etapa = "destinatario"
-            await page.locator(
-                "#enderecoDestino, input[name=document], input[name=cpfOuCnpj], input[placeholder*='CNPJ' i], input[placeholder*='CPF' i]"
-            ).first.wait_for(
-                timeout=self.DEFAULT_TIMEOUT_MS
-            )
-            dest_scope = page.locator("#enderecoDestino")
-            if await dest_scope.count() > 0:
-                dest_doc_loc = dest_scope.locator(
-                    "input[name=document], input[name=cpfOuCnpj], input[placeholder*='CNPJ' i], input[placeholder*='CPF' i]"
-                ).first
-            else:
-                dest_doc_loc = page.locator(
-                    "input[name=document], input[name=cpfOuCnpj], input[placeholder*='CNPJ' i], input[placeholder*='CPF' i]"
-                ).first
-            if await dest_doc_loc.is_enabled():
-                # fill() despacha eventos React corretamente mesmo em masked inputs
-                await dest_doc_loc.click()
-                await dest_doc_loc.fill(destinatario)
-                await page.wait_for_timeout(400)
-                await dest_doc_loc.press("Tab")
-                await page.wait_for_timeout(300)
-            if len(self.cep_destino) == 8:
-                if await dest_scope.count() > 0:
-                    cep_dest_loc = dest_scope.locator("input[name=cep], input[placeholder*='CEP' i]").first
-                else:
-                    cep_dest_loc = page.locator("input[name=cep], input[placeholder*='CEP' i]").first
-                await cep_dest_loc.click()
-                # Limpar e digitar char a char para ativar a máscara e o lookup React
-                await cep_dest_loc.fill("")
-                await page.keyboard.type(self.cep_destino, delay=60)
-                await cep_dest_loc.press("Tab")
-                # Aguardar lookup automático da página
-                city_val = ""
-                for _ in range(30):
-                    city_val = await page.evaluate(
-                        """() => {
-                            const cands = [
-                                document.querySelector('#enderecoDestino input[name=city]'),
-                                document.querySelector('#enderecoDestino input[placeholder="Cidade"]'),
-                                document.querySelector('input[name=city]'),
-                                document.querySelector('input[placeholder="Cidade"]')
-                            ].filter(Boolean);
-                            return cands.length ? (cands[0].value || '') : '';
-                        }"""
-                    )
-                    if city_val and len(city_val) > 1:
-                        break
-                    await page.wait_for_timeout(250)
-                logger.info(f"[{self.nome}] CEP destino lookup: cidade={city_val!r}")
-                # Fallback: se o lookup não preencheu a cidade, buscar via ViaCEP e preencher manualmente
-                if not city_val:
-                    logger.info(f"[{self.nome}] Lookup CEP falhou, preenchendo via ViaCEP")
-                    dados_cep = await self._buscar_cep_viacep(self.cep_destino)
-                    if dados_cep:
-                        campos_addr = [
-                            ("Cidade", dados_cep.get("localidade", "")),
-                            ("Estado (UF)", dados_cep.get("uf", "")),
-                            ("Bairro", dados_cep.get("bairro", "") or "Centro"),
-                            ("Rua", dados_cep.get("logradouro", "") or "S/N"),
-                        ]
-                        for placeholder, valor in campos_addr:
-                            if not valor:
-                                continue
-                            await page.evaluate(
-                                """([ph, val]) => {
-                                    const input = document.querySelector('input[placeholder="' + ph + '"]');
-                                    if (!input) return;
-                                    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                                    setter.call(input, val);
-                                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                                    input.dispatchEvent(new Event('change', { bubbles: true }));
-                                }""",
-                                [placeholder, valor],
-                            )
-                            await page.wait_for_timeout(100)
-                        logger.info(f"[{self.nome}] Endereço preenchido via ViaCEP: {dados_cep.get('localidade')}/{dados_cep.get('uf')}")
-            await self._fechar_popups()
-            if not await self._clicar_botao_fluxo(page, ("Continuar", "Proximo", "Próximo")):
-                raise Exception("Botao de continuar nao encontrado na etapa destinatario")
-            await page.wait_for_timeout(2000)
-
-            # ETAPA 4: Carga
-            # Campos confirmados: totalMerchandiseValue, cubageValues.0.height/width/length/weight/quantity,
-            # totalCubage, amount, totalWeight
-            etapa = "carga_valores"
-            logger.info(f"[{self.nome}] Iniciando etapa 4 (carga), URL: {page.url}")
-            await page.locator("input[name='totalMerchandiseValue']").wait_for(
-                timeout=self.DEFAULT_TIMEOUT_MS
-            )
-
-            # Selecionar tipo de produto (Radix combobox)
-            combo_produto = page.locator("button[role=combobox]").first
-            if await combo_produto.count() > 0:
-                await combo_produto.click()
-                await page.wait_for_timeout(600)
-                # Selecionar "Carga Geral" (primeira e mais genérica opção)
-                opt = page.locator("[role=option]").filter(has_text="Carga Geral").first
-                if await opt.count() > 0:
-                    await opt.click()
-                else:
-                    # Fallback: primeira opção disponível
-                    await page.locator("[role=option]").first.click()
-                await page.wait_for_timeout(300)
-
-            # Valor da nota fiscal
-            # A máscara do campo strips o ponto — enviar 2 casas decimais: "34.65" → digits "3465" → "34,65"
-            valor_loc = page.locator("input[name='totalMerchandiseValue']")
-            await valor_loc.fill(f"{valor:.2f}")
-            await valor_loc.press("Tab")
+            await self._selecionar_pagador(page, tipo_pagador)
             await page.wait_for_timeout(300)
 
-            # Cubagem - usa somente linhas vindas do romaneio.
+            if not await self._clicar_botao_fluxo(page, ("Próximo", "Proximo", "Continuar")):
+                raise Exception("Botão Próximo não encontrado na etapa tipo_pagador")
+            await page.wait_for_timeout(1200)
+
+            # ── ETAPA 2: Dados da Origem (endereço pré-preenchido) ────────────
+            # A etapa 2 exibe o endereço do remetente como texto read-only.
+            # Não há campos para preencher — apenas clicar Próximo.
+            etapa = "dados_origem"
+            await page.wait_for_timeout(800)  # aguardar accordion abrir
+            await self._fechar_popups()
+            if not await self._clicar_botao_fluxo(page, ("Próximo", "Proximo", "Continuar")):
+                raise Exception("Botão Próximo não encontrado na etapa dados_origem")
+            await page.wait_for_timeout(1500)
+
+            # ── ETAPA 3: Dados do Destino ─────────────────────────────────────
+            etapa = "dados_destino"
+            # Aguardar campo CNPJ do destinatário
+            dest_cnpj_loc = page.locator('input[name="document"]').first
+            try:
+                await dest_cnpj_loc.wait_for(state="visible", timeout=self.DEFAULT_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                # Fallback por placeholder
+                dest_cnpj_loc = page.locator(
+                    'input[placeholder*="CNPJ" i], input[placeholder*="CPF" i], '
+                    'input[placeholder*="Destinat" i]'
+                ).first
+                await dest_cnpj_loc.wait_for(state="visible", timeout=10000)
+
+            await dest_cnpj_loc.click()
+            await dest_cnpj_loc.fill(destinatario)
+            await page.wait_for_timeout(400)
+            await dest_cnpj_loc.press("Tab")
+
+            # Aguardar auto-preenchimento via lookup de CNPJ (até 5s)
+            city_autofill = ""
+            for _ in range(20):
+                city_autofill = await page.evaluate(
+                    "() => (document.querySelector('input[name=\"city\"]') || {}).value || ''"
+                )
+                if city_autofill and len(city_autofill) > 1:
+                    break
+                await page.wait_for_timeout(250)
+
+            if city_autofill:
+                logger.info(f"[{self.nome}] CNPJ lookup preencheu cidade: {city_autofill!r}")
+            else:
+                # Lookup não preencheu → tentar via CEP
+                logger.info(f"[{self.nome}] CNPJ lookup sem resultado; tentando CEP")
+                cep_dest = self._digits(self.cep_destino or "")
+                if len(cep_dest) == 8:
+                    cep_loc = page.locator('input[name="cep"]').first
+                    if await cep_loc.count() > 0 and await cep_loc.is_visible():
+                        await cep_loc.click()
+                        await cep_loc.fill("")
+                        await page.keyboard.type(cep_dest, delay=60)
+                        await cep_loc.press("Tab")
+                        # Aguardar lookup CEP
+                        for _ in range(24):
+                            city_autofill = await page.evaluate(
+                                "() => (document.querySelector('input[name=\"city\"]') || {}).value || ''"
+                            )
+                            if city_autofill and len(city_autofill) > 1:
+                                break
+                            await page.wait_for_timeout(250)
+                        logger.info(f"[{self.nome}] CEP lookup cidade: {city_autofill!r}")
+
+                # Se ainda vazio, preencher manualmente via ViaCEP
+                if not city_autofill and len(cep_dest) == 8:
+                    dados_cep = await self._buscar_cep_viacep(cep_dest)
+                    if dados_cep:
+                        campos = [
+                            ("city",         dados_cep.get("localidade", "")),
+                            ("state",        dados_cep.get("uf", "")),
+                            ("neighborhood", dados_cep.get("bairro", "") or "Centro"),
+                            ("address",      dados_cep.get("logradouro", "") or "S/N"),
+                        ]
+                        for name_attr, val in campos:
+                            if not val:
+                                continue
+                            await self._set_react_input(page, f'input[name="{name_attr}"]', val)
+                            await page.wait_for_timeout(80)
+                        logger.info(f"[{self.nome}] Endereço preenchido via ViaCEP: "
+                                    f"{dados_cep.get('localidade')}/{dados_cep.get('uf')}")
+
+            await self._fechar_popups()
+            if not await self._clicar_botao_fluxo(page, ("Próximo", "Proximo", "Continuar")):
+                raise Exception("Botão Próximo não encontrado na etapa dados_destino")
+            await page.wait_for_timeout(1500)
+
+            # ── ETAPA 4: Carga ────────────────────────────────────────────────
+            etapa = "carga_nf"
+            logger.info(f"[{self.nome}] Etapa carga, URL: {page.url}")
+
+            # Aguardar o campo de valor da NF (novo portal)
+            nf_loc = page.locator('input[placeholder="Valor total da nota fiscal"]').first
+            try:
+                await nf_loc.wait_for(state="visible", timeout=self.DEFAULT_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                # Fallback: campo por name (layout futuro)
+                nf_loc = page.locator(
+                    'input[name="totalMerchandiseValue"], '
+                    'input[placeholder*="nota fiscal" i], '
+                    'input[placeholder*="valor" i]'
+                ).first
+                await nf_loc.wait_for(state="visible", timeout=10000)
+
+            # Preencher valor NF — campo pode ter máscara de moeda, usar keyboard.type
+            await nf_loc.click()
+            await nf_loc.fill("")
+            await page.keyboard.type(str(int(round(valor))), delay=30)
+            await nf_loc.press("Tab")
+            await page.wait_for_timeout(200)
+
+            # ── Tipo de Produto (select nativo) ───────────────────────────────
+            etapa = "carga_tipo_produto"
+            try:
+                tipo_opts = await page.evaluate("""() => {
+                    const selects = Array.from(document.querySelectorAll('select'))
+                        .filter(s => s.offsetParent !== null);
+                    if (!selects.length) return [];
+                    return Array.from(selects[0].options).map(o => ({
+                        value: o.value, text: o.text.trim()
+                    }));
+                }""")
+                logger.info(f"[{self.nome}] Tipo produto options: {tipo_opts}")
+                matched_tp = next(
+                    (o for o in tipo_opts
+                     if self.tipo_produto.lower() in o["text"].lower()),
+                    None,
+                )
+                if not matched_tp:
+                    # Tenta match parcial inverso
+                    matched_tp = next(
+                        (o for o in tipo_opts
+                         if o["text"].lower() in self.tipo_produto.lower()),
+                        None,
+                    )
+                if not matched_tp:
+                    # Fallback: primeiro option não vazio
+                    matched_tp = next((o for o in tipo_opts if o["value"]), None)
+                if matched_tp:
+                    target_tp = matched_tp["value"] or matched_tp["text"]
+                    await self._set_react_select(page, target_tp)
+                    await page.wait_for_timeout(300)
+            except Exception as e:
+                logger.warning(f"[{self.nome}] Erro ao selecionar tipo produto: {e}")
+
+            # ── Cubagem (linhas de volume) ─────────────────────────────────────
             etapa = "carga_cubagem"
             cubagens = self._normalizar_cubagens(self.cubagens)
             if not cubagens:
-                raise Exception("AGEX sem cubagens do romaneio (nenhum tamanho informado)")
+                raise Exception("AGEX: nenhuma cubagem informada no romaneio")
             logger.info(f"[{self.nome}] Preenchendo {len(cubagens)} linha(s) de cubagem")
 
             for idx, cub in enumerate(cubagens):
-                if idx > 0:
-                    # Aguardar nova linha aparecer (botão "+" deve ter sido clicado)
-                    for _ in range(20):
-                        if await page.locator(f"input[name='cubageValues.{idx}.height']").count() > 0:
-                            break
-                        await page.wait_for_timeout(250)
+                altura_cm = int(round(float(cub["altura_m"]) * 100))
+                largura_cm = int(round(float(cub["largura_m"]) * 100))
+                comp_cm = int(round(float(cub["comprimento_m"]) * 100))
+                qtd = int(cub.get("quantidade", 1))
+                # Peso por unidade desta linha
+                peso_unit = peso / qtd if qtd > 0 else peso
 
-                altura_m = float(cub["altura_m"])
-                largura_m = float(cub["largura_m"])
-                comp_m = float(cub["comprimento_m"])
-                peso_unit = peso / int(cub.get("quantidade", 1))
+                # Campos da linha pelo placeholder (novo portal)
+                campos_cubagem = [
+                    ("Altura",        str(altura_cm)),
+                    ("Largura",       str(largura_cm)),
+                    ("Comp.",         str(comp_cm)),
+                    ("Peso unitário", f"{peso_unit:.2f}"),
+                    ("Quantidade",    str(qtd)),
+                ]
+                for ph, val_str in campos_cubagem:
+                    filled = await page.evaluate(
+                        """([ph, val, i]) => {
+                            const inputs = Array.from(
+                                document.querySelectorAll('input[placeholder="' + ph + '"]')
+                            );
+                            const input = inputs[i] !== undefined ? inputs[i] : inputs[0];
+                            if (!input) return false;
+                            const setter = Object.getOwnPropertyDescriptor(
+                                window.HTMLInputElement.prototype, 'value'
+                            ).set;
+                            setter.call(input, val);
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                            return true;
+                        }""",
+                        [ph, val_str, idx],
+                    )
+                    if not filled:
+                        logger.warning(f"[{self.nome}] Campo '{ph}' não encontrado (linha {idx})")
+                    await page.wait_for_timeout(80)
 
-                for field, value in [
-                    (f"cubageValues.{idx}.height", int(round(altura_m * 100))),   # cm inteiro
-                    (f"cubageValues.{idx}.width",  int(round(largura_m * 100))),
-                    (f"cubageValues.{idx}.length", int(round(comp_m * 100))),
-                    (f"cubageValues.{idx}.weight", peso_unit),
-                    (f"cubageValues.{idx}.quantity", int(cub.get("quantidade", 1))),
-                ]:
-                    loc = page.locator(f"input[name='{field}']").first
-                    if await loc.count() == 0:
-                        continue
-                    # Cm e quantidade: inteiro; peso: 2 casas decimais (máscara strips ponto)
-                    if field.endswith("weight"):
-                        val_str = f"{value:.2f}"
-                    else:
-                        val_str = str(int(value))
-                    await loc.fill(val_str)
-                    await loc.press("Tab")
-                    await page.wait_for_timeout(100)
-
-                # Adicionar linha se houver mais volumes
+                # Adicionar nova linha se ainda há volumes
                 if idx < len(cubagens) - 1:
-                    # Clicar no botão "+" (ícone de adicionar volume)
-                    added = await page.evaluate("""(nextIdx) => {
-                        // procurar botão de adicionar linha de cubagem
-                        const btns = Array.from(document.querySelectorAll("button"));
+                    added = await page.evaluate("""() => {
+                        const btns = Array.from(document.querySelectorAll('button'));
                         for (const b of btns) {
-                            const t = (b.textContent||'').trim();
-                            if (t === '+' || t === 'Adicionar volume' || b.getAttribute('aria-label') === 'Adicionar volume') {
-                                b.click(); return true;
+                            const t = (b.textContent || '').trim();
+                            if (t.includes('Adicionar') || t === '+') {
+                                b.click();
+                                return true;
                             }
                         }
-                        // fallback: svgs com plus
-                        const svg = document.querySelector("button svg[data-lucide='plus'], button svg.lucide-plus");
+                        // Fallback: botão com ícone plus
+                        const svg = document.querySelector(
+                            "button svg[data-lucide='plus'], button svg.lucide-plus"
+                        );
                         if (svg) { svg.closest('button').click(); return true; }
                         return false;
-                    }""", idx)
-                    await page.wait_for_timeout(500)
+                    }""")
+                    await page.wait_for_timeout(600)
                     if not added:
-                        logger.warning(f"[{self.nome}] Não encontrou botão '+' para linha {idx+2}")
+                        logger.warning(f"[{self.nome}] Botão 'Adicionar' não encontrado para linha {idx+2}")
 
-            # Quantidade de volumes (campo separado do romaneio)
+            # ── Totais ────────────────────────────────────────────────────────
+            etapa = "carga_totais"
             total_volumes = sum(int(c.get("quantidade", 1)) for c in cubagens)
-            amount_loc = page.locator("input[name='amount']")
-            if await amount_loc.count() > 0 and await amount_loc.is_enabled():
-                await amount_loc.fill(str(total_volumes))
-                await amount_loc.press("Tab")
-                await page.wait_for_timeout(200)
 
-            # Peso total (campo pode estar disabled se calculado automaticamente)
-            total_peso_loc = page.locator("input[name='totalWeight']")
-            if await total_peso_loc.count() > 0 and await total_peso_loc.is_enabled():
-                await total_peso_loc.fill(f"{peso:.2f}")
-                await total_peso_loc.press("Tab")
-                await page.wait_for_timeout(200)
+            # Quantidade de volumes
+            amount_loc = page.locator("input[name='amount']").first
+            if await amount_loc.count() > 0:
+                try:
+                    if await amount_loc.is_enabled():
+                        await self._set_react_input(page, "input[name='amount']", str(total_volumes))
+                        await page.wait_for_timeout(150)
+                except Exception:
+                    pass
 
-            # Continuar para confirmação
-            etapa = "confirmar"
-            if not await self._clicar_botao_fluxo(page, ("Continuar", "Proximo", "Próximo", "Confirmar")):
-                raise Exception("Botao de confirmar/continuar nao encontrado apos carga")
+            # Peso total
+            peso_loc = page.locator("input[name='totalWeight']").first
+            if await peso_loc.count() > 0:
+                try:
+                    if await peso_loc.is_enabled():
+                        await self._set_react_input(page, "input[name='totalWeight']", f"{peso:.2f}")
+                        await page.wait_for_timeout(150)
+                except Exception:
+                    pass
+
+            # ── Submeter carga ────────────────────────────────────────────────
+            etapa = "submit_carga"
+            if not await self._clicar_botao_fluxo(page, ("Próximo", "Proximo", "Continuar", "Confirmar")):
+                raise Exception("Botão Próximo não encontrado na etapa carga")
             await page.wait_for_timeout(2000)
+
         except Exception as e:
             if isinstance(e, PlaywrightTimeoutError):
                 self.last_error = f"Timeout na etapa: {etapa}"
@@ -796,146 +817,99 @@ class AGEXProvider(ProviderBase):
             else:
                 self.last_error = f"Falha na etapa {etapa}: {e}"
                 logger.error(f"[{self.nome}] Falha na etapa {etapa}: {e}")
-            await self._salvar_debug(f"timeout_{etapa}")
+            await self._salvar_debug(f"erro_{etapa}")
             raise
 
     async def _extrair_resultado(self) -> Optional[tuple[float, int, str]]:
         page = self._page
-
-        # Screenshot imediato para diagnóstico do estado pós-submit etapa 4
         await self._salvar_debug("pos_submit_etapa4")
 
-        # Etapa 5 opcional: página de confirmação/revisão antes do resultado
-        # Se existir botão de confirmação, clicar para enviar a cotação de fato
+        # Portal novo redireciona para /cotacao/resultado/{numero} após submeter carga.
+        # Aguardar a URL mudar (timeout generoso — servidor pode demorar).
         try:
-            import re as _re
-            confirm_loc = page.locator("button").filter(
-                has_text=_re.compile(
-                    r"confirmar\s+e\s+ver\s+resultado|confirmar\s+cota[çc][aã]o|solicitar\s+cota[çc][aã]o|confirmar|enviar\s+cota[çc][aã]o",
-                    _re.IGNORECASE,
-                )
-            )
-            if await confirm_loc.count() > 0:
-                logger.info(f"[{self.nome}] Etapa de confirmação detectada — clicando para confirmar")
-                await confirm_loc.first.click()
-                await page.wait_for_timeout(3000)
-                await self._salvar_debug("pos_confirmar")
-        except Exception as _e:
-            logger.warning(f"[{self.nome}] Erro ao tentar clicar confirmação: {_e}")
+            await page.wait_for_url("**/cotacao/resultado/**", timeout=60000)
+        except PlaywrightTimeoutError:
+            # Verificar se já estamos na página de resultado
+            if "/cotacao/resultado/" not in (page.url or ""):
+                body_lower = (await page.inner_text("body")).lower()
+                for phrase in [
+                    "não atend", "nao atend", "fora da área", "fora de cobertura",
+                    "cep não atendido", "cep nao atendido", "não atendemos",
+                ]:
+                    if phrase in body_lower:
+                        self.last_error = "Rota não atendida pela AGEX"
+                        logger.info(f"[{self.nome}] {self.last_error}")
+                        await self._salvar_debug("indisponivel")
+                        return None
+                self.last_error = "Página de resultado não apareceu (timeout)"
+                logger.error(f"[{self.nome}] {self.last_error}")
+                await self._salvar_debug("sem_resultado")
+                return None
 
-        # Aguardar resultado no layout antigo (#resultado) OU no layout novo
-        try:
-            status = await page.evaluate("""() => new Promise((resolve) => {
-                const check = () => {
-                    const el = document.getElementById('resultado');
-                    if (el && el.offsetParent !== null) return resolve('ok');
-                    const txt = (document.body.innerText || '').toLowerCase();
-                    if (txt.includes('resultado da cota\u00e7\u00e3o') ||
-                        txt.includes('resultado da cotacao') ||
-                        txt.includes('valor do frete') ||
-                        txt.includes('pre\u00e7o do frete') ||
-                        txt.includes('total do frete') ||
-                        txt.includes('valor frete'))
-                        return resolve('ok_new');
-                    if (txt.includes('n\u00e3o conseguimos buscar o pre\u00e7o') ||
-                        txt.includes('nao conseguimos buscar o preco') ||
-                        txt.includes('entre em contato com nosso comercial') ||
-                        txt.includes('n\u00e3o atendemos') ||
-                        txt.includes('cep n\u00e3o atendido') ||
-                        txt.includes('fora da \u00e1rea'))
-                        return resolve('indisponivel');
-                };
-                check();
-                const id = setInterval(check, 300);
-                setTimeout(() => { clearInterval(id); resolve('timeout'); }, 40000);
-            })""")
-        except Exception:
-            status = "timeout"
+        await self._salvar_debug("resultado_page")
+        logger.info(f"[{self.nome}] Resultado URL: {page.url}")
 
-        if status == "indisponivel":
-            self.last_error = "Cota\u00e7\u00e3o n\u00e3o dispon\u00edvel automaticamente para esta rota"
-            logger.info(f"[{self.nome}] {self.last_error}")
-            await self._salvar_debug("indisponivel")
-            return None
+        # Extrair número da cotação direto da URL: /cotacao/resultado/2197136
+        url = page.url or ""
+        numero = ""
+        m_url = re.search(r"/cotacao/resultado/(\d+)", url)
+        if m_url:
+            numero = m_url.group(1)
 
-        if status not in ("ok", "ok_new"):
-            self.last_error = "P\u00e1gina de resultado da AGEX n\u00e3o apareceu"
-            logger.error(f"[{self.nome}] {self.last_error}")
-            await self._salvar_debug("sem_resultado")
-            return None
-
+        # Extrair valor do frete e data de entrega dos spans
         result_data = await page.evaluate("""() => {
-            const out = {};
-            const section = document.getElementById('resultado');
-            if (section) {
-                const spans = section.querySelectorAll('span');
-                for (const sp of spans) {
-                    const parent = sp.closest('p') || sp.parentElement;
-                    const parentText = (parent ? parent.textContent : '').toLowerCase();
-                    const val = (sp.textContent || '').trim();
-                    if (!val) continue;
-                    if (parentText.includes('frete')) out.frete = val;
-                    else if (parentText.includes('n\u00famero') || parentText.includes('numero')) out.numero = val;
-                    else if (parentText.includes('data') && parentText.includes('entrega')) out.dataEntrega = val;
-                }
-            }
-            const bodyText = (document.body && document.body.innerText) ? document.body.innerText : '';
-            if (!out.bodyText) out.bodyText = bodyText;
+            const out = {frete: null, previsao: null};
+            const spans = Array.from(document.querySelectorAll('span'));
+
+            // Frete: span cujo texto é exatamente "R$ X,XX"
+            const freteSpan = spans.find(s =>
+                /^R\$\s*[\d.,]+$/.test(s.textContent.trim())
+            );
+            if (freteSpan) out.frete = freteSpan.textContent.trim();
+
+            // Previsão de entrega: primeiro span com data DD/MM/YY ou DD/MM/YYYY
+            const dateSpan = spans.find(s =>
+                /^\d{2}\/\d{2}\/\d{2,4}$/.test(s.textContent.trim())
+            );
+            if (dateSpan) out.previsao = dateSpan.textContent.trim();
+
             return out;
         }""")
-        logger.info(f"[{self.nome}] Dados extra\u00eddos de #resultado: {result_data}")
+        logger.info(f"[{self.nome}] Dados extraídos: {result_data}")
 
+        # Parsear valor do frete
         valor_frete = None
-        if isinstance(result_data, dict) and result_data.get('frete'):
+        if result_data and result_data.get("frete"):
             try:
-                valor_frete = self._parse_brl(result_data['frete'].replace('R$', '').strip())
+                valor_frete = self._parse_brl(
+                    result_data["frete"].replace("R$", "").strip()
+                )
             except Exception:
                 pass
 
         if valor_frete is None:
-            texto = ""
-            if isinstance(result_data, dict):
-                texto = str(result_data.get('bodyText') or "")
-            if not texto:
-                texto = await page.inner_text("body")
-            valor_frete = self._extrair_valor_frete_do_texto(texto)
+            # Fallback: extrair do texto completo da página
+            body_text = await page.inner_text("body")
+            valor_frete = self._extrair_valor_frete_do_texto(body_text)
 
         if valor_frete is None:
-            self.last_error = "Valor do frete n\u00e3o encontrado na p\u00e1gina de resultado"
+            self.last_error = "Valor do frete não encontrado na página de resultado"
             logger.error(f"[{self.nome}] {self.last_error}")
             await self._salvar_debug("sem_valor")
             return None
 
-        numero = ""
-        data_entrega = ""
-        if isinstance(result_data, dict):
-            numero = result_data.get('numero', '')
-            data_entrega = result_data.get('dataEntrega', '')
-
-        body_text = str(result_data.get('bodyText') or "") if isinstance(result_data, dict) else ""
-        if body_text:
-            if not numero:
-                m_num = re.search(r"(?i)cota\u00e7[a\u00e3]o\s*:\s*(\d+)", body_text)
-                if m_num:
-                    numero = m_num.group(1)
-            if not data_entrega:
-                m_entrega = re.search(r"(?i)previs[a\u00e3]o\s+de\s+entrega\s*(\d{2}/\d{2}/\d{2,4})", body_text)
-                if m_entrega:
-                    data_entrega = m_entrega.group(1)
-
+        # Calcular prazo em dias
+        data_entrega = (result_data or {}).get("previsao") or ""
         prazo_dias = 0
         if data_entrega:
             try:
-                from datetime import datetime as dt
-                if re.match(r"^\d{2}/\d{2}/\d{2}$", data_entrega):
-                    entrega = dt.strptime(data_entrega, "%d/%m/%y")
-                else:
-                    entrega = dt.strptime(data_entrega, "%d/%m/%Y")
-                prazo_dias = max(0, (entrega - dt.now()).days)
+                fmt = "%d/%m/%y" if re.match(r"^\d{2}/\d{2}/\d{2}$", data_entrega) else "%d/%m/%Y"
+                entrega = datetime.strptime(data_entrega, fmt)
+                prazo_dias = max(0, (entrega - datetime.now()).days)
             except Exception:
                 pass
 
-        restricoes = f"Cota\u00e7\u00e3o #{numero}" if numero else "Cota\u00e7\u00e3o AGEX"
+        restricoes = f"Cotação #{numero}" if numero else "Cotação AGEX"
         if data_entrega:
             restricoes += f" - Entrega: {data_entrega}"
 
@@ -960,18 +934,18 @@ class AGEXProvider(ProviderBase):
                     self.last_error = "Falha no login AGEX"
                 return None
 
-            # AGEX é SPA — NÃO criar nova página (localStorage/sessionStorage perdem auth).
-            # Navegar para /inicio primeiro para resetar estado do formulário.
+            # AGEX é SPA — NÃO criar nova página (perde localStorage/auth).
+            # Navegar para /dashboard para resetar estado antes da cotação.
             if self._logged_in:
                 try:
                     await self._page.goto(
-                        "https://cliente.agex.com.br/inicio",
+                        "https://cliente.agex.com.br/dashboard",
                         wait_until="domcontentloaded",
                         timeout=self.DEFAULT_TIMEOUT_MS,
                     )
                     await self._page.wait_for_timeout(300)
                 except Exception as nav_err:
-                    logger.warning(f"[{self.nome}] Falha ao navegar para /inicio: {nav_err}")
+                    logger.warning(f"[{self.nome}] Falha ao navegar para /dashboard: {nav_err}")
 
             remetente = self.cnpj_remetente or origem
             destinatario = self.cnpj_destinatario or destino
@@ -1015,4 +989,3 @@ class AGEXProvider(ProviderBase):
         self, origem: str, destino: str, peso: float, valor: float
     ) -> Optional[Cotacao]:
         return await self.coteir(origem, destino, peso, valor)
-
