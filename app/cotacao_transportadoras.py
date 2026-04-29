@@ -1206,12 +1206,20 @@ class TransportadoraSession:
             return
 
         async def _loop():
-            while True:
-                await asyncio.sleep(self._IDLE_CHECK_INTERVAL_S)
-                try:
-                    await self.fechar_ociosos()
-                except Exception as e:
-                    _log_diag(f"Erro no verificador de ociosidade: {e}")
+            # CancelledError externo (cleanup()) é re-levantado imediatamente,
+            # garantindo que _uso_lock seja liberado pelo desempilhamento natural
+            # do `async with`. Erros genéricos apenas logam e reiniciam o ciclo.
+            try:
+                while True:
+                    try:
+                        await asyncio.sleep(self._IDLE_CHECK_INTERVAL_S)
+                        await self.fechar_ociosos()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        _log_diag(f"Erro no verificador de ociosidade: {e}")
+            except asyncio.CancelledError:
+                pass
 
         self._idle_task = asyncio.ensure_future(_loop())
 
