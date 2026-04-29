@@ -898,6 +898,11 @@ class TransportadoraSession:
         self._inicializado = False
         self._ultimo_uso: dict[str, float] = {}
         self._idle_task: asyncio.Task | None = None
+        # Protege transição de estado de `providers` e `_ultimo_uso` contra
+        # race entre o verificador de ociosidade (fechar_ociosos) e novas
+        # cotações que registram uso. NÃO envolve I/O (cleanup acontece fora
+        # do lock) para não bloquear cotações novas durante teardown lento.
+        self._uso_lock: asyncio.Lock = asyncio.Lock()
 
     async def inicializar(self, callback=None, login_status_callback=None):
         """Cria providers e faz pre-login em todos. callback(msg) para status.
@@ -1162,23 +1167,33 @@ class TransportadoraSession:
             self._ultimo_uso[nome] = agora
         self._iniciar_verificador_ocioso()
 
-    def registrar_uso(self, nome: str) -> None:
+    async def registrar_uso(self, nome: str) -> None:
         """Atualiza timestamp de último uso de um provider."""
-        self._ultimo_uso[nome] = time.monotonic()
+        async with self._uso_lock:
+            self._ultimo_uso[nome] = time.monotonic()
 
     async def fechar_ociosos(self) -> None:
         """Fecha browsers de providers ociosos por mais de IDLE_TIMEOUT_S."""
+        # Fase 1: sob lock, decide quem fechar e remove do dicionário ativo.
+        # Isso evita que uma cotação concorrente pegue a referência depois
+        # de termos decidido fechar (race idle/cotação).
         agora = time.monotonic()
-        para_fechar: list[str] = []
-        for nome in list(self.providers):
-            ultimo = self._ultimo_uso.get(nome, agora)
-            if agora - ultimo > self.IDLE_TIMEOUT_S:
-                para_fechar.append(nome)
-        for nome in para_fechar:
-            prov = self.providers.pop(nome, None)
-            tempo_ocioso = agora - self._ultimo_uso.pop(nome, agora)
-            if prov is None:
-                continue
+        a_finalizar: list[tuple[str, Any, float]] = []
+        async with self._uso_lock:
+            para_fechar = [
+                nome
+                for nome in list(self.providers)
+                if agora - self._ultimo_uso.get(nome, agora) > self.IDLE_TIMEOUT_S
+            ]
+            for nome in para_fechar:
+                prov = self.providers.pop(nome, None)
+                tempo_ocioso = agora - self._ultimo_uso.pop(nome, agora)
+                if prov is not None:
+                    a_finalizar.append((nome, prov, tempo_ocioso))
+
+        # Fase 2: cleanup fora do lock — I/O pode ser lento e não deve
+        # bloquear cotações novas que precisam só registrar uso.
+        for nome, prov, tempo_ocioso in a_finalizar:
             try:
                 await prov.cleanup()
                 _log_diag(f"Idle cleanup {nome} OK (ocioso por {tempo_ocioso:.0f}s)")
@@ -1191,12 +1206,20 @@ class TransportadoraSession:
             return
 
         async def _loop():
-            while True:
-                await asyncio.sleep(self._IDLE_CHECK_INTERVAL_S)
-                try:
-                    await self.fechar_ociosos()
-                except Exception as e:
-                    _log_diag(f"Erro no verificador de ociosidade: {e}")
+            # CancelledError externo (cleanup()) é re-levantado imediatamente,
+            # garantindo que _uso_lock seja liberado pelo desempilhamento natural
+            # do `async with`. Erros genéricos apenas logam e reiniciam o ciclo.
+            try:
+                while True:
+                    try:
+                        await asyncio.sleep(self._IDLE_CHECK_INTERVAL_S)
+                        await self.fechar_ociosos()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        _log_diag(f"Erro no verificador de ociosidade: {e}")
+            except asyncio.CancelledError:
+                pass
 
         self._idle_task = asyncio.ensure_future(_loop())
 
@@ -1407,7 +1430,7 @@ async def _executar_cotacoes_com_dados(
                         f"headless={headless_braspress})"
                     )
                     if sessao is not None:
-                        sessao.registrar_uso("braspress")
+                        await sessao.registrar_uso("braspress")
                     _bp_kwargs = dict(
                         origem=origem,
                         destino=destino,
@@ -1494,7 +1517,7 @@ async def _executar_cotacoes_com_dados(
                             f"BAUER preparada: linhas_cubagem={len(cubagens_bauer)}, volumes={vol}"
                         )
                         if sessao is not None:
-                            sessao.registrar_uso("bauer")
+                            await sessao.registrar_uso("bauer")
                         _bauer_kwargs = dict(
                             origem=origem,
                             destino=destino,
@@ -1545,7 +1568,7 @@ async def _executar_cotacoes_com_dados(
                             sessao.providers["trd"] = provider
                     _log_diag(f"TRD preparada (headless={headless_trd})")
                     if sessao is not None:
-                        sessao.registrar_uso("trd")
+                        await sessao.registrar_uso("trd")
                     _trd_kwargs = dict(
                         origem=origem,
                         destino=destino,
@@ -1670,7 +1693,7 @@ async def _executar_cotacoes_com_dados(
                                 f"linhas_cubagem={len(cubagens_agex)}, headless={headless_agex}"
                             )
                             if sessao is not None:
-                                sessao.registrar_uso("agex")
+                                await sessao.registrar_uso("agex")
                             _agex_kwargs = dict(
                                 origem=cnpj_rem,
                                 destino=cnpj_dest,
@@ -1722,7 +1745,7 @@ async def _executar_cotacoes_com_dados(
                                 sessao.providers["eucatur"] = provider
                         _log_diag(f"EUCATUR preparada (headless={headless_eucatur})")
                         if sessao is not None:
-                            sessao.registrar_uso("eucatur")
+                            await sessao.registrar_uso("eucatur")
                         _euc_kwargs = dict(
                             origem=origem,
                             destino=destino,
@@ -1792,7 +1815,7 @@ async def _executar_cotacoes_com_dados(
                                 sessao.providers["rodonaves"] = provider
                         _log_diag(f"RODONAVES preparada (headless={headless_rodonaves})")
                         if sessao is not None:
-                            sessao.registrar_uso("rodonaves")
+                            await sessao.registrar_uso("rodonaves")
                         _rodo_kwargs = dict(
                             origem=origem,
                             destino=destino,
@@ -1853,7 +1876,7 @@ async def _executar_cotacoes_com_dados(
                                 sessao.providers["alfa"] = provider
                         _log_diag(f"ALFA preparada (headless={headless_alfa})")
                         if sessao is not None:
-                            sessao.registrar_uso("alfa")
+                            await sessao.registrar_uso("alfa")
                         _alfa_kwargs = dict(
                             origem=origem,
                             destino=destino,
@@ -1915,7 +1938,7 @@ async def _executar_cotacoes_com_dados(
                                 sessao.providers["coopex"] = provider
                         _log_diag(f"COOPEX preparada (headless={headless_coopex})")
                         if sessao is not None:
-                            sessao.registrar_uso("coopex")
+                            await sessao.registrar_uso("coopex")
                         _co_kwargs = dict(
                             origem=origem,
                             destino=destino,
@@ -1962,13 +1985,9 @@ async def _executar_cotacoes_com_dados(
 
     timeout_por_transportadora_s = 45
 
-    async def _exec(i: int, nome: str, provider: Any, kwargs: dict[str, Any]):
-        is_alfa = nome.upper() == "ALFA"
-        if not is_alfa:
-            await semaforo.acquire()
-            _log_diag(f"Semáforo adquirido: {nome} (posição {i})")
+    async def _run_cotacao(i: int, nome: str, provider: Any, kwargs: dict[str, Any], is_alfa: bool):
+        effective_timeout = timeout_por_transportadora_s + 15 if is_alfa else timeout_por_transportadora_s
         try:
-            effective_timeout = timeout_por_transportadora_s + 15 if is_alfa else timeout_por_transportadora_s
             coro = provider.coteir(**kwargs)
             cotacao = await asyncio.wait_for(coro, timeout=effective_timeout)
             return i, nome, provider, kwargs, cotacao, None
@@ -1983,9 +2002,18 @@ async def _executar_cotacoes_com_dados(
             )
         except Exception as exc:
             return i, nome, provider, kwargs, None, exc
-        finally:
-            if not is_alfa:
-                semaforo.release()
+
+    async def _exec(i: int, nome: str, provider: Any, kwargs: dict[str, Any]):
+        is_alfa = nome.upper() == "ALFA"
+        # `async with semaforo` garante release mesmo se a Task for cancelada
+        # exatamente entre o retorno de acquire() e o try interno — janela
+        # cancellation-unsafe que existia no padrão acquire/try/finally.
+        # ALFA continua fora do semáforo (login manual com Turnstile).
+        if is_alfa:
+            return await _run_cotacao(i, nome, provider, kwargs, is_alfa)
+        async with semaforo:
+            _log_diag(f"Semáforo adquirido: {nome} (posição {i})")
+            return await _run_cotacao(i, nome, provider, kwargs, is_alfa)
 
     def _processar_resultado(res, resultados, falhas_para_retry):
         """Processa resultado de _exec, retorna (ResultadoCotacao|None, ok: bool)."""
@@ -2193,17 +2221,6 @@ async def _executar_cotacoes_com_dados(
                 )
                 resultados.append(r)
                 _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
-
-    # Cleanup de providers criados ad-hoc (quando sessao=None)
-    if sessao is None and tasks:
-        async def _cleanup_adhoc(nome: str, prov):
-            try:
-                await asyncio.wait_for(prov.cleanup(), timeout=8)
-                _log_diag(f"Cleanup ad-hoc {nome} OK")
-            except Exception as e:
-                _log_diag(f"Cleanup ad-hoc {nome} falhou: {e}")
-        cleanup_tasks = [_cleanup_adhoc(n, p) for n, p, _ in tasks]
-        await asyncio.gather(*cleanup_tasks, return_exceptions=True)
 
     # Cleanup de providers criados ad-hoc (quando sessao=None)
     if sessao is None and tasks:
