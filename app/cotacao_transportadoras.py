@@ -2205,17 +2205,6 @@ async def _executar_cotacoes_com_dados(
         cleanup_tasks = [_cleanup_adhoc(n, p) for n, p, _ in tasks]
         await asyncio.gather(*cleanup_tasks, return_exceptions=True)
 
-    # Cleanup de providers criados ad-hoc (quando sessao=None)
-    if sessao is None and tasks:
-        async def _cleanup_adhoc(nome: str, prov):
-            try:
-                await asyncio.wait_for(prov.cleanup(), timeout=8)
-                _log_diag(f"Cleanup ad-hoc {nome} OK")
-            except Exception as e:
-                _log_diag(f"Cleanup ad-hoc {nome} falhou: {e}")
-        cleanup_tasks = [_cleanup_adhoc(n, p) for n, p, _ in tasks]
-        await asyncio.gather(*cleanup_tasks, return_exceptions=True)
-
     validas = [r for r in resultados if r.status == "ok" and r.valor_frete is not None]
     _log_diag(f"Cotações válidas: {len(validas)} de {len(tasks)}")
 
