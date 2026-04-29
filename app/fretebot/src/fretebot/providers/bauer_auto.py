@@ -528,7 +528,13 @@ class BauerAutoProvider(ProviderBase):
                 except Exception:
                     pass
 
-            page.on("response", lambda response: asyncio.create_task(_capture_quotation_response(response)))
+            # Listener nomeado (não lambda) para permitir remove_listener no finally.
+            # Sem isso o handler ficaria preso ao page e poderia ser invocado
+            # após o context.close() do finally, gerando TargetClosedError silencioso.
+            def _response_handler(response):
+                asyncio.create_task(_capture_quotation_response(response))
+
+            page.on("response", _response_handler)
 
             try:
                 # Inicia goto em paralelo enquanto espera CEPs carregarem
@@ -717,6 +723,13 @@ class BauerAutoProvider(ProviderBase):
                 logger.error(f"[{self.nome}] {self.last_error}")
                 return None
             finally:
+                # Remove listener antes de fechar o contexto para evitar que
+                # uma response em voo dispare _capture_quotation_response()
+                # depois do close (TargetClosedError silencioso).
+                try:
+                    page.remove_listener("response", _response_handler)
+                except Exception:
+                    pass
                 await context.close()
                 await browser.close()
 
