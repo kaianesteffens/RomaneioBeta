@@ -1977,13 +1977,9 @@ async def _executar_cotacoes_com_dados(
 
     timeout_por_transportadora_s = 45
 
-    async def _exec(i: int, nome: str, provider: Any, kwargs: dict[str, Any]):
-        is_alfa = nome.upper() == "ALFA"
-        if not is_alfa:
-            await semaforo.acquire()
-            _log_diag(f"Semáforo adquirido: {nome} (posição {i})")
+    async def _run_cotacao(i: int, nome: str, provider: Any, kwargs: dict[str, Any], is_alfa: bool):
+        effective_timeout = timeout_por_transportadora_s + 15 if is_alfa else timeout_por_transportadora_s
         try:
-            effective_timeout = timeout_por_transportadora_s + 15 if is_alfa else timeout_por_transportadora_s
             coro = provider.coteir(**kwargs)
             cotacao = await asyncio.wait_for(coro, timeout=effective_timeout)
             return i, nome, provider, kwargs, cotacao, None
@@ -1998,9 +1994,18 @@ async def _executar_cotacoes_com_dados(
             )
         except Exception as exc:
             return i, nome, provider, kwargs, None, exc
-        finally:
-            if not is_alfa:
-                semaforo.release()
+
+    async def _exec(i: int, nome: str, provider: Any, kwargs: dict[str, Any]):
+        is_alfa = nome.upper() == "ALFA"
+        # `async with semaforo` garante release mesmo se a Task for cancelada
+        # exatamente entre o retorno de acquire() e o try interno — janela
+        # cancellation-unsafe que existia no padrão acquire/try/finally.
+        # ALFA continua fora do semáforo (login manual com Turnstile).
+        if is_alfa:
+            return await _run_cotacao(i, nome, provider, kwargs, is_alfa)
+        async with semaforo:
+            _log_diag(f"Semáforo adquirido: {nome} (posição {i})")
+            return await _run_cotacao(i, nome, provider, kwargs, is_alfa)
 
     def _processar_resultado(res, resultados, falhas_para_retry):
         """Processa resultado de _exec, retorna (ResultadoCotacao|None, ok: bool)."""
