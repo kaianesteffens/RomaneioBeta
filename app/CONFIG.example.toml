@@ -15,16 +15,6 @@ cnpj = "00000000000000"
 senha = "SENHA_BRASPRESS"
 # ufs_atendidas = ["RS", "SC", "PR", "SP"]  # deixe vazio ou remova para atender todas
 
-[transportadoras.bauer]
-habilitado = true
-cotacao_url = "https://SEU_PORTAL_BAUER/cotacao"
-cnpj_pagador = "00000000000000"
-cnpj_remetente = "00000000000000"
-cnpj_destinatario = ""
-headless = true
-quantidade = 1
-# ufs_atendidas = ["RS", "SC", "PR"]
-
 [transportadoras.trd]
 habilitado = true
 email = "seu-email@empresa.com"
@@ -40,7 +30,6 @@ ufs_atendidas = ["RS", "SC", "PR", "SP", "MG", "ES", "RJ"]
 habilitado = true
 email = "seu-email@empresa.com"
 senha = "SENHA_AGEX"
-cnpj_remetente = "00.000.000/0000-00"
 cnpj_destinatario = ""
 descricao_mercadoria = "Mercadoria"
 tipo_produto = "Artigos Esportivos"

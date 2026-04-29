@@ -1,3 +1,0 @@
-<button type="submit" class="btn btn-primary" ng-click="vm.confirmaSimulacao()">
-                            <span class="">Continuar</span>
-                        </button>
