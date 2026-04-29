@@ -43,7 +43,6 @@ _add_fretebot_src_to_path()
 # Imports lazy — carregados sob demanda na primeira inicialização para
 # não atrasar a abertura da janela (cada provider puxa playwright, etc.).
 BraspressProvider = None
-BauerAutoProvider = None
 TRDProvider = None
 AGEXProvider = None
 EucaturProvider = None
@@ -53,15 +52,13 @@ CoopexProvider = None
 
 def _ensure_provider_imports() -> None:
     """Importa os providers na primeira chamada (lazy)."""
-    global BraspressProvider, BauerAutoProvider, TRDProvider
+    global BraspressProvider, TRDProvider
     global AGEXProvider, EucaturProvider, RodonavesProvider, AlfaProvider, CoopexProvider
     if BraspressProvider is not None:
         return  # já carregado
     from fretebot.providers.braspress_playwright import BraspressPlaywrightProvider as _BP
-    from fretebot.providers.bauer_auto import BauerAutoProvider as _BA
     from fretebot.providers.trd import TRDProvider as _TRD
     BraspressProvider = _BP
-    BauerAutoProvider = _BA
     TRDProvider = _TRD
     try:
         from fretebot.providers.agex import AGEXProvider as _AG
@@ -881,7 +878,6 @@ _PRIORIDADE_LENTIDAO: dict[str, int] = {
     "EUCATUR": 400,
     "COOPEX": 350,
     "RODONAVES": 300,
-    "BAUER": 200,
     "AGEX": 100,
 }
 
