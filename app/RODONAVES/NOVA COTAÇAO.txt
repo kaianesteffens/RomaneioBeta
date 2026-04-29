@@ -1,1 +1,0 @@
-<button style="float:right" type="button" class="btn btn-success-rte" id="newQuotation" onclick="window.location.href = 'Quotation'"> NOVA COTAÇÃO</button>

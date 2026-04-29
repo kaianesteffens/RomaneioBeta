@@ -1,1 +1,0 @@
-<button type="button" class="btn btn-success btn-lg " onclick="Utils.waiting('Carregando, aguarde...'); window.location.href='/w/cotacao/view'; sendTitle('Cotação');" title="Cotação on-line"><i class="fa fa-calculator">&nbsp;&nbsp;Cotação</i></button>
