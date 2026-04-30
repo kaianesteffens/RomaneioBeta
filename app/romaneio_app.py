@@ -1927,10 +1927,13 @@ class RomaneioWindow(QMainWindow):
                 except Exception:
                     pass
                 finally:
-                    # Fecha o event loop corretamente para evitar warnings
-                    # de "I/O operation on closed pipe" no Windows
+                    # Fecha o event loop corretamente para evitar RuntimeError: Event loop is closed
                     try:
                         self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+                    except Exception:
+                        pass
+                    try:
+                        self._loop.run_until_complete(self._loop.shutdown_default_executor())
                     except Exception:
                         pass
                     try:

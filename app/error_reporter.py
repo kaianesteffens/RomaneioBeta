@@ -35,12 +35,27 @@ _initialized = False
 def _load_toml_file(path: Path) -> dict:
     """Carrega TOML aceitando UTF-8 com/sem BOM."""
     raw = path.read_text(encoding="utf-8-sig")
+    data = None
+    # tomllib é built-in no Python 3.11+
     try:
-        import toml  # type: ignore[import-untyped]
-        data = toml.loads(raw)
+        import tomllib  # type: ignore[import]
+        data = tomllib.loads(raw)
     except ImportError:
-        import tomli as _tomli  # type: ignore[import-not-found]
-        data = _tomli.loads(raw)
+        pass
+    if data is None:
+        try:
+            import toml  # type: ignore[import-untyped]
+            data = toml.loads(raw)
+        except ImportError:
+            pass
+    if data is None:
+        try:
+            import tomli as _tomli  # type: ignore[import-not-found]
+            data = _tomli.loads(raw)
+        except ImportError:
+            pass
+    if data is None:
+        raise ImportError("Nenhuma biblioteca TOML disponível (tomllib/toml/tomli)")
     return data if isinstance(data, dict) else {}
 
 
@@ -49,25 +64,39 @@ def _load_config() -> None:
     global _gist_id, _token, _initialized
     if _initialized:
         return
-    _initialized = True
     try:
         # Mesmo esquema de busca que o restante do app
+        # Varre todos os candidatos e usa o primeiro que tiver ambas as chaves
         for candidate in [
             Path(os.getenv("APPDATA", "")) / "FreteBot" / "CONFIG.toml",
             Path(getattr(sys, "_MEIPASS", "")) / "CONFIG.toml",
             Path(__file__).parent / "CONFIG.toml",
         ]:
-            if candidate.exists():
+            if not candidate.exists():
+                continue
+            try:
                 cfg = _load_toml_file(candidate)
-                fb = cfg.get("fretebot", {})
-                _gist_id = fb.get("error_gist_id", "")
-                _token = fb.get("error_report_token", "")
-                if _gist_id and _token:
-                    return
-        if not _gist_id or not _token:
-            print("[error_reporter] AVISO: error_gist_id/error_report_token não encontrados em nenhum CONFIG.toml", file=sys.stderr, flush=True)
-    except Exception as e:
-        print(f"[error_reporter] AVISO: falha ao carregar config: {e}", file=sys.stderr, flush=True)
+            except Exception:
+                continue
+            fb = cfg.get("fretebot", {})
+            gist_id = fb.get("error_gist_id", "").strip()
+            token = fb.get("error_report_token", "").strip()
+            if gist_id and token:
+                _gist_id = gist_id
+                _token = token
+                _initialized = True
+                return
+        # Nenhum arquivo tinha as chaves — NÃO marca como inicializado
+        # para que a próxima chamada tente novamente (ex: config copiada depois)
+    except Exception:
+        pass
+
+
+def reload_config() -> None:
+    """Força recarregamento da configuração (útil após setup inicial do app)."""
+    global _initialized
+    _initialized = False
+    _load_config()
 
 
 def _get_version() -> str:
@@ -138,7 +167,6 @@ def _is_rate_limited(fingerprint: str) -> bool:
 
 def _send_to_gist(body: str) -> bool:
     """Envia um comentário ao Gist via API do GitHub."""
-    _load_config()
     if not _gist_id or not _token:
         return False
     url = f"https://api.github.com/gists/{_gist_id}/comments"
@@ -183,6 +211,12 @@ def report_error(
 
         exc_type_name = getattr(exc_type, "__name__", str(exc_type))
         tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+
+        # Garante config carregada antes de verificar rate-limit
+        # (rate-limit só deve consumir slot se o envio for possível)
+        _load_config()
+        if not _gist_id or not _token:
+            return
 
         # Rate-limit por fingerprint
         fp = _error_fingerprint(exc_type_name, tb_text)
@@ -233,6 +267,10 @@ def report_error_message(message: str, context: str = "", wait: bool = False) ->
     Se wait=True, bloqueia até o envio completar.
     """
     try:
+        _load_config()
+        if not _gist_id or not _token:
+            return
+
         fp = sha256(message.encode()).hexdigest()[:16]
         if _is_rate_limited(fp):
             return

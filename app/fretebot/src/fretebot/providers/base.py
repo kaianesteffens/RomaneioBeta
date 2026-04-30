@@ -101,12 +101,22 @@ class _ChromeBrowser:
     def __getattr__(self, name):
         return getattr(self._inner, name)
 
+    def __del__(self):
+        # Garante que o Chrome seja morto mesmo que close() nunca seja chamado
+        # (ex: quando o GC roda após o event loop fechar)
+        try:
+            _kill_proc(self._process)
+            self._process = None
+        except Exception:
+            pass
+
     async def close(self):
         try:
             await self._inner.close()
         except Exception:
             pass
         _kill_proc(self._process)
+        self._process = None
         if self._owned_pw:
             try:
                 await self._owned_pw.stop()
