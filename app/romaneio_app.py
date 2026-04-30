@@ -52,7 +52,7 @@ from cotacao_transportadoras import (
 )
 from updater import check_for_update, apply_update, get_repo_from_config, needs_restart, restart_app
 from license import get_saved_license, save_license, validate_license, get_machine_id, LicenseStatus
-from error_reporter import install_global_hooks, report_error, report_error_message
+from error_reporter import install_global_hooks, report_error, report_error_message, configure as _er_configure
 from extrator_nfe import extrair_arquivo as extrair_nfe_arquivo, NotaFiscal, identificar_transportadora, formatar_nota_resumo, parsear_info_complementar
 from rastreamento import rastrear_multiplas, ResultadoRastreio, obter_link_rastreio
 
@@ -997,6 +997,7 @@ class RomaneioWindow(QMainWindow):
         super().__init__()
         self.empresa_nome = empresa_nome
         self._config_path = _empresa_config_path(empresa_nome)
+        _er_configure(self._config_path)
         self._proxima_empresa: str | None = None
         self.extrator = ExtratorPedidos()
         self.pedidos = []

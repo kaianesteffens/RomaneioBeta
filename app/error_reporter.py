@@ -99,6 +99,26 @@ def reload_config() -> None:
     _load_config()
 
 
+def configure(config_path) -> None:
+    """Configura o error reporter com o path explícito do CONFIG.toml da empresa ativa."""
+    global _gist_id, _token, _initialized
+    _initialized = False
+    try:
+        p = Path(config_path)
+        if not p.exists():
+            return
+        cfg = _load_toml_file(p)
+        fb = cfg.get("fretebot", {})
+        gist_id = fb.get("error_gist_id", "").strip()
+        token = fb.get("error_report_token", "").strip()
+        if gist_id and token:
+            _gist_id = gist_id
+            _token = token
+        _initialized = True
+    except Exception:
+        pass
+
+
 def _get_version() -> str:
     try:
         p = Path(getattr(sys, "_MEIPASS", "")) / "version.txt"
