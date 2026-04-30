@@ -1402,7 +1402,7 @@ class RomaneioWindow(QMainWindow):
         # Barra superior - botoes
         rastreio_top_row = QHBoxLayout()
         rastreio_top_row.setSpacing(8)
-        self.btn_select_nfe = QPushButton("Selecionar XML/PDF")
+        self.btn_select_nfe = QPushButton("Selecionar XML(s)")
         self.btn_select_nfe.setObjectName("PrimaryButton")
         self.btn_select_nfe.clicked.connect(self._selecionar_nfe)
         self.btn_rastrear = QPushButton("Rastrear Entregas")
@@ -1439,7 +1439,7 @@ class RomaneioWindow(QMainWindow):
 
         # Placeholder quando nao ha notas
         self._rastreio_placeholder = QLabel(
-            "Selecione arquivos XML (NF-e) ou PDF (DANFE) para visualizar as informa\u00e7\u00f5es do pedido e rastrear entregas."
+            "Selecione um ou mais arquivos XML de NF-e para visualizar as informa\u00e7\u00f5es do pedido e rastrear entregas automaticamente."
         )
         self._rastreio_placeholder.setObjectName("SubtitleLabel")
         self._rastreio_placeholder.setAlignment(Qt.AlignCenter)
@@ -1945,18 +1945,18 @@ class RomaneioWindow(QMainWindow):
             except Exception:
                 pass
 
-        t = threading.Thread(target=_cleanup_background, daemon=False)
+        t = threading.Thread(target=_cleanup_background, daemon=True)
         t.start()
-        t.join(timeout=15)  # Aguarda até 15s para cleanup + orphan killer
+        # Não bloqueia o fechamento — cleanup roda em background e o processo encerra logo
 
 
     def _selecionar_nfe(self):
-        """Abre diálogo para selecionar arquivos XML/PDF de NF-e."""
+        """Abre dialogo para selecionar arquivos XML de NF-e (um ou varios)."""
         arquivos, _ = QFileDialog.getOpenFileNames(
             self,
-            "Selecionar NF-e (XML ou DANFE PDF)",
+            "Selecionar NF-e (XML)",
             "",
-            "NF-e files (*.xml *.pdf);;XML files (*.xml);;PDF files (*.pdf);;All files (*.*)"
+            "XML NF-e (*.xml);;Todos os arquivos (*.*)"
         )
         if not arquivos:
             return
@@ -1987,7 +1987,7 @@ class RomaneioWindow(QMainWindow):
 
         self._atualizar_lista_notas_rastreio()
         if novas > 0:
-            self.label_info.setText(f"{novas} nota(s) carregada(s) — iniciando rastreamento...")
+            self.label_info.setText(f"{novas} XML(s) carregado(s) — iniciando rastreamento...")
             self.label_info.setStyleSheet("color: #1f6feb;")
             self._iniciar_rastreamento()
 
@@ -2002,7 +2002,7 @@ class RomaneioWindow(QMainWindow):
             if w:
                 w.deleteLater()
         self._rastreio_placeholder = QLabel(
-            "Selecione arquivos XML (NF-e) ou PDF (DANFE) para visualizar as informações do pedido e rastrear entregas."
+            "Selecione um ou mais arquivos XML de NF-e para visualizar as informações do pedido e rastrear entregas automaticamente."
         )
         self._rastreio_placeholder.setObjectName("SubtitleLabel")
         self._rastreio_placeholder.setAlignment(Qt.AlignCenter)
@@ -2016,7 +2016,7 @@ class RomaneioWindow(QMainWindow):
         self.label_info.setStyleSheet("color: #6b7a96;")
 
     def _criar_card_nfe(self, indice, nf):
-        """Cria um card visual para uma NF-e com blocos de pedido e rastreamento."""
+        """Cria um card visual para uma NF-e com 3 blocos: dados entrega | dados PE-CRM | rastreamento."""
         card = QFrame()
         card.setObjectName("RastreioCard")
         card_layout = QVBoxLayout(card)
@@ -2024,64 +2024,120 @@ class RomaneioWindow(QMainWindow):
         card_layout.setSpacing(8)
 
         transp = identificar_transportadora(nf)
-        transp_display = (nf.transportadora_nome or transp.upper() or "NÃO IDENTIFICADA")
-        header = QLabel(f"[{indice}] NF-e {nf.numero} — {transp_display}")
+        transp_display = (nf.transportadora_nome or transp.upper() or "NAO IDENTIFICADA")
+        data_emissao_display = ""
+        if nf.data_emissao:
+            # formata "2026-04-13T10:02:17-03:00" -> "13/04/2026"
+            import re as _re
+            m_data = _re.match(r'(\d{4})-(\d{2})-(\d{2})', nf.data_emissao)
+            if m_data:
+                data_emissao_display = f"  |  Emissao: {m_data.group(3)}/{m_data.group(2)}/{m_data.group(1)}"
+        header = QLabel(f"[{indice}] NF-e {nf.numero} — {transp_display}{data_emissao_display}")
         header.setObjectName("RastreioCardHeader")
         card_layout.addWidget(header)
+
+        info = parsear_info_complementar(nf.info_complementar)
 
         blocos_row = QHBoxLayout()
         blocos_row.setSpacing(10)
 
-        # Bloco: Informações do Pedido
+        # ── Bloco 1: Dados Adicionais da Nota Fiscal ─────────────────────────
         bloco_pedido = QFrame()
-        bloco_pedido.setStyleSheet("background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;")
+        bloco_pedido.setStyleSheet("background: #f0f7ff; border: 1px solid #bfdbfe; border-radius: 8px;")
         pedido_layout = QVBoxLayout(bloco_pedido)
         pedido_layout.setContentsMargins(10, 8, 10, 8)
-        pedido_layout.setSpacing(4)
+        pedido_layout.setSpacing(3)
 
-        lbl_pedido_title = QLabel("📋 INFORMAÇÕES DO PEDIDO")
+        lbl_pedido_title = QLabel("\U0001f4cb DADOS ADICIONAIS")
         lbl_pedido_title.setObjectName("RastreioBlockTitle")
         pedido_layout.addWidget(lbl_pedido_title)
 
-        info = parsear_info_complementar(nf.info_complementar)
-        if info.get("pedido_compra"):
-            pedido_layout.addWidget(self._make_info_row("Pedido Compra:", info["pedido_compra"]))
-        if info.get("pedido_venda"):
-            pedido_layout.addWidget(self._make_info_row("Pedido Venda:", info["pedido_venda"]))
         if nf.destinatario_nome:
             dest = nf.destinatario_nome
             if nf.destinatario_cidade and nf.destinatario_uf:
                 dest += f" ({nf.destinatario_cidade}/{nf.destinatario_uf})"
-            pedido_layout.addWidget(self._make_info_row("Destinatário:", dest))
+            pedido_layout.addWidget(self._make_info_row("Destinatario:", dest))
+        if nf.destinatario_cep:
+            import re as _re2
+            cep_fmt = nf.destinatario_cep
+            if len(cep_fmt) == 8:
+                cep_fmt = f"{cep_fmt[:5]}-{cep_fmt[5:]}"
+            pedido_layout.addWidget(self._make_info_row("CEP:", cep_fmt))
         if info.get("local_entrega"):
             pedido_layout.addWidget(self._make_info_row("Local Entrega:", info["local_entrega"]))
-        if nf.valor_total:
-            vf = f"R$ {nf.valor_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            pedido_layout.addWidget(self._make_info_row("Valor NF:", vf))
-        if nf.volumes:
-            pedido_layout.addWidget(self._make_info_row("Volumes:", str(nf.volumes)))
-        if nf.peso_bruto:
-            pedido_layout.addWidget(self._make_info_row("Peso:", f"{nf.peso_bruto:.2f} kg"))
         if info.get("agendamento"):
             pedido_layout.addWidget(self._make_info_row("Agendamento:", info["agendamento"]))
         if info.get("horario"):
-            pedido_layout.addWidget(self._make_info_row("Horário:", info["horario"]))
-        if not info and not nf.destinatario_nome:
-            lbl_sem = QLabel("Sem informações complementares")
+            pedido_layout.addWidget(self._make_info_row("Horario:", info["horario"]))
+        if info.get("recebedor"):
+            pedido_layout.addWidget(self._make_info_row("Recebedor:", info["recebedor"]))
+        if info.get("observacoes"):
+            obs = info["observacoes"]
+            if len(obs) > 120:
+                obs = obs[:117] + "..."
+            pedido_layout.addWidget(self._make_info_row("Observacoes:", obs))
+        if nf.volumes:
+            pedido_layout.addWidget(self._make_info_row("Volumes:", str(nf.volumes)))
+        if nf.peso_bruto:
+            pedido_layout.addWidget(self._make_info_row("Peso Bruto:", f"{nf.peso_bruto:.3f} kg"))
+        if nf.peso_liquido and nf.peso_liquido != nf.peso_bruto:
+            pedido_layout.addWidget(self._make_info_row("Peso Liquido:", f"{nf.peso_liquido:.3f} kg"))
+        if nf.valor_total:
+            vf = f"R$ {nf.valor_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            pedido_layout.addWidget(self._make_info_row("Valor NF:", vf))
+        if nf.valor_frete:
+            vfr = f"R$ {nf.valor_frete:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            pedido_layout.addWidget(self._make_info_row("Valor Frete:", vfr))
+        if (not info.get("local_entrega") and not nf.destinatario_nome
+                and not nf.volumes and not nf.valor_total):
+            lbl_sem = QLabel("Sem dados adicionais")
             lbl_sem.setObjectName("RastreioBlockValue")
             lbl_sem.setStyleSheet("color: #8896ab; font-style: italic;")
             pedido_layout.addWidget(lbl_sem)
         pedido_layout.addStretch(1)
         blocos_row.addWidget(bloco_pedido, 1)
 
-        # Bloco: Rastreamento
+        # ── Bloco 2: Dados Complementares PE → CRM ───────────────────────────
+        bloco_complementar = QFrame()
+        bloco_complementar.setStyleSheet("background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px;")
+        complementar_layout = QVBoxLayout(bloco_complementar)
+        complementar_layout.setContentsMargins(10, 8, 10, 8)
+        complementar_layout.setSpacing(3)
+
+        lbl_comp_title = QLabel("\U0001f4dd DADOS COMPLEMENTARES")
+        lbl_comp_title.setObjectName("RastreioBlockTitle")
+        complementar_layout.addWidget(lbl_comp_title)
+
+        if info.get("pedido_compra"):
+            complementar_layout.addWidget(self._make_info_row("Ped. Compra:", info["pedido_compra"]))
+        if info.get("pedido_venda"):
+            complementar_layout.addWidget(self._make_info_row("Ped. Venda:", info["pedido_venda"]))
+
+        bloco2 = info.get("bloco2_campos", [])
+        _label_map = {
+            "PE": "PE:", "ATA": "ATA:", "OC": "OC:", "OP": "OP:",
+            "NR": "NR:", "CRM": "CRM:",
+        }
+        for lbl, val in bloco2:
+            label_display = _label_map.get(lbl.upper(), f"{lbl}:")
+            complementar_layout.addWidget(self._make_info_row(label_display, val))
+
+        if (not info.get("pedido_compra") and not info.get("pedido_venda") and not bloco2):
+            lbl_sem2 = QLabel("Sem dados complementares")
+            lbl_sem2.setObjectName("RastreioBlockValue")
+            lbl_sem2.setStyleSheet("color: #8896ab; font-style: italic;")
+            complementar_layout.addWidget(lbl_sem2)
+        complementar_layout.addStretch(1)
+        blocos_row.addWidget(bloco_complementar, 1)
+
+        # ── Bloco 3: Rastreamento ─────────────────────────────────────────────
         bloco_rastreio = QFrame()
         bloco_rastreio.setStyleSheet("background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;")
         rastreio_layout = QVBoxLayout(bloco_rastreio)
         rastreio_layout.setContentsMargins(10, 8, 10, 8)
         rastreio_layout.setSpacing(4)
 
-        lbl_rastreio_title = QLabel("🚚 RASTREAMENTO")
+        lbl_rastreio_title = QLabel("\U0001f69a RASTREAMENTO")
         lbl_rastreio_title.setObjectName("RastreioBlockTitle")
         rastreio_layout.addWidget(lbl_rastreio_title)
 
@@ -2204,15 +2260,30 @@ class RomaneioWindow(QMainWindow):
         elif resultado.entregue:
             status_label.setText("✅ ENTREGUE")
             status_label.setObjectName("RastreioStatusEntregue")
+            if resultado.status_texto and resultado.status_texto not in ("ENTREGUE",):
+                detail_container.addWidget(self._make_info_row("Status:", resultado.status_texto))
             if resultado.previsao_entrega:
                 detail_container.addWidget(self._make_info_row("Data entrega:", resultado.previsao_entrega))
             if resultado.screenshot_path:
-                detail_container.addWidget(self._make_info_row("Screenshot:", Path(resultado.screenshot_path).name))
+                p_screenshot = Path(resultado.screenshot_path)
+                lbl_ss = QLabel(
+                    f'<a href="file:///{resultado.screenshot_path.replace(chr(92), "/")}">'
+                    f'{p_screenshot.name}</a>'
+                )
+                lbl_ss.setOpenExternalLinks(True)
+                lbl_ss.setStyleSheet("font-size: 12px;")
+                detail_container.addWidget(self._make_info_row("Screenshot:", ""))
+                detail_container.addWidget(lbl_ss)
+            if resultado.link_rastreio:
+                lbl_link = QLabel(f'<a href="{resultado.link_rastreio}">Abrir rastreio</a>')
+                lbl_link.setOpenExternalLinks(True)
+                lbl_link.setStyleSheet("font-size: 12px;")
+                detail_container.addWidget(lbl_link)
         else:
-            status_label.setText(f"📦 {resultado.status_texto or 'Em trânsito'}")
+            status_label.setText(f"\U0001f4e6 {resultado.status_texto or 'Em transito'}")
             status_label.setObjectName("RastreioStatusTransito")
             if resultado.previsao_entrega:
-                detail_container.addWidget(self._make_info_row("Previsão:", resultado.previsao_entrega))
+                detail_container.addWidget(self._make_info_row("Previsao:", resultado.previsao_entrega))
             if resultado.link_rastreio:
                 lbl_link = QLabel(f'<a href="{resultado.link_rastreio}">Abrir rastreio</a>')
                 lbl_link.setOpenExternalLinks(True)
