@@ -105,7 +105,7 @@ class EucaturProvider(ProviderBase):
         except Exception:
             pass
         try:
-            if self._browser and self._browser.is_connected():
+            if self._browser:
                 await self._browser.close()
         except Exception:
             pass

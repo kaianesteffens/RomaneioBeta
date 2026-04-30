@@ -1,4 +1,4 @@
-﻿"""
+"""
 Extrator de dados de NF-e (Nota Fiscal Eletronica) a partir de XML e DANFE PDF.
 
 Extrai: chave de acesso, numero NF, transportadora, destinatario, volumes, peso, valor.
@@ -50,7 +50,7 @@ def _find_text(element, xpath: str, ns: dict = _NS) -> str:
     return (el.text or "").strip() if el is not None else ""
 
 
-def _find_text_any(element, xpaths: list[str], ns: dict = _NS) -> str:
+def _find_text_any(element, xpaths: list, ns: dict = _NS) -> str:
     for xpath in xpaths:
         result = _find_text(element, xpath, ns)
         if result:
@@ -185,6 +185,16 @@ def _parse_nfe_element(nfe_el, ns: dict, caminho: str) -> NotaFiscal:
         nf.valor_frete = float(vfrete.replace(",", "."))
     except (ValueError, TypeError):
         pass
+    # Informacoes complementares (infAdic/infCpl + infAdFisco)
+    infadic_prefix = f"{p}infAdic"
+    infcpl = _find_text(infNFe, f"{infadic_prefix}/{p}infCpl", ns)
+    infadfisco = _find_text(infNFe, f"{infadic_prefix}/{p}infAdFisco", ns)
+    partes_info = []
+    if infcpl:
+        partes_info.append(infcpl)
+    if infadfisco:
+        partes_info.append(infadfisco)
+    nf.info_complementar = " | ".join(partes_info)
     return nf
 
 
@@ -333,12 +343,24 @@ def formatar_nota_resumo(nf: NotaFiscal) -> str:
 
 
 def parsear_info_complementar(info: str) -> dict:
-    """Parseia informações complementares da NF-e em campos estruturados."""
-    result: dict = {}
+    """Parseia informacoes complementares da NF-e em campos estruturados.
+
+    Retorna dict com:
+      Bloco 1 (entrega/logistica):
+        pedido_compra, pedido_venda, local_entrega, agendamento,
+        horario, recebedor, observacoes
+      Bloco 2 (PE ate CRM):
+        bloco2_campos -> list of (label, valor) tuples
+        Tambem pe, ata, oc, crm, op como chaves individuais.
+    """
+    result = {}
     if not info:
         return result
 
+    # Normaliza separadores: || vira newline, | vira newline
     texto = info.replace("||", "\n").replace("|", "\n")
+
+    # ── Bloco 1: logistica / entrega ─────────────────────────────────────────
 
     m = re.search(r'Pedido\s+de\s+compra\s+do\s+cliente[:\s]*(.+)', texto, re.IGNORECASE)
     if m:
@@ -349,7 +371,10 @@ def parsear_info_complementar(info: str) -> dict:
         result["pedido_venda"] = m.group(1).strip().rstrip(".")
 
     local_parts = []
-    m_local = re.search(r'LOCAL\s+DE\s+ENTREGA[:\s]*(.*?)(?=\n\s*(?:AGENDAMENTO|HORARIO|$))', texto, re.IGNORECASE | re.DOTALL)
+    m_local = re.search(
+        r'LOCAL\s+DE\s+ENTREGA[:\s]*(.*?)(?=\n\s*(?:AGENDAMENTO|HORARIO|PE\b|CRM\b|-{3,}|$))',
+        texto, re.IGNORECASE | re.DOTALL
+    )
     if m_local:
         local_raw = m_local.group(1).strip()
         if local_raw:
@@ -362,14 +387,17 @@ def parsear_info_complementar(info: str) -> dict:
         bairro = m.group(1).strip()
         if bairro and bairro not in " ".join(local_parts):
             local_parts.append(bairro)
-    m_cep = re.search(r'CEP[:\s]*([\d.\-]+)\s*\n?\s*([A-Za-z\u00c0-\u00fa\s]+/[A-Z]{2})?', texto, re.IGNORECASE)
+    # Linha "CIDADE/UF" sem label (ex: "MARILIA/SP")
+    m_cidade = re.search(r'\n\s*([A-Za-z][A-Za-z\s]+/[A-Z]{2})\s*\n', texto)
+    if m_cidade:
+        cidade_linha = m_cidade.group(1).strip()
+        if cidade_linha not in " ".join(local_parts):
+            local_parts.append(cidade_linha)
+    m_cep = re.search(r'CEP[:\s]*([\d.\-]+)', texto, re.IGNORECASE)
     if m_cep:
         cep_str = m_cep.group(1).strip()
-        cidade_uf = (m_cep.group(2) or "").strip()
-        if cidade_uf:
-            local_parts.append(f"CEP {cep_str} \u2014 {cidade_uf}")
-        elif cep_str not in " ".join(local_parts):
-            local_parts.append(f"CEP {cep_str}")
+        if cep_str not in " ".join(local_parts):
+            local_parts.append("CEP " + cep_str)
     if local_parts:
         result["local_entrega"] = "\n".join(local_parts)
 
@@ -380,5 +408,74 @@ def parsear_info_complementar(info: str) -> dict:
     m = re.search(r'HORARIO[:\s]*(.+?)(?:\n|$)', texto, re.IGNORECASE)
     if m:
         result["horario"] = m.group(1).strip()
+
+    for _pat in [
+        r'RECEBEDOR[:\s]*(.+?)(?:\n|$)',
+        r'CONTATO[:\s]*(.+?)(?:\n|$)',
+        r'RESPONSAVEL[:\s]*(.+?)(?:\n|$)',
+    ]:
+        m = re.search(_pat, texto, re.IGNORECASE)
+        if m:
+            result["recebedor"] = m.group(1).strip()
+            break
+
+    m = re.search(
+        r'(?:OBS(?:ERVACOES?)?|OBSERV)[:\s]*(.+?)(?=\n\s*[A-Z]{2,}\s*[:\-]|\Z)',
+        texto, re.IGNORECASE | re.DOTALL
+    )
+    if m:
+        obs = m.group(1).strip()
+        if obs:
+            result["observacoes"] = obs
+
+    # Bloco 2: PE -> CRM (campos com separador espaco ou dois-pontos)
+    # Formato XML real: "PE 900572024", "ATA 334/2024/C", "OC 115575/2026", "CRM 18625"
+
+    bloco2_campos = []
+    captured_b2 = set()
+
+    _b2_known = [
+        ("PE",  r'(?:^|\n)\s*PE\s+(\S+)',   r'(?:^|\n)\s*PE\s*[:\-]\s*(\S+)'),
+        ("ATA", r'(?:^|\n)\s*ATA\s+(\S+)',  r'(?:^|\n)\s*ATA\s*[:\-]\s*(\S+)'),
+        ("OC",  r'(?:^|\n)\s*OC\s+(\S+)',   r'(?:^|\n)\s*OC\s*[:\-]\s*(\S+)'),
+        ("OP",  r'(?:^|\n)\s*OP\s+(\S+)',   r'(?:^|\n)\s*OP\s*[:\-]\s*(\S+)'),
+        ("NR",  r'(?:^|\n)\s*NR\s+(\S+)',   r'(?:^|\n)\s*NR\s*[:\-]\s*(\S+)'),
+        ("CRM", r'(?:^|\n)\s*CRM\s+(\S+)',  r'(?:^|\n)\s*CRM\s*[:\-]\s*(\S+)'),
+    ]
+    for label, pat_space, pat_colon in _b2_known:
+        val = None
+        for pat in (pat_space, pat_colon):
+            m = re.search(pat, texto)
+            if m:
+                v = m.group(1).strip().rstrip(",;.")
+                if v and not re.match(r'^-{3,}', v):
+                    val = v
+                    break
+        if val:
+            bloco2_campos.append((label, val))
+            captured_b2.add(label)
+            result[label.lower()] = val
+
+    # Varredura generica na secao apos AGENDAMENTO (ate tracejado ou fim)
+    m_sec = re.search(
+        r'AGENDAMENTO[^\n]*\n(.*?)(?=-{3,}|Endereco de Entrega|\Z)',
+        texto, re.IGNORECASE | re.DOTALL
+    )
+    if m_sec:
+        for linha in m_sec.group(1).splitlines():
+            linha = linha.strip()
+            if not linha or re.match(r'^-+$', linha):
+                continue
+            m_lv = re.match(r'^([A-Z]{2,6})\s+(\S.*)$', linha)
+            if m_lv:
+                lbl = m_lv.group(1)
+                val = m_lv.group(2).strip()
+                if lbl not in captured_b2 and not any(l == lbl for l, _ in bloco2_campos):
+                    bloco2_campos.append((lbl, val))
+                    captured_b2.add(lbl)
+                    result["b2_" + lbl.lower()] = val
+
+    if bloco2_campos:
+        result["bloco2_campos"] = bloco2_campos
 
     return result
