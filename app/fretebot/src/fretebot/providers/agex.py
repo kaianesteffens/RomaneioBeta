@@ -420,7 +420,7 @@ class AGEXProvider(ProviderBase):
         except Exception:
             pass
         try:
-            if self._browser and self._browser.is_connected():
+            if self._browser:
                 await self._browser.close()
         except Exception:
             pass
@@ -679,37 +679,55 @@ class AGEXProvider(ProviderBase):
             await nf_loc.press("Tab")
             await page.wait_for_timeout(200)
 
-            # ── Tipo de Produto (select nativo) ───────────────────────────────
+            # ── Tipo de Produto (Radix Combobox — NÃO é <select> nativo) ────────
             etapa = "carga_tipo_produto"
             try:
-                tipo_opts = await page.evaluate("""() => {
-                    const selects = Array.from(document.querySelectorAll('select'))
-                        .filter(s => s.offsetParent !== null);
-                    if (!selects.length) return [];
-                    return Array.from(selects[0].options).map(o => ({
-                        value: o.value, text: o.text.trim()
-                    }));
+                # O portal usa button[role="combobox"] do Radix UI, não <select>
+                opened = await page.evaluate(r"""() => {
+                    const btn = Array.from(document.querySelectorAll('button[role="combobox"]'))
+                        .find(b => b.offsetParent !== null);
+                    if (!btn) return false;
+                    btn.click();
+                    return true;
                 }""")
-                logger.info(f"[{self.nome}] Tipo produto options: {tipo_opts}")
-                matched_tp = next(
-                    (o for o in tipo_opts
-                     if self.tipo_produto.lower() in o["text"].lower()),
-                    None,
-                )
-                if not matched_tp:
-                    # Tenta match parcial inverso
+                if opened:
+                    await page.wait_for_timeout(700)
+                    # As opções aparecem em [role="option"] dentro do popover Radix
+                    tipo_opts = await page.evaluate(r"""() => {
+                        return Array.from(document.querySelectorAll('[role="option"]'))
+                            .map(o => o.textContent.trim())
+                            .filter(t => t.length > 0);
+                    }""")
+                    logger.info(f"[{self.nome}] Tipo produto options (radix): {tipo_opts}")
+
+                    target_text = self.tipo_produto.lower()
                     matched_tp = next(
-                        (o for o in tipo_opts
-                         if o["text"].lower() in self.tipo_produto.lower()),
+                        (t for t in tipo_opts if target_text in t.lower()),
                         None,
                     )
-                if not matched_tp:
-                    # Fallback: primeiro option não vazio
-                    matched_tp = next((o for o in tipo_opts if o["value"]), None)
-                if matched_tp:
-                    target_tp = matched_tp["value"] or matched_tp["text"]
-                    await self._set_react_select(page, target_tp)
-                    await page.wait_for_timeout(300)
+                    if not matched_tp:
+                        matched_tp = next(
+                            (t for t in tipo_opts if t.lower() in target_text),
+                            None,
+                        )
+                    if not matched_tp and tipo_opts:
+                        matched_tp = tipo_opts[0]  # fallback: primeiro disponível
+
+                    if matched_tp:
+                        await page.evaluate(r"""(text) => {
+                            const opt = Array.from(document.querySelectorAll('[role="option"]'))
+                                .find(o => o.textContent.trim() === text);
+                            if (opt) opt.click();
+                        }""", matched_tp)
+                        await page.wait_for_timeout(400)
+                        logger.info(f"[{self.nome}] Tipo produto selecionado: '{matched_tp}'")
+                    else:
+                        logger.warning(f"[{self.nome}] Tipo produto: nenhuma opção encontrada no combobox")
+                        # Fechar o combobox se ficou aberto
+                        await page.keyboard.press("Escape")
+                        await page.wait_for_timeout(200)
+                else:
+                    logger.warning(f"[{self.nome}] Combobox tipo produto não encontrado na página")
             except Exception as e:
                 logger.warning(f"[{self.nome}] Erro ao selecionar tipo produto: {e}")
 

@@ -54,12 +54,15 @@
 <input placeholder="Valor total da nota fiscal" type="text" />
 <!-- Preencher com keyboard.type(str(int(round(valor)))) — campo tem máscara de moeda -->
 
-<!-- Tipo de produto (primeiro <select> visível desta etapa) -->
-<select>  <!-- SEM name, SEM id -->
-  <option value="...">Artigos Esportivos</option>
-  <option value="...">Carga Geral</option>
-  <!-- ... outras opções ... -->
-</select>
+<!-- Tipo de produto — RADIX COMBOBOX (NÃO é <select> nativo!) -->
+<!-- Estrutura real capturada: button[role="combobox"][aria-haspopup="dialog"] -->
+<button role="combobox" type="button" aria-haspopup="dialog" data-state="closed">
+  <p class="truncate">Selecione um tipo de produto</p>
+</button>
+<!-- Ao clicar, abre popover Radix com [role="option"] para cada tipo -->
+<!-- Interação: clicar o button → aguardar 700ms → clicar [role="option"] pelo textContent -->
+<!-- NÃO usar _set_react_select() — não é <select> HTML nativo -->
+<!-- Erro de validação se não preencher: "O produto é obrigatório." (text-destructive) -->
 
 <!-- Cubagem — por linha (idx começa em 0): -->
 <!-- Dimensões em CENTÍMETROS (inteiro) — converter de metros: int(round(m * 100)) -->
