@@ -4,6 +4,7 @@ FreteBot — Relatório de Erros Remoto.
 Envia erros automaticamente para um GitHub Gist (como comentários).
 Cada erro vira um comentário no gist, sem criar arquivos locais.
 Falhas no envio são silenciosas — nunca impacta o uso do app.
+Diagnóstico gravado em %APPDATA%/FreteBot/error_reporter.log.
 """
 from __future__ import annotations
 
@@ -16,8 +17,7 @@ import traceback
 import threading
 from hashlib import sha256
 from pathlib import Path
-from typing import Optional
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
@@ -30,6 +30,35 @@ _lock = threading.Lock()
 _gist_id: str = ""
 _token: str = ""
 _initialized = False
+
+# ── Log de diagnóstico ────────────────────────────────────────────
+_LOG_MAX_BYTES = 100 * 1024  # 100 KB — rotaciona apagando metade quando ultrapassar
+_log_lock = threading.Lock()
+
+
+def _log_path() -> Path:
+    appdata = os.getenv("APPDATA", "")
+    if appdata:
+        return Path(appdata) / "FreteBot" / "error_reporter.log"
+    return Path(__file__).parent / "error_reporter.log"
+
+
+def _diag(level: str, msg: str) -> None:
+    """Grava linha de diagnóstico no log local. Nunca lança exceção."""
+    try:
+        p = _log_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        line = f"[{ts}] [{level}] {msg}\n"
+        with _log_lock:
+            # Rotação simples: se ultrapassar limite, mantém só a metade final
+            if p.exists() and p.stat().st_size > _LOG_MAX_BYTES:
+                content = p.read_bytes()
+                p.write_bytes(content[len(content) // 2:])
+            with p.open("a", encoding="utf-8") as f:
+                f.write(line)
+    except Exception:
+        pass
 
 
 def _load_toml_file(path: Path) -> dict:
@@ -86,12 +115,15 @@ def _load_config() -> None:
     if _initialized:
         return
     try:
+        candidates_checked = []
         for candidate in _iter_config_candidates():
             if not candidate.exists():
                 continue
+            candidates_checked.append(str(candidate))
             try:
                 cfg = _load_toml_file(candidate)
-            except Exception:
+            except Exception as e:
+                _diag("WARN", f"Falha ao ler {candidate}: {e}")
                 continue
             fb = cfg.get("fretebot", {})
             gist_id = fb.get("error_gist_id", "").strip()
@@ -100,11 +132,18 @@ def _load_config() -> None:
                 _gist_id = gist_id
                 _token = token
                 _initialized = True
+                _diag("INFO", f"Config carregada de: {candidate} | gist_id={gist_id[:8]}...")
                 return
+            else:
+                _diag("DEBUG", f"Config sem credenciais de report: {candidate} | gist_id={repr(gist_id)} token={'(presente)' if token else '(vazio)'}")
         # Nenhum arquivo tinha as chaves — NÃO marca como inicializado
         # para que a próxima chamada tente novamente (ex: config copiada depois)
-    except Exception:
-        pass
+        if candidates_checked:
+            _diag("WARN", f"Nenhum CONFIG.toml com error_gist_id+error_report_token. Verificados: {candidates_checked}")
+        else:
+            _diag("WARN", "Nenhum CONFIG.toml encontrado em nenhum caminho candidato.")
+    except Exception as e:
+        _diag("ERROR", f"_load_config falhou inesperadamente: {e}")
 
 
 def reload_config() -> None:
@@ -121,6 +160,7 @@ def configure(config_path) -> None:
     try:
         p = Path(config_path)
         if not p.exists():
+            _diag("WARN", f"configure(): arquivo não existe: {config_path}")
             return
         cfg = _load_toml_file(p)
         fb = cfg.get("fretebot", {})
@@ -129,11 +169,14 @@ def configure(config_path) -> None:
         if gist_id and token:
             _gist_id = gist_id
             _token = token
-            _initialized = True  # Só marca como inicializado quando tem credenciais válidas
+            _initialized = True
+            _diag("INFO", f"configure(): credenciais carregadas de {config_path} | gist_id={gist_id[:8]}...")
+        else:
+            _diag("WARN", f"configure(): {config_path} sem credenciais | gist_id={repr(gist_id)} token={'(presente)' if token else '(vazio)'} — tentará fallback em _load_config()")
         # Se as chaves não existem/estão vazias: _initialized permanece False
         # para que _load_config() possa tentar os caminhos de fallback
-    except Exception:
-        pass
+    except Exception as e:
+        _diag("ERROR", f"configure() falhou: {e}")
 
 
 def _get_version() -> str:
@@ -202,21 +245,40 @@ def _is_rate_limited(fingerprint: str) -> bool:
     return False
 
 
-def _send_to_gist(body: str) -> bool:
+def _send_to_gist(body: str, label: str = "") -> bool:
     """Envia um comentário ao Gist via API do GitHub."""
     if not _gist_id or not _token:
+        _diag("WARN", f"_send_to_gist({label}): abortado — gist_id ou token vazios no momento do envio")
         return False
     url = f"https://api.github.com/gists/{_gist_id}/comments"
     payload = json.dumps({"body": body}).encode("utf-8")
     req = Request(url, data=payload, method="POST")
-    req.add_header("Authorization", f"token {_token}")
+    # Bearer funciona para classic PATs e fine-grained PATs; "token" só para classic
+    req.add_header("Authorization", f"Bearer {_token}")
     req.add_header("Accept", "application/vnd.github+json")
     req.add_header("Content-Type", "application/json")
     req.add_header("X-GitHub-Api-Version", "2022-11-28")
     try:
         with urlopen(req, timeout=15) as resp:
-            return resp.status == 201
-    except Exception:
+            ok = resp.status == 201
+            if ok:
+                _diag("INFO", f"_send_to_gist({label}): enviado com sucesso (HTTP 201)")
+            else:
+                _diag("WARN", f"_send_to_gist({label}): resposta inesperada HTTP {resp.status}")
+            return ok
+    except HTTPError as e:
+        body_snippet = ""
+        try:
+            body_snippet = e.read(200).decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        _diag("ERROR", f"_send_to_gist({label}): HTTP {e.code} {e.reason} | gist_id={_gist_id[:8]}... | resposta: {body_snippet}")
+        return False
+    except URLError as e:
+        _diag("ERROR", f"_send_to_gist({label}): URLError — {e.reason}")
+        return False
+    except Exception as e:
+        _diag("ERROR", f"_send_to_gist({label}): exceção inesperada — {type(e).__name__}: {e}")
         return False
 
 
@@ -253,12 +315,16 @@ def report_error(
         # (rate-limit só deve consumir slot se o envio for possível)
         _load_config()
         if not _gist_id or not _token:
+            _diag("WARN", f"report_error({exc_type_name}): sem credenciais — descartado")
             return
 
         # Rate-limit por fingerprint
         fp = _error_fingerprint(exc_type_name, tb_text)
         if _is_rate_limited(fp):
+            _diag("DEBUG", f"report_error({exc_type_name}): rate-limited (fp={fp})")
             return
+
+        _diag("INFO", f"report_error({exc_type_name}): enviando... context={context or 'N/A'} fp={fp}")
 
         # Monta o corpo do comentário (Markdown)
         version = _get_version()
@@ -288,7 +354,8 @@ def report_error(
         body = "\n".join(body_parts)
 
         # Envia em thread separada para não bloquear o app
-        t = threading.Thread(target=_send_to_gist, args=(body,), daemon=True)
+        label = f"{exc_type_name}/{context or 'N/A'}"
+        t = threading.Thread(target=_send_to_gist, args=(body, label), daemon=True)
         t.start()
         if wait:
             t.join(timeout=20)
@@ -306,11 +373,15 @@ def report_error_message(message: str, context: str = "", wait: bool = False) ->
     try:
         _load_config()
         if not _gist_id or not _token:
+            _diag("WARN", f"report_error_message: sem credenciais — descartado: {message[:80]}")
             return
 
         fp = sha256(message.encode()).hexdigest()[:16]
         if _is_rate_limited(fp):
+            _diag("DEBUG", f"report_error_message: rate-limited (fp={fp})")
             return
+
+        _diag("INFO", f"report_error_message: enviando... context={context or 'N/A'}")
 
         version = _get_version()
         machine = _get_machine_hash()
@@ -330,7 +401,8 @@ def report_error_message(message: str, context: str = "", wait: bool = False) ->
         ]
         body = "\n".join(body_parts)
 
-        t = threading.Thread(target=_send_to_gist, args=(body,), daemon=True)
+        label = f"msg/{context or 'N/A'}"
+        t = threading.Thread(target=_send_to_gist, args=(body, label), daemon=True)
         t.start()
         if wait:
             t.join(timeout=20)
@@ -350,6 +422,8 @@ def install_global_hooks() -> None:
     Chame uma vez na inicialização do app.
     """
     global _original_excepthook, _original_threading_excepthook
+
+    _diag("INFO", f"install_global_hooks(): inicializando | versão={_get_version()}")
 
     # Carrega config cedo para detectar problemas
     _load_config()
@@ -380,3 +454,4 @@ def install_global_hooks() -> None:
                 pass
 
     threading.excepthook = _thread_excepthook
+    _diag("INFO", "install_global_hooks(): hooks instalados (sys.excepthook + threading.excepthook)")

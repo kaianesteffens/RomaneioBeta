@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -47,22 +48,20 @@ class ResultadoRastreio:
 
 _TRACKING_URLS: dict[str, str] = {
     "braspress": "https://www.braspress.com/rastreie-sua-encomenda/",
-    "trd": "",       # site fora do ar (DNS nao resolve)
-    "agex": "",      # site fora do ar (DNS nao resolve)
-    "eucatur": "https://ssw.inf.br/2/rastreamento_danfe?sigla_emp=EUC&sc=N",
+    "alfa": "https://alfatransportes.com.br/",
+    "trd": "https://platform.senior.com.br/logistica-tck/tms/tck-frontend/#/login/signup?tenant=ZEhKa2RISmhibk53YjNKMFpYTT0%3D",
+    "agex": "https://cliente.agex.com.br/rastreamento",
+    "eucatur": "https://ssw.inf.br/2/rastreamento?sigla_emp=EUC&sc=N&sl=N",
     "bauer": "",     # pagina de rastreamento removida (404)
-    "coopex": "https://ssw.inf.br/2/rastreamento_danfe?sigla_emp=COP&sc=N",
-    "viopex": "https://ssw.inf.br/2/rastreamento_danfe?sigla_emp=VIO&sc=N",
-    "mengue": "https://ssw.inf.br/2/rastreamento_danfe?sigla_emp=MEN&sc=N",
+    "coopex": "https://coopex.com.br/solicitar-cotacao-form-1/",
+    "viopex": "https://ssw.inf.br/2/rastreamento?",
+    "mengue": "https://ssw.inf.br/2/rastreamento?sigla_emp=MEN&sc=N&sl=N",
+    "rodonaves": "https://rodonaves.com.br/rastreio-de-mercadoria",
 }
 
-# Siglas SSW por transportadora (para rastreamento_danfe)
+# Siglas SSW remanescentes para fluxos especificos de DANFE
 _SSW_SIGLAS: dict[str, str] = {
-    "eucatur": "EUC",
-    "viopex": "VIO",
     "mengue": "MEN",
-    "coopex": "COP",
-    "bornelli": "AZU",
 }
 
 
@@ -92,28 +91,29 @@ async def rastrear_nfe(
     cnpj_emitente: str = "",
     chave_acesso: str = "",
 ) -> ResultadoRastreio:
+    transportadora_normalizada = (transportadora or "").strip().lower()
     resultado = ResultadoRastreio(
         numero_nfe=numero_nfe,
-        transportadora=transportadora.upper(),
-        link_rastreio=obter_link_rastreio(transportadora),
+        transportadora=transportadora_normalizada.upper(),
+        link_rastreio=obter_link_rastreio(transportadora_normalizada),
     )
+    if transportadora_normalizada in _TRANSPORTADORAS_IGNORADAS_RASTREIO:
+        await _rastrear_ignorado(resultado, numero_nfe, cnpj_emitente, chave_acesso)
+        return resultado
+
     _handlers = {
-        "correios": _rastrear_ignorado,
-        "azul": _rastrear_ignorado,
-        "bornelli": _rastrear_ignorado,
         "braspress": _rastrear_braspress,
-        "trd": _rastrear_indisponivel,
-        "agex": _rastrear_indisponivel,
-        "eucatur": _rastrear_ssw,
+        "trd": _rastrear_trd,
+        "agex": _rastrear_agex,
+        "eucatur": _rastrear_eucatur,
         "bauer": _rastrear_indisponivel,
         "alfa": _rastrear_alfa,
-        "coopex": _rastrear_ssw,
-        "viopex": _rastrear_ssw,
-        "mengue": _rastrear_ssw,
+        "coopex": _rastrear_coopex,
+        "viopex": _rastrear_viopex,
+        "mengue": _rastrear_mengue,
+        "rodonaves": _rastrear_rodonaves,
     }
-    handler = _handlers.get(transportadora)
-    if handler is None:
-        handler = _rastrear_ssw if _chave_acesso_valida(chave_acesso) else _rastrear_generico
+    handler = _handlers.get(transportadora_normalizada, _rastrear_sem_handler)
     try:
         await handler(resultado, numero_nfe, cnpj_emitente, chave_acesso)
     except Exception as e:
@@ -242,9 +242,612 @@ async def _braspress_screenshot(resultado: ResultadoRastreio, numero_nfe: str, t
                 pass
 
 
+def _linhas_visiveis(texto: str) -> list[str]:
+    return [linha.strip() for linha in texto.splitlines() if linha and linha.strip()]
+
+
+def _montar_status(status: str, detalhe: str = "", previsao: str = "") -> str:
+    base = (status or "").strip()
+    detalhe = (detalhe or "").strip()
+    if detalhe and detalhe.upper() != base.upper():
+        base = f"{base} — {detalhe}" if base else detalhe
+    if previsao and previsao not in base:
+        base = f"{base} — Previsão: {previsao}" if base else f"Previsão: {previsao}"
+    return base
+
+
+def _extrair_status_ssw_remetente(texto: str) -> tuple[str, str]:
+    linhas = _linhas_visiveis(texto)
+    try:
+        idx_situacao = next(
+            i for i, linha in enumerate(linhas)
+            if linha.upper() in {"SITUAÇÃO", "SITUACAO"}
+        )
+    except StopIteration:
+        return "", ""
+
+    relevantes: list[str] = []
+    for linha in linhas[idx_situacao + 1:]:
+        linha_upper = linha.upper()
+        if linha_upper in {"MAIS DETALHES", "VOLTAR"} or linha.startswith("Processado por"):
+            break
+        relevantes.append(linha)
+
+    if len(relevantes) >= 5:
+        status = relevantes[4]
+        detalhe = relevantes[5] if len(relevantes) >= 6 else ""
+        return status, detalhe
+    return "", ""
+
+
+async def _salvar_screenshot_entrega(page, resultado: ResultadoRastreio, numero_nfe: str) -> None:
+    screenshot_path = _gerar_path_screenshot(numero_nfe)
+    await page.screenshot(path=str(screenshot_path), full_page=True)
+    resultado.screenshot_path = str(screenshot_path)
+
+
+def _injetar_base_href(html: str, base_url: str) -> str:
+    if not html:
+        return html
+    if re.search(r"<base\s+href=", html, re.IGNORECASE):
+        return html
+    base_tag = f'<base href="{base_url}">'
+    if re.search(r"<head[^>]*>", html, re.IGNORECASE):
+        return re.sub(r"(<head[^>]*>)", rf"\1{base_tag}", html, count=1, flags=re.IGNORECASE)
+    return f"<head>{base_tag}</head>{html}"
+
+
+async def _capturar_html_fullpage(html: str, base_url: str, numero_nfe: str) -> str:
+    browser = None
+    temp_html_path = None
+    try:
+        browser = await launch_browser_resilient(headless=True)
+        contexts = browser.contexts
+        if contexts:
+            page = contexts[0].pages[0] if contexts[0].pages else await contexts[0].new_page()
+        else:
+            ctx = await browser.new_context(viewport={"width": 1366, "height": 900})
+            page = await ctx.new_page()
+        with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as tmp:
+            tmp.write(_injetar_base_href(html, base_url))
+            temp_html_path = tmp.name
+        await page.goto(Path(temp_html_path).resolve().as_uri(), wait_until="load")
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+        await asyncio.sleep(1)
+        screenshot_path = _gerar_path_screenshot(numero_nfe)
+        await page.screenshot(path=str(screenshot_path), full_page=True)
+        return str(screenshot_path)
+    finally:
+        if temp_html_path:
+            try:
+                Path(temp_html_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+        if browser:
+            try:
+                await browser.close()
+            except Exception:
+                pass
+
+
+def _extrair_url_ssw_detalhado(html: str, base_url: str = "https://ssw.inf.br") -> str:
+    if not html:
+        return ""
+    match = re.search(r"opx\('([^']*SSWDetalhado[^']*)'\)", html, re.IGNORECASE)
+    if not match:
+        return ""
+    return urljoin(base_url, match.group(1))
+
+
+async def _capturar_ssw_detalhado_fullpage(detail_url: str, numero_nfe: str) -> str:
+    if not detail_url:
+        return ""
+
+    browser = None
+    try:
+        browser = await launch_browser_resilient(headless=True)
+        page = await _nova_pagina(browser)
+        await page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+        screenshot_path = _gerar_path_screenshot(numero_nfe)
+        await page.screenshot(path=str(screenshot_path), full_page=True)
+        return str(screenshot_path)
+    finally:
+        if browser:
+            try:
+                await browser.close()
+            except Exception:
+                pass
+
+
+async def _nova_pagina(browser):
+    contexts = browser.contexts
+    if contexts:
+        return contexts[0].pages[0] if contexts[0].pages else await contexts[0].new_page()
+    ctx = await browser.new_context(viewport={"width": 1366, "height": 900})
+    return await ctx.new_page()
+
+
+async def _extrair_etapas_agex(page) -> dict:
+    return await page.evaluate(
+        """() => {
+            const labels = ['Recebida para transporte', 'A caminho', 'Saiu para entrega', 'Entregue'];
+            const rows = Array.from(document.querySelectorAll('div.flex.flex-row.gap-4'))
+                .map((row) => {
+                    const labelNode = Array.from(row.querySelectorAll('span,div,p'))
+                        .find((node) => labels.includes((node.textContent || '').trim()));
+                    if (!labelNode) return null;
+                    return {
+                        label: (labelNode.textContent || '').trim(),
+                        completed: row.outerHTML.includes('bg-green-500'),
+                    };
+                })
+                .filter(Boolean);
+            const bodyText = document.body ? (document.body.innerText || '') : '';
+            const previsaoMatch = bodyText.match(/Previsão de entrega:\\s*([^\\n]+)/i);
+            return {
+                rows,
+                previsao: previsaoMatch ? previsaoMatch[1].trim() : '',
+            };
+        }"""
+    )
+
+
+def _extrair_status_rodonaves(body_text: str) -> str:
+    linhas = _linhas_visiveis(body_text)
+    for idx, linha in enumerate(linhas):
+        if linha.upper() == "STATUS" and idx + 1 < len(linhas):
+            return linhas[idx + 1].strip()
+    for pattern in [
+        r'Status\s*\n\s*([^\n]+)',
+        r'Status\s*[:\-]?\s*([^\n]+)',
+    ]:
+        match = re.search(pattern, body_text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+async def _aplicar_resultado_texto(
+    resultado: ResultadoRastreio,
+    numero_nfe: str,
+    body_text: str,
+    page=None,
+    *,
+    not_found_patterns: list[str] | None = None,
+    status_patterns: list[str] | None = None,
+) -> None:
+    body_upper = body_text.upper()
+    padroes_nao_encontrado = [
+        "NÃO ENCONTRAMOS NENHUM RASTREAMENTO",
+        "NAO ENCONTRAMOS NENHUM RASTREAMENTO",
+        "NENHUM PEDIDO ENCONTRADO",
+        "NENHUMA ENCOMENDA ENCONTRADA",
+        "NÃO ENCONTRAMOS",
+        "NAO ENCONTRAMOS",
+        "NENHUM RESULTADO ENCONTRADO",
+    ]
+    for padrao in not_found_patterns or []:
+        padroes_nao_encontrado.append(padrao.upper())
+
+    if any(padrao in body_upper for padrao in padroes_nao_encontrado):
+        resultado.status_texto = "NF não encontrada no sistema de rastreamento"
+        return
+
+    previsao = _extrair_previsao(body_text)
+    resultado.previsao_entrega = previsao
+
+    status_desc = ""
+    for pattern in status_patterns or [
+        r'(?:Status|Situa[cç][aã]o)\s*[:\-]?\s*([^\n]+)',
+        r'(?:Último\s*evento|Ultimo\s*evento|Evento)\s*[:\-]?\s*([^\n]+)',
+        r'(?:Ocorr[eê]ncia(?:\s+atual)?)\s*[:\-]?\s*([^\n]+)',
+    ]:
+        match = re.search(pattern, body_text, re.IGNORECASE)
+        if match:
+            status_desc = match.group(1).strip()
+            break
+
+    termos_entregue = ["ENTREGUE", "ENTREGA REALIZADA", "ENTREGA EFETUADA", "MERCADORIA ENTREGUE", "DELIVERED"]
+    entregue = any(termo in body_upper for termo in termos_entregue)
+
+    if entregue:
+        resultado.entregue = True
+        resultado.status_texto = _montar_status(status_desc or "ENTREGUE", previsao=previsao)
+        if page is not None:
+            await _salvar_screenshot_entrega(page, resultado, numero_nfe)
+        return
+
+    if status_desc:
+        resultado.status_texto = _montar_status(status_desc, previsao=previsao)
+    elif previsao:
+        resultado.status_texto = f"Previsão: {previsao}"
+    else:
+        resultado.status_texto = "Consulta realizada, mas o portal não retornou um status legível"
+
+
+async def _rastrear_ssw_remetente_http(
+    resultado: ResultadoRastreio,
+    numero_nfe: str,
+    cnpj_emitente: str,
+    *,
+    sigla_emp: str,
+    tracking_url: str,
+    result_url: str = "https://ssw.inf.br/2/resultSSW",
+    extra_form_data: dict[str, str] | None = None,
+) -> None:
+    cnpj_limpo = re.sub(r'\D', '', cnpj_emitente or "")
+    resultado.link_rastreio = tracking_url
+    if not cnpj_limpo or not numero_nfe:
+        resultado.status_texto = "CNPJ ou número de NF ausentes para rastreamento"
+        return
+
+    try:
+        async with httpx.AsyncClient(
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            follow_redirects=True,
+            timeout=20,
+        ) as client:
+            payload = {
+                "cnpj": cnpj_limpo,
+                "NR": numero_nfe,
+                "chave": "",
+                "sigla_emp": sigla_emp,
+            }
+            if extra_form_data:
+                payload.update(extra_form_data)
+            resp = await client.post(
+                result_url,
+                data=payload,
+            )
+            resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        body_text = soup.get_text(separator="\n", strip=True)
+        body_upper = body_text.upper()
+
+        if "RASTREAMENTO PELO REMETENTE" not in body_upper:
+            resultado.status_texto = "Portal retornou uma resposta inesperada"
+            return
+
+        status, detalhe = _extrair_status_ssw_remetente(body_text)
+        if not status and not detalhe:
+            if (
+                "NENHUM RESULTADO" in body_upper
+                or "NAO ENCONTRAMOS" in body_upper
+                or "NÃO ENCONTRAMOS" in body_upper
+                or "INFORMAÇÃO NÃO DISPONÍVEL" in body_upper
+                or "INFORMACAO NAO DISPONIVEL" in body_upper
+            ):
+                resultado.status_texto = "NF não encontrada no sistema de rastreamento"
+            else:
+                resultado.status_texto = "Consulta realizada, mas o portal não retornou um status legível"
+            return
+
+        detail_url = _extrair_url_ssw_detalhado(resp.text)
+        if detail_url:
+            resultado.link_rastreio = detail_url
+
+        resultado.entregue = "ENTREGUE" in f"{status} {detalhe}".upper()
+        resultado.status_texto = _montar_status(status, detalhe)
+        if resultado.entregue:
+            resultado.screenshot_path = await _capturar_ssw_detalhado_fullpage(detail_url, numero_nfe)
+    except Exception as e:
+        msg = str(e or "").strip()
+        logger.warning(f"[RASTREIO-{resultado.transportadora}] NF {numero_nfe}: erro SSW remetente: {msg}")
+        if "ERR_NAME_NOT_RESOLVED" in msg or "ERR_NETWORK_CHANGED" in msg or "getaddrinfo" in msg:
+            resultado.status_texto = "Rastreamento indisponível no momento"
+        else:
+            resultado.status_texto = f"Erro ao rastrear: {msg or 'falha desconhecida'}"
+
+
+async def _rastrear_eucatur(
+    resultado: ResultadoRastreio,
+    numero_nfe: str,
+    cnpj_emitente: str,
+    chave_acesso: str,
+) -> None:
+    await _rastrear_ssw_remetente_http(
+        resultado,
+        numero_nfe,
+        cnpj_emitente,
+        sigla_emp="EUC",
+        tracking_url=_TRACKING_URLS["eucatur"],
+    )
+
+
+async def _rastrear_viopex(
+    resultado: ResultadoRastreio,
+    numero_nfe: str,
+    cnpj_emitente: str,
+    chave_acesso: str,
+) -> None:
+    await _rastrear_ssw_remetente_http(
+        resultado,
+        numero_nfe,
+        cnpj_emitente,
+        sigla_emp="VIO",
+        tracking_url=_TRACKING_URLS["viopex"],
+    )
+
+
+async def _rastrear_mengue(
+    resultado: ResultadoRastreio,
+    numero_nfe: str,
+    cnpj_emitente: str,
+    chave_acesso: str,
+) -> None:
+    await _rastrear_ssw(resultado, numero_nfe, cnpj_emitente, chave_acesso)
+
+
+async def _rastrear_coopex(
+    resultado: ResultadoRastreio,
+    numero_nfe: str,
+    cnpj_emitente: str,
+    chave_acesso: str,
+) -> None:
+    await _rastrear_ssw_remetente_http(
+        resultado,
+        numero_nfe,
+        cnpj_emitente,
+        sigla_emp="CLD",
+        tracking_url=_TRACKING_URLS["coopex"],
+        result_url="https://ssw.inf.br/2/ssw_resultSSW",
+        extra_form_data={"urlori": _TRACKING_URLS["coopex"]},
+    )
+
+
+async def _rastrear_trd(
+    resultado: ResultadoRastreio,
+    numero_nfe: str,
+    cnpj_emitente: str,
+    chave_acesso: str,
+) -> None:
+    resultado.link_rastreio = _TRACKING_URLS["trd"]
+    resultado.status_texto = "Portal de rastreamento requer autenticação"
+    logger.info(f"[RASTREIO-TRD] NF {numero_nfe}: portal requer login")
+
+
+async def _rastrear_agex(
+    resultado: ResultadoRastreio,
+    numero_nfe: str,
+    cnpj_emitente: str,
+    chave_acesso: str,
+) -> None:
+    cnpj_limpo = re.sub(r'\D', '', cnpj_emitente or "")
+    if not cnpj_limpo or not numero_nfe:
+        resultado.status_texto = "CNPJ ou número de NF ausentes para rastreamento"
+        return
+
+    resultado.link_rastreio = _TRACKING_URLS["agex"]
+    browser = None
+    try:
+        browser = await launch_browser_resilient(headless=True)
+        page = await _nova_pagina(browser)
+
+        await page.goto(resultado.link_rastreio, wait_until="domcontentloaded", timeout=30000)
+        campo_cnpj = page.locator('#cnpjOrCpf, input[name="cnpjOrCpf"]').first
+        await campo_cnpj.wait_for(state="visible", timeout=15000)
+        await campo_cnpj.fill(cnpj_limpo)
+        await asyncio.sleep(2)
+
+        campo_nf = page.locator('#notaFiscal, input[name="notaFiscal"]').first
+        try:
+            await campo_nf.wait_for(state="visible", timeout=5000)
+        except Exception:
+            await campo_cnpj.press("Tab")
+            await campo_nf.wait_for(state="visible", timeout=10000)
+
+        await campo_nf.fill(numero_nfe)
+        await page.locator('button:has-text("Buscar encomendas")').first.click()
+        try:
+            await page.locator('button:has-text("Ver detalhes"), text=/Nota fiscal/i').first.wait_for(timeout=15000)
+        except Exception:
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
+        await asyncio.sleep(2)
+
+        resultado.link_rastreio = page.url
+        detalhes_btn = page.locator('button:has-text("Ver detalhes")').first
+        if await detalhes_btn.count():
+            try:
+                await detalhes_btn.click(timeout=5000)
+                await asyncio.sleep(2)
+            except Exception:
+                pass
+
+        body_text = await page.inner_text("body")
+        body_upper = body_text.upper()
+        if "NENHUMA ENCOMENDA ENCONTRADA" in body_upper or "NENHUM PEDIDO ENCONTRADO" in body_upper:
+            resultado.status_texto = "NF não encontrada no sistema de rastreamento"
+            return
+
+        etapas = await _extrair_etapas_agex(page)
+        previsao = (etapas.get("previsao") or "").strip() or _extrair_previsao(body_text)
+        resultado.previsao_entrega = previsao
+
+        rows = etapas.get("rows") or []
+        etapas_concluidas = [item["label"] for item in rows if item.get("completed")]
+        entregue = any(
+            item.get("label") == "Entregue" and item.get("completed")
+            for item in rows
+        )
+
+        if entregue:
+            resultado.entregue = True
+            resultado.status_texto = _montar_status("ENTREGUE", previsao=previsao)
+            await _salvar_screenshot_entrega(page, resultado, numero_nfe)
+            return
+
+        if etapas_concluidas:
+            resultado.status_texto = _montar_status(etapas_concluidas[-1], previsao=previsao)
+            return
+
+        await _aplicar_resultado_texto(
+            resultado,
+            numero_nfe,
+            body_text,
+            not_found_patterns=["NENHUMA ENCOMENDA ENCONTRADA", "NENHUM PEDIDO ENCONTRADO"],
+        )
+    except Exception as e:
+        msg = str(e or "").strip()
+        logger.warning(f"[RASTREIO-AGEX] NF {numero_nfe}: erro: {msg}")
+        if "ERR_NAME_NOT_RESOLVED" in msg or "ERR_NETWORK_CHANGED" in msg or "getaddrinfo" in msg:
+            resultado.status_texto = "Rastreamento indisponível no momento"
+        else:
+            resultado.status_texto = f"Erro ao rastrear: {msg or 'falha desconhecida'}"
+    finally:
+        if browser:
+            try:
+                await browser.close()
+            except Exception:
+                pass
+
+
+async def _rastrear_rodonaves(
+    resultado: ResultadoRastreio,
+    numero_nfe: str,
+    cnpj_emitente: str,
+    chave_acesso: str,
+) -> None:
+    cnpj_limpo = re.sub(r'\D', '', cnpj_emitente or "")
+    query_url = (
+        f"{_TRACKING_URLS['rodonaves']}?rastreiemercadoria=2&cpfcnpj={cnpj_limpo}&numnf={numero_nfe}"
+        if cnpj_limpo and numero_nfe else _TRACKING_URLS["rodonaves"]
+    )
+    api_url = (
+        f"https://rodonaves.com.br/bin/rodonaves/trackingv3/package"
+        f"?TaxIdRegistration={cnpj_limpo}&InvoiceNumber={numero_nfe}"
+    )
+    resultado.link_rastreio = query_url
+    if not cnpj_limpo or not numero_nfe:
+        resultado.status_texto = "CNPJ ou número de NF ausentes para rastreamento"
+        return
+
+    browser = None
+    try:
+        detalhe_evento = ""
+        entregue_api = False
+        termos_entregue = ("ENTREGUE", "ENTREGA REALIZADA", "ENTREGA EFETUADA")
+        try:
+            async with httpx.AsyncClient(
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                follow_redirects=True,
+                timeout=20,
+            ) as client:
+                resp = await client.get(api_url)
+
+            if resp.status_code == 204:
+                resultado.status_texto = "NF não encontrada no sistema de rastreamento"
+                return
+
+            resp.raise_for_status()
+            payload = resp.json()
+            eventos = payload.get("Events") or []
+            ultimo_evento = next(
+                (
+                    evento for evento in reversed(eventos)
+                    if (evento.get("Reason") or evento.get("Description") or "").strip()
+                ),
+                {},
+            )
+            detalhe_evento = (
+                (ultimo_evento.get("Reason") or "").strip()
+                or (ultimo_evento.get("Description") or "").strip()
+            )
+            entregue_api = any(
+                any(
+                    termo in ((evento.get("Reason") or evento.get("Description") or "").upper())
+                    for termo in termos_entregue
+                )
+                for evento in eventos
+            )
+        except Exception as api_error:
+            logger.info(f"[RASTREIO-RODONAVES] NF {numero_nfe}: API auxiliar indisponível ({api_error})")
+
+        browser = await launch_browser_resilient(headless=True)
+        page = await _nova_pagina(browser)
+        await page.goto(query_url, wait_until="domcontentloaded", timeout=30000)
+        try:
+            await page.wait_for_function(
+                """() => {
+                    const text = document.body ? (document.body.innerText || '') : '';
+                    return /Previs[aã]o de entrega:/i.test(text) || /(?:^|\\n)Status\\n/i.test(text);
+                }""",
+                timeout=15000,
+            )
+        except Exception:
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
+        await asyncio.sleep(4)
+
+        resultado.link_rastreio = page.url
+        body_text = await page.inner_text("body")
+        body_upper = body_text.upper()
+        if "PREVISÃO DE ENTREGA:" not in body_upper and "\nSTATUS\n" not in body_upper:
+            resultado.status_texto = "NF não encontrada no sistema de rastreamento"
+            return
+
+        status_desc = _extrair_status_rodonaves(body_text)
+        previsao = _extrair_previsao(body_text)
+        resultado.previsao_entrega = previsao
+
+        entregue = entregue_api or any(termo in status_desc.upper() for termo in termos_entregue)
+        if entregue:
+            resultado.entregue = True
+            resultado.status_texto = _montar_status(
+                status_desc or "MERCADORIA ENTREGUE",
+                detalhe_evento,
+                previsao,
+            )
+            await _salvar_screenshot_entrega(page, resultado, numero_nfe)
+            return
+
+        if status_desc:
+            resultado.status_texto = _montar_status(status_desc, detalhe_evento, previsao)
+        elif detalhe_evento:
+            resultado.status_texto = _montar_status(detalhe_evento, previsao=previsao)
+        else:
+            resultado.status_texto = "Consulta localizada, mas o portal não retornou um status legível"
+    except Exception as e:
+        msg = str(e or "").strip()
+        logger.warning(f"[RASTREIO-RODONAVES] NF {numero_nfe}: erro: {msg}")
+        if "ERR_NAME_NOT_RESOLVED" in msg or "ERR_NETWORK_CHANGED" in msg or "getaddrinfo" in msg:
+            resultado.status_texto = "Rastreamento indisponível no momento"
+        else:
+            resultado.status_texto = f"Erro ao rastrear: {msg or 'falha desconhecida'}"
+    finally:
+        if browser:
+            try:
+                await browser.close()
+            except Exception:
+                pass
+
+
+async def _rastrear_sem_handler(
+    resultado: ResultadoRastreio,
+    numero_nfe: str,
+    cnpj_emitente: str,
+    chave_acesso: str,
+) -> None:
+    resultado.status_texto = "Transportadora sem handler de rastreamento mapeado"
+    logger.info(f"[RASTREIO-{resultado.transportadora}] NF {numero_nfe}: sem handler especifico")
+
+
 
 # ---------------------------------------------------------------------------
-#  SSW - rastreamento via portal SSW (Eucatur, Viopex, Mengue, Coopex, Bornelli)
+#  SSW - rastreamento via DANFE para transportadoras com fluxo proprio
 # ---------------------------------------------------------------------------
 
 async def _rastrear_ssw(
@@ -415,22 +1018,18 @@ async def _rastrear_alfa(
         resultado.status_texto = "CNPJ ou número de NF ausentes para rastreamento"
         return
 
-    browser = None
     try:
-        browser = await launch_browser_resilient(headless=True)
-        contexts = browser.contexts
-        if contexts:
-            page = contexts[0].pages[0] if contexts[0].pages else await contexts[0].new_page()
-        else:
-            ctx = await browser.new_context(viewport={"width": 1366, "height": 900})
-            page = await ctx.new_page()
-
         url = f"{_ALFA_TRACK_URL}?cnpj={cnpj_limpo}&tipo=1&nota={numero_nfe}"
-        logger.info(f"[RASTREIO-ALFA] NF {numero_nfe}: navegando para {url}")
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        await asyncio.sleep(2)
+        logger.info(f"[RASTREIO-ALFA] NF {numero_nfe}: consultando {url}")
+        async with httpx.AsyncClient(
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            follow_redirects=True,
+            timeout=20,
+        ) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
 
-        body_text = await page.inner_text("body")
+        body_text = BeautifulSoup(resp.text, "html.parser").get_text(separator="\n", strip=True)
         body_upper = body_text.upper()
 
         # NF não encontrada ou dados inválidos
@@ -489,10 +1088,12 @@ async def _rastrear_alfa(
         if entregue:
             resultado.entregue = True
             resultado.status_texto = "ENTREGUE" + (f" — Previsão: {previsao}" if previsao else "")
-            screenshot_path = _gerar_path_screenshot(numero_nfe)
-            await page.screenshot(path=str(screenshot_path), full_page=True)
-            resultado.screenshot_path = str(screenshot_path)
-            logger.info(f"[RASTREIO-ALFA] NF {numero_nfe}: ENTREGUE. Screenshot: {screenshot_path}")
+            resultado.screenshot_path = await _capturar_html_fullpage(
+                resp.text,
+                "https://arearestrita.alfatransportes.com.br/",
+                numero_nfe,
+            )
+            logger.info(f"[RASTREIO-ALFA] NF {numero_nfe}: ENTREGUE. Screenshot: {resultado.screenshot_path}")
         else:
             resultado.entregue = False
             if last_status:
@@ -508,12 +1109,6 @@ async def _rastrear_alfa(
             resultado.status_texto = "Rastreamento indisponível no momento"
         else:
             resultado.status_texto = f"Erro ao rastrear: {msg or 'falha desconhecida'}"
-    finally:
-        if browser:
-            try:
-                await browser.close()
-            except Exception:
-                pass
 
 
 async def _rastrear_indisponivel(
@@ -538,105 +1133,6 @@ async def _rastrear_ignorado(
     resultado.status_texto = "Rastreamento ignorado para esta transportadora"
     resultado.link_rastreio = ""
     logger.info(f"[RASTREIO-{resultado.transportadora}] NF {numero_nfe}: rastreamento ignorado")
-
-
-async def _rastrear_generico(
-    resultado: ResultadoRastreio,
-    numero_nfe: str,
-    cnpj_emitente: str,
-    chave_acesso: str,
-) -> None:
-    url = resultado.link_rastreio
-    if not url:
-        resultado.status_texto = "Link de rastreamento nao disponivel para esta transportadora"
-        return
-    browser = None
-    try:
-        browser = await launch_browser_resilient(headless=True)
-        contexts = browser.contexts
-        if contexts:
-            page = contexts[0].pages[0] if contexts[0].pages else await contexts[0].new_page()
-        else:
-            ctx = await browser.new_context(viewport={"width": 1366, "height": 900})
-            page = await ctx.new_page()
-        logger.info(f"[RASTREIO-{resultado.transportadora}] Navegando para {url}")
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        await asyncio.sleep(2)
-        campo_busca = await _encontrar_campo_busca(page)
-        if campo_busca:
-            valor_busca = numero_nfe
-            await campo_busca.fill(valor_busca)
-            await asyncio.sleep(0.5)
-            # Tenta submeter: primeiro Enter no campo, depois click no botao como fallback
-            submitted = False
-            try:
-                await campo_busca.press("Enter")
-                submitted = True
-            except Exception:
-                pass
-            if not submitted:
-                btn = await page.query_selector(
-                    'button[type="submit"], input[type="submit"], '
-                    'button:has-text("Rastrear"), button:has-text("Buscar"), '
-                    'button:has-text("Pesquisar"), button:has-text("Consultar")'
-                )
-                if btn:
-                    try:
-                        await btn.click(timeout=5000)
-                    except Exception:
-                        await btn.click(force=True)
-            await asyncio.sleep(3)
-        # Captura URL final (pagina de resultado) como link direto
-        resultado.link_rastreio = page.url
-        body_text = await page.inner_text("body")
-        body_upper = body_text.upper()
-        termos_entregue = ["ENTREGUE", "ENTREGA REALIZADA", "ENTREGA EFETUADA", "DELIVERED"]
-        entregue = any(t in body_upper for t in termos_entregue)
-        if entregue:
-            resultado.entregue = True
-            resultado.status_texto = "ENTREGUE"
-            screenshot_path = _gerar_path_screenshot(numero_nfe)
-            await page.screenshot(path=str(screenshot_path), full_page=True)
-            resultado.screenshot_path = str(screenshot_path)
-            logger.info(f"[RASTREIO-{resultado.transportadora}] NF {numero_nfe}: ENTREGUE. Screenshot: {screenshot_path}")
-        else:
-            resultado.entregue = False
-            previsao = _extrair_previsao(body_text)
-            resultado.previsao_entrega = previsao
-            resultado.status_texto = f"Em transito" + (f" - Previsao: {previsao}" if previsao else "")
-            logger.info(f"[RASTREIO-{resultado.transportadora}] NF {numero_nfe}: em transito")
-    finally:
-        if browser:
-            try:
-                await browser.close()
-            except Exception:
-                pass
-
-
-async def _encontrar_campo_busca(page) -> object | None:
-    seletores = [
-        'input[name*="rastr"]',
-        'input[name*="track"]',
-        'input[name*="nf"]',
-        'input[name*="nota"]',
-        'input[name*="chave"]',
-        'input[placeholder*="rastr" i]',
-        'input[placeholder*="nota" i]',
-        'input[placeholder*="NF" i]',
-        'input[placeholder*="chave" i]',
-        'input[placeholder*="numero" i]',
-        'input[placeholder*="busca" i]',
-        'input[type="text"]:visible',
-        'input[type="search"]:visible',
-    ]
-    for sel in seletores:
-        try:
-            el = await page.query_selector(sel)
-            if el:
-                return el
-        except Exception:
-            continue
-    return None
 
 
 def _extrair_previsao(texto: str) -> str:

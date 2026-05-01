@@ -160,6 +160,8 @@ async def launch_browser_resilient(playwright=None, *, headless: bool = True, ar
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--no-sandbox",
+                "--disable-gpu",
+                "--do-not-de-elevate",
                 "--disable-blink-features=AutomationControlled",
             ]
             if headless:

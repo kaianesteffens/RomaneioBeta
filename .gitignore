@@ -49,6 +49,23 @@ crash.log
 *.tmp
 *.bak
 
+# Configurações locais do Claude Code
+.claude/settings.local.json
+
+# Cache do pytest
+.pytest_cache/
+
+# Arquivos locais de assistentes/IA
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+SKILL.md
+skills.md
+skills/
+.cursorrules
+.cursorignore
+.clinerules
+
 # PDFs de teste
 *.pdf
 
