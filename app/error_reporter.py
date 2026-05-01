@@ -59,19 +59,34 @@ def _load_toml_file(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _iter_config_candidates():
+    """Gera candidatos de CONFIG.toml em ordem de preferência."""
+    appdata = Path(os.getenv("APPDATA", ""))
+    # Raiz do APPDATA (legado / futuro uso)
+    yield appdata / "FreteBot" / "CONFIG.toml"
+    # Pasta de empresas — varre todas e usa a primeira com as chaves
+    empresas_dir = appdata / "FreteBot" / "empresas"
+    if empresas_dir.exists():
+        try:
+            for emp_dir in sorted(empresas_dir.iterdir()):
+                if emp_dir.is_dir():
+                    yield emp_dir / "CONFIG.toml"
+        except Exception:
+            pass
+    # Fallback: bundle PyInstaller e diretório do script
+    meipass = getattr(sys, "_MEIPASS", "")
+    if meipass:
+        yield Path(meipass) / "CONFIG.toml"
+    yield Path(__file__).parent / "CONFIG.toml"
+
+
 def _load_config() -> None:
     """Carrega error_gist_id e error_report_token do CONFIG.toml."""
     global _gist_id, _token, _initialized
     if _initialized:
         return
     try:
-        # Mesmo esquema de busca que o restante do app
-        # Varre todos os candidatos e usa o primeiro que tiver ambas as chaves
-        for candidate in [
-            Path(os.getenv("APPDATA", "")) / "FreteBot" / "CONFIG.toml",
-            Path(getattr(sys, "_MEIPASS", "")) / "CONFIG.toml",
-            Path(__file__).parent / "CONFIG.toml",
-        ]:
+        for candidate in _iter_config_candidates():
             if not candidate.exists():
                 continue
             try:
@@ -114,7 +129,9 @@ def configure(config_path) -> None:
         if gist_id and token:
             _gist_id = gist_id
             _token = token
-        _initialized = True
+            _initialized = True  # Só marca como inicializado quando tem credenciais válidas
+        # Se as chaves não existem/estão vazias: _initialized permanece False
+        # para que _load_config() possa tentar os caminhos de fallback
     except Exception:
         pass
 

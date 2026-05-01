@@ -2636,6 +2636,16 @@ def main():
         _instalar_thread_excepthook()
         setup_global_exception_handler()
         install_global_hooks()  # DEPOIS dos outros hooks, para envolver todos
+
+        # Configurar error reporter o mais cedo possível — antes de criar a janela,
+        # para que exceptions durante o startup também sejam reportadas.
+        try:
+            _early_empresa = _ler_ultima_empresa()
+            if _early_empresa:
+                _er_configure(_empresa_config_path(_early_empresa))
+        except Exception:
+            pass
+
         _startup_logger = None
 
         # Log de inicialização (diagnóstico: versão, caminhos, etc.)
