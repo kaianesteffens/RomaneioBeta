@@ -14,10 +14,31 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
+
+      - name: Inject error reporting credentials
+        shell: pwsh
+        run: |
+          $gistId = "${{ secrets.ERROR_GIST_ID }}"
+          $token  = "${{ secrets.ERROR_REPORT_TOKEN }}"
+          $content = @"
+[fretebot]
+error_gist_id = "$gistId"
+error_report_token = "$token"
+"@
+          [System.IO.File]::WriteAllText(
+            (Join-Path $PWD "app\CONFIG.toml"),
+            $content,
+            [System.Text.Encoding]::UTF8
+          )
+          if ($gistId -and $token) {
+            Write-Host "[OK] Credenciais de error reporting injetadas em app\CONFIG.toml"
+          } else {
+            Write-Host "::warning::ERROR_GIST_ID ou ERROR_REPORT_TOKEN nao definidos — error reporting desabilitado neste build"
+          }
 
       - name: Install Inno Setup 6
         shell: pwsh
@@ -69,7 +90,7 @@ jobs:
           Write-Host "Launcher: $launcher"
 
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: romaneio-beta-windows-v${{ steps.meta.outputs.version }}
           if-no-files-found: error
