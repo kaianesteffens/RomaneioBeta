@@ -24,11 +24,11 @@ jobs:
         run: |
           $gistId = "${{ secrets.ERROR_GIST_ID }}"
           $token  = "${{ secrets.ERROR_REPORT_TOKEN }}"
-          $content = @"
-[fretebot]
-error_gist_id = "$gistId"
-error_report_token = "$token"
-"@
+          $content = @(
+            '[fretebot]'
+            "error_gist_id = `"$gistId`""
+            "error_report_token = `"$token`""
+          ) -join "`r`n"
           [System.IO.File]::WriteAllText(
             (Join-Path $PWD "app\CONFIG.toml"),
             $content,
