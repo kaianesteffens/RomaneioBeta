@@ -100,7 +100,7 @@ end;
 
 function _existeInstalacaoAtual(): Boolean;
 begin
-  Result := FileExists(ExpandConstant('{app}\{#MyAppExeName}'));
+  Result := FileExists(WizardDirValue() + '\{#MyAppExeName}');
 end;
 
 procedure InitializeWizard();
