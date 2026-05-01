@@ -37,6 +37,16 @@ jobs:
           CI: 1
         run: build_update_zip.bat
 
+      - name: Build universal launcher (Romaneio.exe)
+        working-directory: installer
+        shell: pwsh
+        run: |
+          python -m pip install pyinstaller --quiet --disable-pip-version-check
+          python -m PyInstaller --clean --noconfirm launcher.spec
+          if (!(Test-Path "dist\Romaneio.exe")) { throw "Romaneio.exe nao foi gerado" }
+          Copy-Item "dist\Romaneio.exe" "installer\Romaneio.exe" -Force
+          Write-Host "Launcher gerado: installer\Romaneio.exe"
+
       - name: Resolve generated artifact paths
         id: meta
         shell: pwsh
@@ -44,16 +54,19 @@ jobs:
           $ver = (Get-Content "app\version.txt").Trim()
           $setup = "installer\installer\Romaneio-Beta-Setup-$ver.exe"
           $zip = "installer\installer\FreteBot-Update-$ver.zip"
+          $launcher = "installer\installer\Romaneio.exe"
           $distExe = "installer\dist\FreteBot\FreteBot.exe"
 
           if (!(Test-Path $distExe)) { throw "Executavel nao encontrado: $distExe" }
           if (!(Test-Path $zip)) { throw "ZIP de update nao encontrado: $zip" }
           if (!(Test-Path $setup)) { throw "Instalador Windows nao encontrado: $setup" }
+          if (!(Test-Path $launcher)) { throw "Launcher nao encontrado: $launcher" }
 
           echo "version=$ver" >> $env:GITHUB_OUTPUT
-          Write-Host "Versao: $ver"
-          Write-Host "Setup:  $setup"
-          Write-Host "ZIP:    $zip"
+          Write-Host "Versao:   $ver"
+          Write-Host "Setup:    $setup"
+          Write-Host "ZIP:      $zip"
+          Write-Host "Launcher: $launcher"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
@@ -64,6 +77,7 @@ jobs:
             installer/dist/FreteBot/**
             installer/installer/Romaneio-Beta-Setup-${{ steps.meta.outputs.version }}.exe
             installer/installer/FreteBot-Update-${{ steps.meta.outputs.version }}.zip
+            installer/installer/Romaneio.exe
 
       - name: Commit version bump
         shell: bash
@@ -98,7 +112,8 @@ jobs:
               --notes "Build automatico Windows - v$ver"
           }
 
-          gh release upload $tag $zip $setup `
+          $launcher = "installer/installer/Romaneio.exe"
+          gh release upload $tag $zip $setup $launcher `
             --repo "kaianesteffens/RomaneioBeta-releases" `
             --clobber
 

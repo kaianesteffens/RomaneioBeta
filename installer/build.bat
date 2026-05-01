@@ -173,14 +173,57 @@ echo [OK] Instalador gerado!
 set "INSTALLER_PATH=installer\!OUTPUT_BASENAME!.exe"
 
 :skip_inno
+
+REM ── 6. Compilar launcher universal (Romaneio.exe) ────────────
+echo.
+echo [6/6] Compilando launcher universal (Romaneio.exe)...
+
+REM Em CI, o launcher e gerado em etapa dedicada do workflow
+if defined CI goto :skip_launcher
+
+REM Usa Python do sistema (nao o embutido), pois precisa de tkinter
+set SYSPY=
+where python >nul 2>&1
+if %ERRORLEVEL% == 0 (
+    set "SYSPY=python"
+) else (
+    where python3 >nul 2>&1
+    if %ERRORLEVEL% == 0 set "SYSPY=python3"
+)
+
+if not defined SYSPY (
+    echo [AVISO] Python do sistema nao encontrado. Romaneio.exe nao foi gerado.
+    echo         Instale Python 3.10+ e execute build.bat novamente.
+    goto :skip_launcher
+)
+
+REM Garante que pyinstaller esta disponivel no Python do sistema
+%SYSPY% -m pip install pyinstaller --quiet --disable-pip-version-check
+%SYSPY% -m PyInstaller --clean --noconfirm launcher.spec
+if %ERRORLEVEL% neq 0 (
+    echo [AVISO] Falha ao compilar Romaneio.exe. O FreteBot principal foi gerado normalmente.
+    goto :skip_launcher
+)
+
+REM Mover para pasta installer/ para facilitar distribuicao
+if exist "dist\Romaneio.exe" (
+    if not exist "installer" mkdir "installer"
+    copy /Y "dist\Romaneio.exe" "installer\Romaneio.exe" >nul
+    echo [OK] Launcher gerado: installer\Romaneio.exe
+)
+
+:skip_launcher
 echo.
 echo ============================================================
 echo  BUILD CONCLUIDO!
 echo.
 echo  App:         !APP_NAME! !APP_VERSION!
 echo  Executavel:  dist\FreteBot\FreteBot.exe
-if exist "!INSTALLER_PATH!" (
-    echo  Instalador:  !INSTALLER_PATH!
+if exist "installer\!OUTPUT_BASENAME!.exe" (
+    echo  Instalador:  installer\!OUTPUT_BASENAME!.exe
+)
+if exist "installer\Romaneio.exe" (
+    echo  Launcher:    installer\Romaneio.exe
 )
 echo ============================================================
 echo.
