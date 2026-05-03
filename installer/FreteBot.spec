@@ -7,13 +7,12 @@ Gera: dist/FreteBot/ com FreteBot.exe + dependências
 from pathlib import Path
 import os
 
-project_root = Path(SPECPATH).parent / "app"  # Diretório do app com romaneio_app.py
+project_root = Path(SPECPATH).parent.parent / "app"  # Diretório do app com romaneio_app.py
 
 # ── Hidden imports (módulos que PyInstaller não detecta automaticamente) ───
 hiddenimports = [
     # Providers
     "fretebot.providers.braspress_playwright",
-    "fretebot.providers.bauer_auto",
     "fretebot.providers.trd",
     "fretebot.providers.agex",
     "fretebot.providers.eucatur",
@@ -47,6 +46,7 @@ hiddenimports = [
     "updater",
     "license",
     "error_reporter",
+    "ui_components",
 ]
 
 # ── Data files ────────────────────────────────────────────────────────────
@@ -89,6 +89,13 @@ if logos_dir.is_dir():
     for logo_file in logos_dir.iterdir():
         if logo_file.is_file():
             datas.append((str(logo_file), "assets/logos"))
+
+# Fontes locais da UI
+fonts_dir = assets_dir / "fonts"
+if fonts_dir.is_dir():
+    for font_file in fonts_dir.iterdir():
+        if font_file.is_file():
+            datas.append((str(font_file), "assets/fonts"))
 
 # ── Analysis ──────────────────────────────────────────────────────────────
 a = Analysis(

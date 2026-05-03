@@ -6,9 +6,12 @@ import pdfplumber
 import re
 import math
 import unicodedata
+import logging
 from typing import Dict, List, Any
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -65,21 +68,21 @@ class ExtratorPedidos:
         try:
             import pdfplumber
             with pdfplumber.open(caminho_pdf) as pdf:
-                print(f"DEBUG: PDF aberto com {len(pdf.pages)} pÃ¡gina(s)")
+                logger.debug("PDF aberto com %d pagina(s)", len(pdf.pages))
                 for page_num, page in enumerate(pdf.pages, 1):
                     texto = page.extract_text()
                     if texto:
-                        print(f"DEBUG: PÃ¡gina {page_num} contÃ©m {len(texto)} caracteres")
+                        logger.debug("Pagina %d contem %d caracteres", page_num, len(texto))
                         pedido = self._extrair_pedido_pagina(texto, page_num)
                         if pedido:
                             self.pedidos.append(pedido)
-                            print(f"DEBUG: Pedido extraÃ­do: PD {pedido.numero}")
+                            logger.debug("Pedido extraido: PD %s", pedido.numero)
                         else:
-                            print(f"DEBUG: Nenhum pedido vÃ¡lido na pÃ¡gina {page_num}")
+                            logger.debug("Nenhum pedido valido na pagina %d", page_num)
                     else:
-                        print(f"DEBUG: PÃ¡gina {page_num} estÃ¡ vazia")
+                        logger.debug("Pagina %d esta vazia", page_num)
         except Exception as e:
-            print(f"Erro ao processar {caminho_pdf}: {e}")
+            logger.exception("Erro ao processar %s: %s", caminho_pdf, e)
 
         return self.pedidos
 
@@ -89,7 +92,7 @@ class ExtratorPedidos:
         # Extrair nÃºmero do pedido
         match = re.search(r'PEDIDO INTERNO:\s*PD\s*(\d+)', texto)
         numero = match.group(1) if match else "N/A"
-        print(f"  DEBUG _extrair_pedido_pagina: numero={numero}")
+        logger.debug("_extrair_pedido_pagina: numero=%s", numero)
 
         # Extrair CNPJ do cliente
         match = re.search(
@@ -97,25 +100,28 @@ class ExtratorPedidos:
             texto
         )
         cnpj = match.group(1) if match else "N/A"
-        print(f"  DEBUG _extrair_pedido_pagina: cnpj={cnpj}")
+        logger.debug("_extrair_pedido_pagina: cnpj=%s", cnpj)
 
         # Extrair local de entrega (da seÃ§Ã£o de ObservaÃ§Ãµes)
         local_entrega = self._extrair_local_entrega(texto)
-        print(f"  DEBUG _extrair_pedido_pagina: local={local_entrega[:30] if local_entrega != 'N/A' else local_entrega}")
+        logger.debug(
+            "_extrair_pedido_pagina: local=%s",
+            local_entrega[:30] if local_entrega != "N/A" else local_entrega,
+        )
 
         # Extrair indicacao de agendamento
         agendar_entrega = self._extrair_agendar_entrega(texto)
-        print(f"  DEBUG _extrair_pedido_pagina: agendar_entrega={agendar_entrega}")
+        logger.debug("_extrair_pedido_pagina: agendar_entrega=%s", agendar_entrega)
 
         # Extrair valor total
         match = re.search(r'Total:\s*R\$\s*([\d.,]+)', texto)
         valor_total_str = match.group(1) if match else "0"
         valor_total = self._converter_valor(valor_total_str)
-        print(f"  DEBUG _extrair_pedido_pagina: valor={valor_total}")
+        logger.debug("_extrair_pedido_pagina: valor=%s", valor_total)
 
         # Extrair itens
         itens = self._extrair_itens(texto)
-        print(f"  DEBUG _extrair_pedido_pagina: itens={len(itens)}")
+        logger.debug("_extrair_pedido_pagina: itens=%d", len(itens))
 
         return Pedido(
             numero=numero,
@@ -176,7 +182,7 @@ class ExtratorPedidos:
             # Limpar linhas vazias e extras
             linhas = [linha.strip() for linha in local_raw.split('\n') if linha.strip()]
             result = '\n'.join(linhas)
-            print(f"  DEBUG _extrair_local_entrega: encontrado = {result[:50]}...")
+            logger.debug("_extrair_local_entrega: encontrado = %s...", result[:50])
             return result
         else:
             # Se nÃ£o encontrar com o padrÃ£o original, tentar busca simples
@@ -185,7 +191,7 @@ class ExtratorPedidos:
                 local_raw = match2.group(1).strip()
                 linhas = [linha.strip() for linha in local_raw.split('\n') if linha.strip()]
                 result = '\n'.join(linhas[:3])  # Pegar apenas primeiras 3 linhas
-                print(f"  DEBUG _extrair_local_entrega: encontrado (fallback) = {result[:50]}...")
+                logger.debug("_extrair_local_entrega: encontrado (fallback) = %s...", result[:50])
                 return result
 
             # Fallback tolerante a erro de digitacao no rotulo do local de entrega
@@ -241,10 +247,10 @@ class ExtratorPedidos:
 
                 if coletadas:
                     result = '\n'.join(coletadas)
-                    print(f"  DEBUG _extrair_local_entrega: encontrado (fuzzy) = {result[:50]}...")
+                    logger.debug("_extrair_local_entrega: encontrado (fuzzy) = %s...", result[:50])
                     return result
             
-            print("  DEBUG _extrair_local_entrega: NAO ENCONTRADO")
+            logger.debug("_extrair_local_entrega: NAO ENCONTRADO")
             return "N/A"
 
     def _extrair_itens(self, texto: str) -> List[Item]:
