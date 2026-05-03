@@ -7,7 +7,7 @@ Saída   : installer/dist/Romaneio.exe
 
 from pathlib import Path
 
-_assets = Path(SPECPATH).parent / "app" / "assets"
+_assets = Path(SPECPATH).parent.parent / "app" / "assets"
 _icon = None
 for _name in ("romaneio.ico", "fretebot.ico"):
     if (_assets / _name).exists():

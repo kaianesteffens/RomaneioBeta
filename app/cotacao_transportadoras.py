@@ -43,6 +43,7 @@ _add_fretebot_src_to_path()
 # Imports lazy — carregados sob demanda na primeira inicialização para
 # não atrasar a abertura da janela (cada provider puxa playwright, etc.).
 BraspressProvider = None
+BauerAutoProvider = None
 TRDProvider = None
 AGEXProvider = None
 EucaturProvider = None
@@ -52,7 +53,7 @@ CoopexProvider = None
 
 def _ensure_provider_imports() -> None:
     """Importa os providers na primeira chamada (lazy)."""
-    global BraspressProvider, TRDProvider
+    global BraspressProvider, BauerAutoProvider, TRDProvider
     global AGEXProvider, EucaturProvider, RodonavesProvider, AlfaProvider, CoopexProvider
     if BraspressProvider is not None:
         return  # já carregado
@@ -60,6 +61,11 @@ def _ensure_provider_imports() -> None:
     from fretebot.providers.trd import TRDProvider as _TRD
     BraspressProvider = _BP
     TRDProvider = _TRD
+    try:
+        from fretebot.providers.bauer_auto import BauerAutoProvider as _BAU
+    except ImportError:
+        _BAU = None
+    BauerAutoProvider = _BAU
     try:
         from fretebot.providers.agex import AGEXProvider as _AG
     except ImportError:
@@ -959,18 +965,21 @@ class TransportadoraSession:
 
         baucfg = _cfg_secao("bauer")
         if baucfg.get("habilitado", True):
-            cotacao_url = str(baucfg.get("cotacao_url", "")).strip()
-            cnpj_pagador = str(baucfg.get("cnpj_pagador", "")).strip()
-            cnpj_remetente = str(baucfg.get("cnpj_remetente", "")).strip()
-            cnpj_dest = str(baucfg.get("cnpj_destinatario", "")).strip()
-            if cotacao_url and cnpj_pagador and cnpj_remetente and cnpj_dest:
-                self.providers["bauer"] = BauerAutoProvider(
-                    cotacao_url=cotacao_url,
-                    cnpj_pagador=cnpj_pagador,
-                    cnpj_remetente=cnpj_remetente,
-                    cnpj_destinatario=cnpj_dest,
-                    headless=bool(baucfg.get("headless", True)),
-                )
+            if BauerAutoProvider is None:
+                _log_diag("BAUER ignorada: provider bauer_auto não está disponível neste build")
+            else:
+                cotacao_url = str(baucfg.get("cotacao_url", "")).strip()
+                cnpj_pagador = str(baucfg.get("cnpj_pagador", "")).strip()
+                cnpj_remetente = str(baucfg.get("cnpj_remetente", "")).strip()
+                cnpj_dest = str(baucfg.get("cnpj_destinatario", "")).strip()
+                if cotacao_url and cnpj_pagador and cnpj_remetente and cnpj_dest:
+                    self.providers["bauer"] = BauerAutoProvider(
+                        cotacao_url=cotacao_url,
+                        cnpj_pagador=cnpj_pagador,
+                        cnpj_remetente=cnpj_remetente,
+                        cnpj_destinatario=cnpj_dest,
+                        headless=bool(baucfg.get("headless", True)),
+                    )
 
         tcfg = _cfg_secao("trd")
         if tcfg.get("habilitado", True):
@@ -1453,7 +1462,9 @@ async def _executar_cotacoes_com_dados(
     try:
         baucfg = _cfg_secao("bauer")
         if baucfg.get("habilitado", True):
-            if not _uf_atendida(baucfg.get("ufs_atendidas"), uf_destino):
+            if BauerAutoProvider is None:
+                _log_diag("BAUER ignorada: provider bauer_auto não está disponível neste build")
+            elif not _uf_atendida(baucfg.get("ufs_atendidas"), uf_destino):
                 _log_diag(f"BAUER ignorada (UF {uf_destino} não atendida)")
             else:
                 cotacao_url = str(baucfg.get("cotacao_url", "")).strip()

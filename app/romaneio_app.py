@@ -11,7 +11,16 @@ from typing import Any
 from time import monotonic
 
 from PySide6.QtCore import Qt, QEvent, QTimer, QRectF
-from PySide6.QtGui import QFont, QIcon, QColor, QPainter, QPen, QPixmap
+from PySide6.QtGui import (
+    QFont,
+    QIcon,
+    QColor,
+    QPainter,
+    QPen,
+    QPixmap,
+    QShortcut,
+    QKeySequence,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -35,7 +44,6 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QCheckBox,
     QStackedWidget,
-    QSizePolicy,
 )
 
 import asyncio
@@ -55,6 +63,14 @@ from license import get_saved_license, save_license, validate_license, get_machi
 from error_reporter import install_global_hooks, report_error, report_error_message, configure as _er_configure
 from extrator_nfe import extrair_arquivo as extrair_nfe_arquivo, NotaFiscal, identificar_transportadora, formatar_nota_resumo, parsear_info_complementar
 from rastreamento import rastrear_multiplas, ResultadoRastreio, obter_link_rastreio
+from ui_components import (
+    CarrierDot,
+    NAV_ICONS,
+    NavItem,
+    ToggleWidget,
+    load_app_fonts,
+    svg_icon,
+)
 
 
 # Eventos customizados para comunicação entre threads
@@ -1011,7 +1027,10 @@ class RomaneioWindow(QMainWindow):
         self._cotacao_concluidas = 0
         self._cep_origem_override = ""
         self.app_version = _carregar_versao_app()
-        self.app_name = f"Romaneio Beta {self.app_version} \u2014 {empresa_nome}"
+        self.app_name = f"Fretio {self.app_version} \u2014 {empresa_nome}"
+        self._theme_mode = str((self._sessao.config.get("fretebot", {}) or {}).get("ui_tema", "sistema")).lower()
+        if self._theme_mode not in ("sistema", "claro", "escuro"):
+            self._theme_mode = "sistema"
 
         self.setWindowTitle(self.app_name)
         icon_path = _resource_path("assets/romaneio.ico")
@@ -1021,121 +1040,406 @@ class RomaneioWindow(QMainWindow):
         self.setMinimumSize(980, 620)
         self._build_ui()
 
+    def _usar_tema_escuro(self) -> bool:
+        if self._theme_mode == "escuro":
+            return True
+        if self._theme_mode == "claro":
+            return False
+        try:
+            window_color = QApplication.palette().color(QApplication.palette().Window)
+            return window_color.value() < 128
+        except Exception:
+            return True
+
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        self._page_titles: dict[int, str] = {
+            0: "Dashboard",
+            1: "Romaneio",
+            2: "Cotação",
+            3: "Fornecedores",
+            4: "Rastreio",
+            5: "Configurações",
+        }
+        self._nav_buttons: dict[int, NavItem] = {}
 
-        root = QVBoxLayout(central)
-        root.setContentsMargins(20, 20, 20, 20)
-        root.setSpacing(14)
+        self.sidebar = QFrame()
+        self.sidebar.setObjectName("Sidebar")
+        sidebar_layout = QVBoxLayout(self.sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(0)
 
-        header = QFrame()
-        header.setObjectName("Card")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(18, 16, 18, 16)
-        header_layout.setSpacing(6)
+        # ── Logo row ──────────────────────────────────────────────────────
+        logo_row = QWidget()
+        logo_row.setObjectName("SidebarLogoRow")
+        logo_layout = QHBoxLayout(logo_row)
+        logo_layout.setContentsMargins(14, 14, 14, 14)
+        logo_layout.setSpacing(8)
+        icon_path = _resource_path("assets/romaneio.png")
+        if icon_path.exists():
+            logo_pix = QPixmap(str(icon_path)).scaled(
+                24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
+            logo_img = QLabel()
+            logo_img.setPixmap(logo_pix)
+            logo_img.setFixedSize(24, 24)
+            logo_layout.addWidget(logo_img)
+        brand = QLabel("fretio")
+        brand.setObjectName("BrandLabel")
+        logo_layout.addWidget(brand)
+        logo_layout.addStretch(1)
+        sidebar_layout.addWidget(logo_row)
+
+        sep_logo = QFrame()
+        sep_logo.setFrameShape(QFrame.HLine)
+        sep_logo.setObjectName("SidebarSep")
+        sidebar_layout.addWidget(sep_logo)
+
+        # ── Empresa chip ─────────────────────────────────────────────────
+        chip_wrap = QWidget()
+        chip_wrap.setObjectName("ChipWrap")
+        chip_wrap_layout = QHBoxLayout(chip_wrap)
+        chip_wrap_layout.setContentsMargins(10, 10, 10, 10)
+        chip = QFrame()
+        chip.setObjectName("EmpresaChip")
+        chip_layout = QHBoxLayout(chip)
+        chip_layout.setContentsMargins(8, 5, 8, 5)
+        chip_layout.setSpacing(8)
+        avatar = QLabel(self.empresa_nome[0].upper() if self.empresa_nome else "?")
+        avatar.setObjectName("EmpresaAvatar")
+        avatar.setFixedSize(22, 22)
+        avatar.setAlignment(Qt.AlignCenter)
+        chip_layout.addWidget(avatar)
+        empresa_name_lbl = QLabel(self.empresa_nome)
+        empresa_name_lbl.setObjectName("EmpresaName")
+        empresa_name_lbl.setMaximumWidth(120)
+        chip_layout.addWidget(empresa_name_lbl, 1)
+        chip_wrap_layout.addWidget(chip)
+        sidebar_layout.addWidget(chip_wrap)
+
+        sep_chip = QFrame()
+        sep_chip.setFrameShape(QFrame.HLine)
+        sep_chip.setObjectName("SidebarSep")
+        sidebar_layout.addWidget(sep_chip)
+
+        # ── Nav items ─────────────────────────────────────────────────────
+        nav_wrap = QWidget()
+        nav_wrap_layout = QVBoxLayout(nav_wrap)
+        nav_wrap_layout.setContentsMargins(6, 8, 6, 8)
+        nav_wrap_layout.setSpacing(1)
+
+        self._nav_items_list: list[NavItem] = []
+        _nav_defs = [
+            (0, 'radar', 'Dashboard',    'H', lambda: self._show_page(0)),
+            (1, 'doc',   'Romaneio',     'R', lambda: self._show_page(1)),
+            (2, 'money', 'Cotação',      'C', lambda: self._show_page(2)),
+            (3, 'box',   'Fornecedores', 'F', lambda: self._show_page(3)),
+            (4, 'truck', 'Rastreio',     'T', lambda: self._show_page(4)),
+        ]
+        for idx, icon_name, label, kbd, cb in _nav_defs:
+            item = NavItem(icon_name, label, kbd)
+            item.clicked.connect(cb)
+            nav_wrap_layout.addWidget(item)
+            self._nav_buttons[idx] = item
+            self._nav_items_list.append(item)
+
+        nav_wrap_layout.addStretch(1)
+        sidebar_layout.addWidget(nav_wrap, 1)
+
+        sep_nav = QFrame()
+        sep_nav.setFrameShape(QFrame.HLine)
+        sep_nav.setObjectName("SidebarSep")
+        sidebar_layout.addWidget(sep_nav)
+
+        # ── Bottom: theme toggle + settings ───────────────────────────────
+        bottom_wrap = QWidget()
+        bottom_layout = QVBoxLayout(bottom_wrap)
+        bottom_layout.setContentsMargins(6, 6, 6, 6)
+        bottom_layout.setSpacing(1)
+
+        # Dark mode toggle row
+        dark_now = self._usar_tema_escuro()
+        toggle_row_w = QWidget()
+        toggle_row_w.setObjectName("ToggleRow")
+        toggle_row_w.setCursor(Qt.PointingHandCursor)
+        toggle_row_layout = QHBoxLayout(toggle_row_w)
+        toggle_row_layout.setContentsMargins(10, 9, 8, 9)
+        toggle_row_layout.setSpacing(8)
+        self._theme_icon_lbl = QLabel()
+        self._theme_icon_lbl.setFixedSize(16, 16)
+        toggle_row_layout.addWidget(self._theme_icon_lbl)
+        self._theme_mode_lbl = QLabel("Modo escuro" if dark_now else "Modo claro")
+        self._theme_mode_lbl.setObjectName("ToggleLabel")
+        toggle_row_layout.addWidget(self._theme_mode_lbl, 1)
+        self._theme_toggle = ToggleWidget(checked=dark_now)
+        self._theme_toggle.toggled.connect(self._on_toggle_tema)
+        toggle_row_layout.addWidget(self._theme_toggle)
+        toggle_row_w.mousePressEvent = lambda e: (
+            self._theme_toggle.mousePressEvent(e)
+            if e.button() == Qt.LeftButton else None
+        )
+        bottom_layout.addWidget(toggle_row_w)
+
+        # Settings NavItem
+        settings_item = NavItem('cog', 'Configurações', ',')
+        settings_item.clicked.connect(lambda: self._show_page(5))
+        bottom_layout.addWidget(settings_item)
+        self._nav_buttons[5] = settings_item
+        self._nav_items_list.append(settings_item)
+
+        sidebar_layout.addWidget(bottom_wrap)
+        root.addWidget(self.sidebar, 0)
+
+        content_wrap = QVBoxLayout()
+        content_wrap.setContentsMargins(0, 0, 0, 0)
+        content_wrap.setSpacing(0)
+
+        topbar = QFrame()
+        topbar.setObjectName("TopBar")
+        header_layout = QVBoxLayout(topbar)
+        header_layout.setContentsMargins(16, 12, 16, 10)
+        header_layout.setSpacing(8)
 
         header_top = QHBoxLayout()
         header_top.setSpacing(10)
-        self.btn_config = QPushButton("⚙ Configurações")
-        self.btn_config.setObjectName("ConfigButton")
-        self.btn_config.clicked.connect(self._abrir_configuracoes)
-        title = QLabel(self.empresa_nome)
-        title.setObjectName("TitleLabel")
-        header_top.addWidget(title)
+        self.page_title_label = QLabel(self._page_titles[0])
+        self.page_title_label.setObjectName("TopBarTitle")
+        header_top.addWidget(self.page_title_label)
         header_top.addStretch(1)
-        header_top.addWidget(self.btn_config)
+
+        # CmdK button with icon + label + kbd badge
+        self.btn_cmd = QFrame()
+        self.btn_cmd.setObjectName("CmdKBtn")
+        self.btn_cmd.setCursor(Qt.PointingHandCursor)
+        self.btn_cmd.mousePressEvent = lambda e: self._abrir_cmdk() if e.button() == Qt.LeftButton else None
+        cmd_layout = QHBoxLayout(self.btn_cmd)
+        cmd_layout.setContentsMargins(10, 5, 10, 5)
+        cmd_layout.setSpacing(8)
+        self._cmd_icon_lbl = QLabel()
+        self._cmd_icon_lbl.setFixedSize(13, 13)
+        cmd_layout.addWidget(self._cmd_icon_lbl)
+        cmd_text = QLabel("Buscar comando…")
+        cmd_text.setObjectName("CmdKText")
+        cmd_layout.addWidget(cmd_text)
+        cmd_kbd = QLabel("Ctrl+K")
+        cmd_kbd.setObjectName("CmdKKbd")
+        cmd_layout.addWidget(cmd_kbd)
+        header_top.addWidget(self.btn_cmd)
+
         header_layout.addLayout(header_top)
         self.label_info = QLabel("Nenhum arquivo carregado")
         self.label_info.setObjectName("StatusLabel")
         header_layout.addWidget(self.label_info)
 
-        # --- Painel de status de login das transportadoras ---
-        login_status_row = QHBoxLayout()
-        login_status_row.setSpacing(12)
-        self._login_status_labels: dict[str, QLabel] = {}
+        # --- Painel de status de login das transportadoras (visível só na página Cotação) ---
+        self._carrier_status_frame = QFrame()
+        self._carrier_status_frame.setObjectName("CarrierStatusFrame")
+        carrier_status_layout = QHBoxLayout(self._carrier_status_frame)
+        carrier_status_layout.setContentsMargins(0, 2, 0, 0)
+        carrier_status_layout.setSpacing(16)
+        self._login_status_dots: dict[str, CarrierDot] = {}
         config = self._sessao.config if hasattr(self._sessao, 'config') else {}
         transp_cfg = config.get("transportadoras", {}) if isinstance(config, dict) else {}
         for nome in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex"):
             tcfg = transp_cfg.get(nome, {}) if isinstance(transp_cfg, dict) else {}
             if not tcfg.get("habilitado", False):
                 continue
-            lbl = QLabel(f"⏳ {nome.upper()}")
-            lbl.setStyleSheet("color: #8896ab; font-size: 11px; font-weight: 600;")
-            login_status_row.addWidget(lbl)
-            self._login_status_labels[nome] = lbl
-        login_status_row.addStretch(1)
-        header_layout.addLayout(login_status_row)
+            dot = CarrierDot(nome)
+            carrier_status_layout.addWidget(dot)
+            self._login_status_dots[nome] = dot
+        carrier_status_layout.addStretch(1)
+        self._carrier_status_frame.setVisible(False)
+        header_layout.addWidget(self._carrier_status_frame)
 
         self._pre_login_done = False
         self._notas_rastreio: list = []
         self._rastreio_card_widgets: list = []
         self._resultados_rastreio: list = []
 
+        content_wrap.addWidget(topbar)
+
         # --- QStackedWidget (Home + paginas individuais) ---
         self.stack = QStackedWidget()
         self.stack.setObjectName("MainStack")
 
-        # Pagina 0: Tela de Boas-Vindas
+        # Pagina 0: Dashboard
         home_page = QWidget()
         home_layout = QVBoxLayout(home_page)
-        home_layout.setContentsMargins(40, 30, 40, 20)
-        home_layout.setSpacing(24)
+        home_layout.setContentsMargins(18, 18, 18, 18)
+        home_layout.setSpacing(14)
 
-        home_title = QLabel("O que deseja fazer?")
-        home_title.setObjectName("HomeTitleLabel")
-        home_title.setAlignment(Qt.AlignCenter)
-        home_layout.addWidget(home_title)
-
-        home_subtitle = QLabel("Escolha um recurso abaixo para come\u00e7ar")
-        home_subtitle.setObjectName("HomeSubtitleLabel")
-        home_subtitle.setAlignment(Qt.AlignCenter)
-        home_layout.addWidget(home_subtitle)
-
-        cards_grid = QGridLayout()
-        cards_grid.setSpacing(20)
-        cards_grid.setColumnStretch(0, 1)
-        cards_grid.setColumnStretch(1, 1)
-        cards_grid.setRowStretch(0, 1)
-        cards_grid.setRowStretch(1, 1)
-
-        home_cards = [
-            ("\U0001f4c4", "ROMANEIO", "Extrair pedidos de PDF\ne visualizar romaneio", 1),
-            ("\U0001f4b0", "CALCULAR FRETE", "Cotar frete em m\u00faltiplas\ntransportadoras", 2),
-            ("\U0001f4e6", "FRETE FORNECEDORES", "Cotar frete de fornecedor\ncom dados manuais", 3),
-            ("\U0001f69a", "RASTREIO", "Rastrear entregas via\nXML/PDF de NF-e", 4),
+        # KPI row
+        kpi_grid = QGridLayout()
+        kpi_grid.setHorizontalSpacing(10)
+        kpi_grid.setVerticalSpacing(10)
+        _kpi_data = [
+            ("ROMANEIOS HOJE",  "3",        "+2 vs. ontem",              "KpiValueAccent"),
+            ("VOLUME TOTAL",    "52",        "1.042 kg · 1,2 m³",        "KpiValue"),
+            ("ECONOMIA",        "R$ 2.840",  "vs. cotação mais cara",     "KpiValueGreen"),
+            ("TAXA SUCESSO",    "94%",       "47 de 50 cotações",         "KpiValueAmber"),
         ]
-        self._home_card_buttons = []
-        for i, (icon, title_text, desc, page_idx) in enumerate(home_cards):
-            card_btn = QPushButton()
-            card_btn.setObjectName("HomeCard")
-            card_btn_layout = QVBoxLayout(card_btn)
-            card_btn_layout.setContentsMargins(20, 24, 20, 24)
-            card_btn_layout.setSpacing(8)
-            lbl_icon = QLabel(icon)
-            lbl_icon.setObjectName("HomeCardIcon")
-            lbl_icon.setAlignment(Qt.AlignCenter)
-            card_btn_layout.addWidget(lbl_icon)
-            lbl_title = QLabel(title_text)
-            lbl_title.setObjectName("HomeCardTitle")
-            lbl_title.setAlignment(Qt.AlignCenter)
-            card_btn_layout.addWidget(lbl_title)
-            lbl_desc = QLabel(desc)
-            lbl_desc.setObjectName("HomeCardDesc")
-            lbl_desc.setAlignment(Qt.AlignCenter)
-            lbl_desc.setWordWrap(True)
-            card_btn_layout.addWidget(lbl_desc)
-            card_btn.setMinimumSize(180, 140)
-            card_btn.setMaximumHeight(200)
-            card_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-            card_btn.setCursor(Qt.PointingHandCursor)
-            card_btn.clicked.connect(lambda checked=False, idx=page_idx: self._show_page(idx))
-            row, col = divmod(i, 2)
-            cards_grid.addWidget(card_btn, row, col)
-            self._home_card_buttons.append(card_btn)
+        for idx, (titulo, valor, sub, val_obj) in enumerate(_kpi_data):
+            card = QFrame()
+            card.setObjectName("Card")
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(14, 12, 14, 12)
+            cl.setSpacing(4)
+            lbl_t = QLabel(titulo)
+            lbl_t.setObjectName("KpiLabel")
+            lbl_v = QLabel(valor)
+            lbl_v.setObjectName(val_obj)
+            lbl_s = QLabel(sub)
+            lbl_s.setObjectName("KpiSub")
+            cl.addWidget(lbl_t)
+            cl.addWidget(lbl_v)
+            cl.addWidget(lbl_s)
+            kpi_grid.addWidget(card, 0, idx)
+        home_layout.addLayout(kpi_grid)
 
-        home_layout.addLayout(cards_grid)
-        home_layout.addStretch(1)
+        # Two-column area: recentes (left) + ações rápidas + status (right)
+        two_col = QHBoxLayout()
+        two_col.setSpacing(14)
+
+        # Left: recent romaneios table
+        recentes_card = QFrame()
+        recentes_card.setObjectName("Card")
+        recentes_vlayout = QVBoxLayout(recentes_card)
+        recentes_vlayout.setContentsMargins(0, 0, 0, 0)
+        recentes_vlayout.setSpacing(0)
+
+        rh = QWidget()
+        rh_layout = QHBoxLayout(rh)
+        rh_layout.setContentsMargins(14, 10, 14, 10)
+        rh_lbl = QLabel("ROMANEIOS RECENTES")
+        rh_lbl.setObjectName("SectionLabel")
+        rh_link = QLabel("ver todos →")
+        rh_link.setObjectName("LinkLabel")
+        rh_layout.addWidget(rh_lbl)
+        rh_layout.addStretch(1)
+        rh_layout.addWidget(rh_link)
+        recentes_vlayout.addWidget(rh)
+
+        sep_rh = QFrame(); sep_rh.setFrameShape(QFrame.HLine); sep_rh.setObjectName("SidebarSep")
+        recentes_vlayout.addWidget(sep_rh)
+
+        _recent_rows = [
+            ("02/05", "pedidos_2026-05-02.pdf",  "Curitiba/PR",         "12v · 380kg",  "R$ 14.260"),
+            ("01/05", "romaneio_poa.pdf",         "Porto Alegre/RS",     "8v · 240kg",   "R$ 9.180"),
+            ("01/05", "expedicao-294.pdf",        "Florianópolis/SC",    "5v · 120kg",   "R$ 4.420"),
+            ("30/04", "pedidos_sp.pdf",           "São Paulo/SP",        "18v · 540kg",  "R$ 22.140"),
+            ("30/04", "romaneio_mg.pdf",          "Belo Horizonte/MG",   "9v · 290kg",   "R$ 11.200"),
+        ]
+        for i, (data, nome_f, dest, vol, total) in enumerate(_recent_rows):
+            row_w = QWidget()
+            rw_layout = QHBoxLayout(row_w)
+            rw_layout.setContentsMargins(14, 9, 14, 9)
+            rw_layout.setSpacing(10)
+            ld = QLabel(data);   ld.setObjectName("TableMono");     ld.setFixedWidth(36)
+            ln = QLabel(nome_f); ln.setObjectName("TableMono2")
+            lde = QLabel(dest);  lde.setObjectName("TableText")
+            lv = QLabel(vol);    lv.setObjectName("TableMono");     lv.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            lt = QLabel(total);  lt.setObjectName("TableMonoBold"); lt.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            rw_layout.addWidget(ld)
+            rw_layout.addWidget(ln, 2)
+            rw_layout.addWidget(lde, 2)
+            rw_layout.addWidget(lv, 1)
+            rw_layout.addWidget(lt)
+            recentes_vlayout.addWidget(row_w)
+            if i < len(_recent_rows) - 1:
+                sep_r = QFrame(); sep_r.setFrameShape(QFrame.HLine); sep_r.setObjectName("SoftSep")
+                recentes_vlayout.addWidget(sep_r)
+        recentes_vlayout.addStretch(1)
+        two_col.addWidget(recentes_card, 1)
+
+        # Right column (fixed 280px)
+        right_col_w = QWidget()
+        right_col_w.setFixedWidth(280)
+        right_col_layout = QVBoxLayout(right_col_w)
+        right_col_layout.setContentsMargins(0, 0, 0, 0)
+        right_col_layout.setSpacing(10)
+
+        # Quick actions card
+        actions_card = QFrame()
+        actions_card.setObjectName("Card")
+        actions_vlayout = QVBoxLayout(actions_card)
+        actions_vlayout.setContentsMargins(14, 12, 14, 12)
+        actions_vlayout.setSpacing(6)
+        ac_lbl = QLabel("AÇÕES RÁPIDAS")
+        ac_lbl.setObjectName("SectionLabel")
+        actions_vlayout.addWidget(ac_lbl)
+
+        self._home_action_icons: list[tuple[QLabel, str]] = []
+        _action_defs = [
+            ('doc',   'Romaneio',     'R', 1),
+            ('money', 'Cotação',      'C', 2),
+            ('box',   'Fornecedores', 'F', 3),
+            ('truck', 'Rastreio',     'T', 4),
+        ]
+        for icon_name, lbl_text, kbd_text, page_idx in _action_defs:
+            abtn = QFrame()
+            abtn.setObjectName("ActionBtn")
+            abtn.setCursor(Qt.PointingHandCursor)
+            abtn.mousePressEvent = (
+                lambda e, pi=page_idx: self._show_page(pi) if e.button() == Qt.LeftButton else None
+            )
+            abtn_layout = QHBoxLayout(abtn)
+            abtn_layout.setContentsMargins(10, 8, 10, 8)
+            abtn_layout.setSpacing(8)
+            icon_lbl = QLabel()
+            icon_lbl.setFixedSize(15, 15)
+            self._home_action_icons.append((icon_lbl, icon_name))
+            abtn_layout.addWidget(icon_lbl)
+            text_lbl = QLabel(lbl_text)
+            text_lbl.setObjectName("ActionBtnText")
+            abtn_layout.addWidget(text_lbl, 1)
+            kbd_badge = QLabel(kbd_text)
+            kbd_badge.setObjectName("KbdBadge")
+            abtn_layout.addWidget(kbd_badge)
+            actions_vlayout.addWidget(abtn)
+        right_col_layout.addWidget(actions_card)
+
+        # Carrier status card
+        carr_card = QFrame()
+        carr_card.setObjectName("Card")
+        carr_vlayout = QVBoxLayout(carr_card)
+        carr_vlayout.setContentsMargins(14, 12, 14, 12)
+        carr_vlayout.setSpacing(4)
+        carr_lbl = QLabel("STATUS CARRIERS")
+        carr_lbl.setObjectName("SectionLabel")
+        carr_vlayout.addWidget(carr_lbl)
+
+        self._home_carrier_info: dict[str, tuple[QFrame, QLabel]] = {}
+        _tag_styles = {"ok": "TagGreen", "fail": "TagRed", "pending": "TagAmber"}
+        for nome in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex"):
+            _tcfg = transp_cfg.get(nome, {}) if isinstance(transp_cfg, dict) else {}
+            if not _tcfg.get("habilitado", False):
+                continue
+            cr_row = QWidget()
+            cr_layout = QHBoxLayout(cr_row)
+            cr_layout.setContentsMargins(0, 5, 0, 5)
+            cr_layout.setSpacing(8)
+            cr_dot = QFrame()
+            cr_dot.setFixedSize(6, 6)
+            cr_dot.setStyleSheet("border-radius:3px;background:#e3b341;")
+            cr_layout.addWidget(cr_dot, 0, Qt.AlignVCenter)
+            cr_name = QLabel(nome.capitalize())
+            cr_name.setObjectName("CarrierRowName")
+            cr_layout.addWidget(cr_name, 1)
+            cr_tag = QLabel("aguardando")
+            cr_tag.setObjectName("TagAmber")
+            cr_layout.addWidget(cr_tag)
+            carr_vlayout.addWidget(cr_row)
+            self._home_carrier_info[nome] = (cr_dot, cr_tag)
+
+        right_col_layout.addWidget(carr_card)
+        right_col_layout.addStretch(1)
+        two_col.addWidget(right_col_w)
+
+        home_layout.addLayout(two_col, 1)
         self.stack.addWidget(home_page)  # index 0 = home
 
         self.btn_select = QPushButton("Selecionar PDF")
@@ -1458,66 +1762,278 @@ class RomaneioWindow(QMainWindow):
         page_rastreio = self._wrap_page_with_back("\U0001f69a RASTREIO", tab_rastreio)
         self.stack.addWidget(page_rastreio)  # index 4
 
+        page_config = self._build_config_page()
+        self.stack.addWidget(page_config)  # index 5
+
         footer = QHBoxLayout()
         footer.setSpacing(10)
-        lbl_app_name = QLabel(f"Romaneio Beta {self.app_version}")
+        lbl_app_name = QLabel(f"Fretio {self.app_version}")
         lbl_app_name.setObjectName("FooterLabel")
         footer.addStretch(1)
         footer.addWidget(lbl_app_name)
 
-        root.addWidget(header)
-        root.addWidget(self.stack, 1)
-        root.addLayout(footer)
+        content_wrap.addWidget(self.stack, 1)
+        content_wrap.addLayout(footer)
+        root.addLayout(content_wrap, 1)
 
         self._apply_style()
+        self._show_page(0)
+        QShortcut(QKeySequence("Ctrl+K"), self, activated=self._abrir_cmdk)
+
+    def _build_config_page(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("PageContent")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+        card = QFrame()
+        card.setObjectName("Card")
+        form = QFormLayout(card)
+        form.setContentsMargins(14, 14, 14, 14)
+        form.setSpacing(8)
+        cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
+        rom_cfg = cfg.get("romaneio", {}) or {}
+        fb_cfg = cfg.get("fretebot", {}) or {}
+        self._cfg_cep_origem = QLineEdit(str(rom_cfg.get("cep_origem", "") or ""))
+        self._cfg_cep_origem.setObjectName("InputField")
+        self._cfg_paralelo = QLineEdit(str(int(fb_cfg.get("max_paralelo", 3) or 3)))
+        self._cfg_paralelo.setObjectName("InputField")
+        self._cfg_paralelo.setMaximumWidth(80)
+        self._cfg_nome_empresa = QLineEdit(self.empresa_nome)
+        self._cfg_nome_empresa.setObjectName("InputField")
+        form.addRow("Empresa", self._cfg_nome_empresa)
+        form.addRow("CEP origem", self._cfg_cep_origem)
+        form.addRow("Cotações paralelas", self._cfg_paralelo)
+        actions = QHBoxLayout()
+        btn_salvar = QPushButton("Salvar")
+        btn_salvar.clicked.connect(self._salvar_config_embutido)
+        btn_trocar = QPushButton("Trocar empresa")
+        btn_trocar.setObjectName("SecondaryButton")
+        btn_trocar.clicked.connect(self._trocar_empresa_embutido)
+        btn_avancado = QPushButton("Configurações completas")
+        btn_avancado.setObjectName("SecondaryButton")
+        btn_avancado.clicked.connect(self._abrir_configuracoes_completas)
+        actions.addWidget(btn_trocar)
+        actions.addWidget(btn_avancado)
+        actions.addStretch(1)
+        actions.addWidget(btn_salvar)
+        form.addRow(actions)
+        layout.addWidget(card)
+        layout.addStretch(1)
+        return page
+
+    def _on_toggle_tema(self, dark: bool) -> None:
+        self._theme_mode = "escuro" if dark else "claro"
+        cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
+        fb = cfg.setdefault("fretebot", {})
+        fb["ui_tema"] = self._theme_mode
+        _escrever_config_toml(cfg, self._config_path)
+        self._apply_style()
+
+    def _on_trocar_tema(self):
+        dark = self._usar_tema_escuro()
+        self._on_toggle_tema(dark)
+
+    def _salvar_config_embutido(self):
+        cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
+        rom = cfg.setdefault("romaneio", {})
+        fb = cfg.setdefault("fretebot", {})
+        rom["cep_origem"] = self._cfg_cep_origem.text().strip()
+        try:
+            fb["max_paralelo"] = max(1, min(7, int(self._cfg_paralelo.text().strip() or "3")))
+        except ValueError:
+            fb["max_paralelo"] = 3
+        _escrever_config_toml(cfg, self._config_path)
+        novo_nome = re.sub(r'[<>:"/\\|?*]', '_', self._cfg_nome_empresa.text().strip())
+        if novo_nome and novo_nome != self.empresa_nome:
+            if not _renomear_pasta_empresa(self.empresa_nome, novo_nome):
+                QMessageBox.warning(
+                    self,
+                    "Erro",
+                    f"Não foi possível renomear a empresa para '{novo_nome}'.\n"
+                    "Verifique se já existe outra empresa com esse nome.",
+                )
+                return
+            self._proxima_empresa = novo_nome
+            self.close()
+            return
+        self.label_info.setText("Configurações salvas com sucesso.")
+
+    def _trocar_empresa_embutido(self):
+        dlg = EmpresaSelectorDialog(self)
+        if dlg.exec() == QDialog.Accepted and dlg.empresa_selecionada:
+            self._proxima_empresa = dlg.empresa_selecionada
+            self.close()
+
+    def _abrir_configuracoes_completas(self):
+        dlg = ConfiguracoesDialog(
+            config=self._sessao.config,
+            config_path=self._config_path,
+            empresa_nome=self.empresa_nome,
+            parent=self,
+        )
+        if dlg.exec() == QDialog.Accepted:
+            if dlg.empresa_trocada:
+                self._proxima_empresa = dlg.empresa_trocada
+                self.close()
+                return
+            if dlg._credenciais_mudaram:
+                self._reiniciar_sessao()
+            self.label_info.setText("Configurações salvas com sucesso.")
+
+    def _abrir_cmdk(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Buscar comando")
+        dlg.setMinimumSize(460, 360)
+        layout = QVBoxLayout(dlg)
+        search = QLineEdit()
+        search.setPlaceholderText("Digite para buscar...")
+        search.setObjectName("InputField")
+        layout.addWidget(search)
+        lista = QListWidget()
+        layout.addWidget(lista, 1)
+        items = [
+            ("Dashboard", lambda: self._show_page(0)),
+            ("Romaneio", lambda: self._show_page(1)),
+            ("Cotação", lambda: self._show_page(2)),
+            ("Fornecedores", lambda: self._show_page(3)),
+            ("Rastreio", lambda: self._show_page(4)),
+            ("Configurações", lambda: self._show_page(5)),
+        ]
+
+        def preencher(q: str = ""):
+            lista.clear()
+            q = (q or "").strip().lower()
+            for label, _ in items:
+                if not q or q in label.lower():
+                    lista.addItem(label)
+
+        def executar():
+            cur = lista.currentItem()
+            if not cur:
+                return
+            texto = cur.text()
+            for label, fn in items:
+                if label == texto:
+                    fn()
+                    dlg.accept()
+                    break
+
+        preencher()
+        search.textChanged.connect(preencher)
+        lista.itemDoubleClicked.connect(lambda *_: executar())
+        search.returnPressed.connect(executar)
+        dlg.exec()
 
     def _apply_style(self):
-        self.setStyleSheet(
-            """
-            QMainWindow { background: #f3f6fb; }
-            #Card { background: #ffffff; border: 1px solid #dde3f0; border-radius: 12px; }
-            #TitleLabel { font-size: 22px; font-weight: 700; color: #16213d; }
-            #SubtitleLabel { font-size: 13px; color: #5a6b8a; }
-            #StatusLabel { color: #6b7a96; }
-            #FooterLabel { font-size: 11px; color: #8896ab; }
-            #InputText { background: #ffffff; color: #1f2a44; border: 1px solid #cfd8ea; border-radius: 8px; padding: 8px; font-family: Consolas; font-size: 10.5pt; }
-            #ResultText { background: #0f172a; color: #e2e8f0; border: 1px solid #1f2a44; border-radius: 10px; padding: 10px; font-family: Consolas; font-size: 11pt; }
-            #MainStack { background: transparent; }
-            #HomeCard { background: #ffffff; border: 2px solid #dde3f0; border-radius: 16px; text-align: center; }
-            #HomeCard:hover { border-color: #1f6feb; background: #f0f5ff; }
-            #HomeCard:pressed { background: #e0ebff; border-color: #1a5ed6; }
-            #HomeTitleLabel { font-size: 26px; font-weight: 700; color: #16213d; }
-            #HomeSubtitleLabel { font-size: 14px; color: #5a6b8a; margin-bottom: 10px; }
-            #HomeCardIcon { font-size: 36px; }
-            #HomeCardTitle { font-size: 16px; font-weight: 700; color: #16213d; }
-            #HomeCardDesc { font-size: 12px; color: #5a6b8a; line-height: 1.4; }
-            #PageHeader { background: transparent; border: none; }
-            #BackButton { background: #e9eef7; color: #1f2a44; border: 1px solid #b0bdd0; border-radius: 8px; padding: 6px 14px; font-size: 13px; font-weight: 600; }
-            #BackButton:hover { background: #dde6f5; }
-            #PageTitleLabel { font-size: 18px; font-weight: 700; color: #16213d; }
-            #PageContent { background: #ffffff; border: 1px solid #dde3f0; border-radius: 10px; }
-            #RastreioScroll { background: transparent; border: none; }
-            #RastreioScroll QWidget { background: transparent; }
-            #RastreioCard { background: #ffffff; border: 1px solid #dde3f0; border-radius: 10px; }
-            #RastreioBlockTitle { font-size: 12px; font-weight: 700; color: #1f6feb; text-transform: uppercase; }
-            #RastreioBlockLabel { font-size: 12px; font-weight: 600; color: #5a6b8a; }
-            #RastreioBlockValue { font-size: 12px; color: #1f2a44; }
-            #RastreioCardHeader { font-size: 14px; font-weight: 700; color: #16213d; }
-            #RastreioStatusEntregue { font-size: 13px; font-weight: 700; color: #067647; }
-            #RastreioStatusTransito { font-size: 13px; font-weight: 700; color: #b45309; }
-            #RastreioStatusErro { font-size: 13px; font-weight: 700; color: #b42318; }
-            #RastreioStatusPendente { font-size: 13px; font-weight: 600; color: #8896ab; }
-            QPushButton { background: #1f6feb; color: #ffffff; border: none; border-radius: 8px; padding: 10px 14px; font-weight: 600; }
-            QPushButton:hover { background: #1a5ed6; }
-            QPushButton#SecondaryButton { background: #e9eef7; color: #1f2a44; }
-            QPushButton#SecondaryButton:hover { background: #dde6f5; }
-            QPushButton#ConfigButton { background: #e9eef7; color: #1f2a44; border: 1px solid #b0bdd0; border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; }
-            QPushButton#ConfigButton:hover { background: #dde6f5; color: #16213d; }
-            #InputField { background: #ffffff; color: #1f2a44; border: 1px solid #cfd8ea; border-radius: 6px; padding: 6px 8px; }
-            #FornLabel { font-size: 13px; font-weight: 600; color: #1f2a44; padding-right: 6px; }
-            #FornUnit { font-size: 12px; color: #5a6b8a; }
-            """
-        )
+        dark = self._usar_tema_escuro()
+        if dark:
+            c_bg = "#0d1117"; c_panel = "#161b22"; c_panel2 = "#1c232c"; c_panel3 = "#21282f"
+            c_border = "#262f3a"; c_border_soft = "#1d2530"
+            c_ink = "#e6edf3"; c_muted = "#768390"; c_ink2 = "#adbac7"; c_faint = "#444c56"
+            c_accent = "#00b4d8"; c_accent2 = "#0a2030"; c_accent_border = "#0d3d55"
+            c_green = "#3fb950"; c_green_dim = "#0d2b16"
+            c_red = "#f85149"; c_red_dim = "#2b0e0e"
+            c_amber = "#e3b341"; c_amber_dim = "#2b2008"
+        else:
+            c_bg = "#f0f4f8"; c_panel = "#ffffff"; c_panel2 = "#f8fafc"; c_panel3 = "#f1f5f9"
+            c_border = "#e2e8f0"; c_border_soft = "#edf2f7"
+            c_ink = "#0f172a"; c_muted = "#64748b"; c_ink2 = "#334155"; c_faint = "#94a3b8"
+            c_accent = "#0077b6"; c_accent2 = "#e0f2fe"; c_accent_border = "#bae6fd"
+            c_green = "#16a34a"; c_green_dim = "#dcfce7"
+            c_red = "#dc2626"; c_red_dim = "#fee2e2"
+            c_amber = "#d97706"; c_amber_dim = "#fef3c7"
+
+        self.setStyleSheet(f"""
+            QMainWindow {{ background: {c_bg}; color: {c_ink}; }}
+            #Sidebar {{ background: {c_panel}; border-right: 1px solid {c_border}; min-width: 200px; max-width: 200px; }}
+            #BrandLabel {{ font-size: 18px; font-weight: 700; letter-spacing: -0.5px; color: {c_ink}; }}
+            #SidebarSep {{ background: {c_border}; border: none; max-height: 1px; }}
+            #ChipWrap {{ background: transparent; }}
+            #EmpresaChip {{ background: {c_panel2}; border: 1px solid {c_border}; border-radius: 6px; }}
+            #EmpresaAvatar {{ background: {c_accent}; color: #fff; font-size: 11px; font-weight: 700; border-radius: 5px; }}
+            #EmpresaName {{ font-size: 12px; font-weight: 500; color: {c_ink2}; }}
+            #ToggleRow {{ border-radius: 6px; }}
+            #ToggleLabel {{ font-size: 13px; color: {c_muted}; }}
+            #TopBar {{ background: {c_panel}; border-bottom: 1px solid {c_border}; }}
+            #TopBarTitle {{ font-size: 14px; font-weight: 600; color: {c_ink}; }}
+            #CmdKBtn {{ background: {c_panel2}; border: 1px solid {c_border}; border-radius: 6px; }}
+            #CmdKText {{ font-size: 12px; color: {c_muted}; }}
+            #CmdKKbd {{ font-family: 'JetBrains Mono'; font-size: 10px; padding: 1px 5px;
+                        background: {c_panel3}; border: 1px solid {c_border}; border-radius: 3px; color: {c_faint}; }}
+            #StatusLabel {{ color: {c_muted}; font-size: 12px; }}
+            #FooterLabel {{ font-size: 11px; color: {c_muted}; }}
+            #Card {{ background: {c_panel}; border: 1px solid {c_border}; border-radius: 8px; }}
+            #SubtitleLabel {{ font-size: 12px; color: {c_muted}; }}
+            #KpiLabel {{ font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: {c_muted}; }}
+            #KpiValue {{ font-size: 28px; font-weight: 700; color: {c_ink}; letter-spacing: -0.03em; }}
+            #KpiValueAccent {{ font-size: 28px; font-weight: 700; color: {c_accent}; letter-spacing: -0.03em; }}
+            #KpiValueGreen {{ font-size: 28px; font-weight: 700; color: {c_green}; letter-spacing: -0.03em; }}
+            #KpiValueAmber {{ font-size: 28px; font-weight: 700; color: {c_amber}; letter-spacing: -0.03em; }}
+            #KpiSub {{ font-size: 11px; color: {c_muted}; }}
+            #SectionLabel {{ font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: {c_muted}; }}
+            #LinkLabel {{ font-size: 11px; font-weight: 500; color: {c_accent}; }}
+            #SoftSep {{ background: {c_border_soft}; border: none; max-height: 1px; }}
+            #TableMono {{ font-family: 'JetBrains Mono'; font-size: 11px; color: {c_faint}; }}
+            #TableMono2 {{ font-family: 'JetBrains Mono'; font-size: 11px; color: {c_ink2}; }}
+            #TableText {{ font-size: 12px; color: {c_muted}; }}
+            #TableMonoBold {{ font-family: 'JetBrains Mono'; font-size: 13px; font-weight: 600; color: {c_ink}; }}
+            #ActionBtn {{ background: {c_panel2}; border: 1px solid {c_border}; border-radius: 6px; }}
+            #ActionBtnText {{ font-size: 13px; font-weight: 500; color: {c_ink}; }}
+            #CarrierRowName {{ font-family: 'JetBrains Mono'; font-size: 12px; color: {c_ink2}; }}
+            #TagGreen {{ background: {c_green_dim}; color: {c_green}; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }}
+            #TagRed {{ background: {c_red_dim}; color: {c_red}; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }}
+            #TagAmber {{ background: {c_amber_dim}; color: {c_amber}; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }}
+            #InputText {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 8px; padding: 8px; font-family: "JetBrains Mono"; font-size: 10.5pt; }}
+            #ResultText {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 10px; padding: 10px; font-family: "JetBrains Mono"; font-size: 11pt; }}
+            #MainStack {{ background: transparent; }}
+            #PageHeader {{ background: transparent; border: none; }}
+            #BackButton {{ background: {c_panel2}; color: {c_ink2}; border: 1px solid {c_border}; border-radius: 8px; padding: 6px 14px; font-size: 13px; font-weight: 600; }}
+            #BackButton:hover {{ background: {c_panel2}; color: {c_ink}; }}
+            #PageTitleLabel {{ font-size: 18px; font-weight: 700; color: {c_ink}; }}
+            #PageContent {{ background: {c_bg}; border: none; border-radius: 0px; }}
+            #RastreioScroll {{ background: transparent; border: none; }}
+            #RastreioScroll QWidget {{ background: transparent; }}
+            #RastreioCard {{ background: {c_panel}; border: 1px solid {c_border}; border-radius: 10px; }}
+            #RastreioBlockTitle {{ font-size: 12px; font-weight: 700; color: {c_accent}; }}
+            #RastreioBlockLabel {{ font-size: 12px; font-weight: 600; color: {c_muted}; }}
+            #RastreioBlockValue {{ font-size: 12px; color: {c_ink}; }}
+            #RastreioCardHeader {{ font-size: 14px; font-weight: 700; color: {c_ink}; }}
+            #RastreioStatusEntregue {{ font-size: 13px; font-weight: 700; color: {c_green}; }}
+            #RastreioStatusTransito {{ font-size: 13px; font-weight: 700; color: {c_amber}; }}
+            #RastreioStatusErro {{ font-size: 13px; font-weight: 700; color: {c_red}; }}
+            #RastreioStatusPendente {{ font-size: 13px; font-weight: 600; color: {c_muted}; }}
+            QPushButton {{ background: {c_accent}; color: #ffffff; border: none; border-radius: 8px; padding: 10px 14px; font-weight: 600; }}
+            QPushButton:hover {{ background: {c_accent}; }}
+            QPushButton#SecondaryButton {{ background: {c_panel2}; color: {c_ink2}; border: 1px solid {c_border}; }}
+            QPushButton#SecondaryButton:hover {{ background: {c_panel2}; color: {c_ink}; }}
+            #InputField {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 6px; padding: 6px 8px; }}
+            #FornLabel {{ font-size: 13px; font-weight: 600; color: {c_ink}; padding-right: 6px; }}
+            #FornUnit {{ font-size: 12px; color: {c_muted}; }}
+        """)
+
+        # Refresh NavItem widgets
+        for item in getattr(self, '_nav_items_list', []):
+            item.refresh_theme(
+                accent=c_accent, muted=c_muted, panel2=c_panel2,
+                panel3=c_panel3, border=c_border, faint=c_faint, accentDim=c_accent2,
+            )
+
+        # Refresh theme toggle icon + label
+        if hasattr(self, '_theme_toggle'):
+            self._theme_toggle.setChecked(dark)
+            self._theme_toggle.refresh_theme(c_accent, c_faint)
+            icon_body = NAV_ICONS['moon'] if dark else NAV_ICONS['sun']
+            self._theme_icon_lbl.setPixmap(svg_icon(icon_body, 16, c_muted))
+            self._theme_mode_lbl.setText("Modo escuro" if dark else "Modo claro")
+
+        # Refresh CmdK search icon
+        if hasattr(self, '_cmd_icon_lbl'):
+            self._cmd_icon_lbl.setPixmap(svg_icon(NAV_ICONS['search'], 13, c_muted))
+
+        # Refresh home action button icons
+        for icon_lbl, icon_name in getattr(self, '_home_action_icons', []):
+            icon_lbl.setPixmap(svg_icon(NAV_ICONS.get(icon_name, ''), 15, c_muted))
 
 
     def _wrap_page_with_back(self, title_text: str, content_widget: QWidget) -> QWidget:
@@ -1547,6 +2063,19 @@ class RomaneioWindow(QMainWindow):
 
     def _show_page(self, index: int):
         self.stack.setCurrentIndex(index)
+        if hasattr(self, "page_title_label"):
+            self.page_title_label.setText(self._page_titles.get(index, "FreteBot"))
+        for btn_index, item in self._nav_buttons.items():
+            if isinstance(item, NavItem):
+                item.set_active(btn_index == index)
+            else:
+                item.setProperty("active", btn_index == index)
+                item.style().unpolish(item)
+                item.style().polish(item)
+                item.update()
+        # Carrier status bar visível apenas na página Cotação
+        if hasattr(self, '_carrier_status_frame'):
+            self._carrier_status_frame.setVisible(index == 2)
         # Pre-login so quando acessar Calcular Frete (2) ou Frete Fornecedores (3)
         if index in (2, 3) and not self._pre_login_done:
             self._pre_login_done = True
@@ -2325,19 +2854,7 @@ class RomaneioWindow(QMainWindow):
         os.startfile(str(pasta))
 
     def _abrir_configuracoes(self):
-        dlg = ConfiguracoesDialog(
-            config=self._sessao.config,
-            config_path=self._config_path,
-            empresa_nome=self.empresa_nome,
-            parent=self,
-        )
-        if dlg.exec() == QDialog.Accepted:
-            if dlg.empresa_trocada:
-                self._proxima_empresa = dlg.empresa_trocada
-                self.close()
-                return
-            if dlg._credenciais_mudaram:
-                self._reiniciar_sessao()
+        self._show_page(5)
 
     def _reiniciar_sessao(self):
         """Limpa sess\u00e3o atual e faz login novamente com a config atualizada."""
@@ -2675,6 +3192,7 @@ def main():
         QApplication.setAttribute(Qt.AA_UseSoftwareOpenGL, True)
         QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
         app = QApplication(sys.argv)
+        load_app_fonts()
         app.setQuitOnLastWindowClosed(True)
         if _startup_logger is not None:
             _startup_logger.info("QApplication criada com sucesso")
@@ -2787,7 +3305,7 @@ def main():
 
         _migrar_config_se_necessario()
 
-        proxima_empresa: str | None = _ler_ultima_empresa() or None
+        proxima_empresa: str | None = None
 
         while True:
             empresas_disponiveis = _listar_empresas()
