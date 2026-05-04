@@ -359,7 +359,7 @@ class CoopexProvider(ProviderBase):
                 try:
                     body = await response.text()
                     xml_responses.append(body)
-                except:
+                except Exception:
                     pass
 
         handler = lambda r: __import__('asyncio').ensure_future(capture_response(r))

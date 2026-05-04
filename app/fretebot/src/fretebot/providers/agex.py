@@ -881,13 +881,13 @@ class AGEXProvider(ProviderBase):
 
             // Frete: span cujo texto é exatamente "R$ X,XX"
             const freteSpan = spans.find(s =>
-                /^R\$\s*[\d.,]+$/.test(s.textContent.trim())
+                /^R\\$\\s*[\\d.,]+$/.test(s.textContent.trim())
             );
             if (freteSpan) out.frete = freteSpan.textContent.trim();
 
             // Previsão de entrega: primeiro span com data DD/MM/YY ou DD/MM/YYYY
             const dateSpan = spans.find(s =>
-                /^\d{2}\/\d{2}\/\d{2,4}$/.test(s.textContent.trim())
+                /^\\d{2}\\/\\d{2}\\/\\d{2,4}$/.test(s.textContent.trim())
             );
             if (dateSpan) out.previsao = dateSpan.textContent.trim();
 

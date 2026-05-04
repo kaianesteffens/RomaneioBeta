@@ -11,6 +11,7 @@ import os
 import time
 import re
 import sys
+import threading
 
 # Error reporting remoto
 try:
@@ -51,46 +52,51 @@ RodonavesProvider = None
 AlfaProvider = None
 CoopexProvider = None
 
+_provider_import_lock = threading.Lock()
+
 def _ensure_provider_imports() -> None:
-    """Importa os providers na primeira chamada (lazy)."""
+    """Importa os providers na primeira chamada (lazy). Thread-safe."""
     global BraspressProvider, BauerAutoProvider, TRDProvider
     global AGEXProvider, EucaturProvider, RodonavesProvider, AlfaProvider, CoopexProvider
     if BraspressProvider is not None:
-        return  # já carregado
-    from fretebot.providers.braspress_playwright import BraspressPlaywrightProvider as _BP
-    from fretebot.providers.trd import TRDProvider as _TRD
-    BraspressProvider = _BP
-    TRDProvider = _TRD
-    try:
-        from fretebot.providers.bauer_auto import BauerAutoProvider as _BAU
-    except ImportError:
-        _BAU = None
-    BauerAutoProvider = _BAU
-    try:
-        from fretebot.providers.agex import AGEXProvider as _AG
-    except ImportError:
-        _AG = None
-    AGEXProvider = _AG
-    try:
-        from fretebot.providers.eucatur import EucaturProvider as _EU
-    except ImportError:
-        _EU = None
-    EucaturProvider = _EU
-    try:
-        from fretebot.providers.rodonaves import RodonavesProvider as _RO
-    except ImportError:
-        _RO = None
-    RodonavesProvider = _RO
-    try:
-        from fretebot.providers.alfa import AlfaProvider as _AL
-    except ImportError:
-        _AL = None
-    AlfaProvider = _AL
-    try:
-        from fretebot.providers.coopex import CoopexProvider as _CO
-    except ImportError:
-        _CO = None
-    CoopexProvider = _CO
+        return  # já carregado (fast path sem lock)
+    with _provider_import_lock:
+        if BraspressProvider is not None:
+            return  # double-checked: outra thread já carregou
+        from fretebot.providers.braspress_playwright import BraspressPlaywrightProvider as _BP
+        from fretebot.providers.trd import TRDProvider as _TRD
+        BraspressProvider = _BP
+        TRDProvider = _TRD
+        try:
+            from fretebot.providers.bauer_auto import BauerAutoProvider as _BAU
+        except ImportError:
+            _BAU = None
+        BauerAutoProvider = _BAU
+        try:
+            from fretebot.providers.agex import AGEXProvider as _AG
+        except ImportError:
+            _AG = None
+        AGEXProvider = _AG
+        try:
+            from fretebot.providers.eucatur import EucaturProvider as _EU
+        except ImportError:
+            _EU = None
+        EucaturProvider = _EU
+        try:
+            from fretebot.providers.rodonaves import RodonavesProvider as _RO
+        except ImportError:
+            _RO = None
+        RodonavesProvider = _RO
+        try:
+            from fretebot.providers.alfa import AlfaProvider as _AL
+        except ImportError:
+            _AL = None
+        AlfaProvider = _AL
+        try:
+            from fretebot.providers.coopex import CoopexProvider as _CO
+        except ImportError:
+            _CO = None
+        CoopexProvider = _CO
 
 
 CEP_ORIGEM_PADRAO = "99740000"
@@ -2326,12 +2332,11 @@ async def diagnosticar_transportadoras(
 
 def formatar_resultados_cotacao(resultados: list[ResultadoCotacao]) -> str:
     linhas: list[str] = []
-    linhas.append("=== COTAÇÕES TRANSPORTADORAS ===")
 
     # Verificar erros de divergência CEP/UF (bloqueio)
     for r in resultados:
         if r.status == "erro_divergencia_uf":
-            linhas.append(f"\n⚠️ COTAÇÃO BLOQUEADA:\n{r.detalhes}")
+            linhas.append(f"COTACAO BLOQUEADA:\n{r.detalhes}")
             return "\n".join(linhas)
 
     validas = sorted(
@@ -2339,18 +2344,20 @@ def formatar_resultados_cotacao(resultados: list[ResultadoCotacao]) -> str:
         key=lambda r: (float(r.valor_frete or 0.0), int(r.prazo_dias or 0), r.transportadora),
     )
     for item in validas:
+        val = f"{item.valor_frete:.2f}".replace(".", ",")
         linhas.append(
-            f"- {item.transportadora}: R$ {item.valor_frete:.2f} | {item.prazo_dias} dia(s)"
+            f"{item.transportadora}   R$ {val}   {item.prazo_dias} dia(s)"
         )
 
     if validas:
         melhor = validas[0]
+        val_melhor = f"{melhor.valor_frete:.2f}".replace(".", ",")
         linhas.append("")
-        linhas.append(f"Melhor frete: {melhor.transportadora} - R$ {melhor.valor_frete:.2f}")
+        linhas.append(f"Melhor frete: {melhor.transportadora}   R$ {val_melhor}")
     else:
-        linhas.append("- Nenhuma cotação válida retornada")
+        linhas.append("Nenhuma cotacao valida retornada")
         if _diag_log_enabled():
-            linhas.append("- Diagnóstico: verifique o arquivo romaneio_cotacao.log")
+            linhas.append("Diagnostico: verifique o arquivo romaneio_cotacao.log")
 
     return "\n".join(linhas)
 

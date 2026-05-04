@@ -18,6 +18,7 @@ hiddenimports = [
     "fretebot.providers.eucatur",
     "fretebot.providers.rodonaves",
     "fretebot.providers.alfa",
+    "fretebot.providers.coopex",
     "fretebot.providers._win_taskbar",
     "fretebot.providers.base",
     # Fretebot core

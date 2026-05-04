@@ -74,7 +74,7 @@ from ui_components import (
 
 
 # Eventos customizados para comunicação entre threads
-class UdpateResultEvent(QEvent):
+class UpdateResultEvent(QEvent):
     """Evento para atualizar o resultado na UI."""
     EventType = QEvent.Type(QEvent.registerEventType())
     
@@ -561,8 +561,9 @@ def _renomear_pasta_empresa(nome_atual: str, nome_novo: str) -> bool:
 class EmpresaSelectorDialog(QDialog):
     """Tela inicial para escolher com qual empresa operar."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, dark: bool = True):
         super().__init__(parent)
+        self._dark = dark
         self.setWindowTitle("FreteBot — Selecionar Empresa")
         self.setFixedSize(420, 340)
         self.empresa_selecionada: str | None = None
@@ -663,23 +664,29 @@ class EmpresaSelectorDialog(QDialog):
         self.accept()
 
     def _apply_style(self):
-        self.setStyleSheet(
-            """
-            QDialog { background: #f3f6fb; }
-            #TitleLabel { font-size: 20px; font-weight: 700; color: #16213d; }
-            #SubtitleLabel { font-size: 12px; color: #5a6b8a; }
-            QLabel { color: #1f2a44; }
-            QListWidget { background: #fff; color: #1f2a44; border: 1px solid #dde3f0; border-radius: 8px;
-                          padding: 6px; font-size: 13px; }
-            QListWidget::item { padding: 8px; border-radius: 6px; }
-            QListWidget::item:selected { background: #1f6feb; color: #fff; }
-            QPushButton { background: #1f6feb; color: #fff; border: none; border-radius: 8px;
-                          padding: 10px 18px; font-weight: 600; }
-            QPushButton:hover { background: #1a5ed6; }
-            QPushButton#SecondaryButton { background: #e9eef7; color: #1f2a44; }
-            QPushButton#SecondaryButton:hover { background: #dde6f5; }
-            """
-        )
+        if self._dark:
+            c_bg = "#0d1117"; c_panel2 = "#1c232c"; c_panel3 = "#21282f"
+            c_border = "#262f3a"; c_ink = "#e6edf3"; c_muted = "#768390"
+            c_ink2 = "#adbac7"; c_accent = "#00b4d8"
+        else:
+            c_bg = "#f0f4f8"; c_panel2 = "#f8fafc"; c_panel3 = "#f1f5f9"
+            c_border = "#e2e8f0"; c_ink = "#0f172a"; c_muted = "#64748b"
+            c_ink2 = "#334155"; c_accent = "#0077b6"
+        self.setStyleSheet(f"""
+            QDialog {{ background: {c_bg}; }}
+            #TitleLabel {{ font-size: 20px; font-weight: 700; color: {c_ink}; }}
+            #SubtitleLabel {{ font-size: 12px; color: {c_muted}; }}
+            QLabel {{ color: {c_ink}; }}
+            QListWidget {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border};
+                          border-radius: 8px; padding: 6px; font-size: 13px; }}
+            QListWidget::item {{ padding: 8px; border-radius: 6px; }}
+            QListWidget::item:selected {{ background: {c_accent}; color: #fff; }}
+            QPushButton {{ background: {c_accent}; color: #fff; border: none; border-radius: 8px;
+                          padding: 10px 18px; font-weight: 600; }}
+            QPushButton#SecondaryButton {{ background: {c_panel2}; color: {c_ink2};
+                                          border: 1px solid {c_border}; }}
+            QPushButton#SecondaryButton:hover {{ background: {c_panel3}; color: {c_ink}; }}
+        """)
 
 
 # ---------------------------------------------------------------------------
@@ -714,7 +721,6 @@ class ConfiguracoesDialog(QDialog):
         tabs.setObjectName("MainTabs")
         tabs.addTab(self._tab_ufs(), "UFs Atendidas")
         tabs.addTab(self._tab_credenciais(), "Credenciais")
-        tabs.addTab(self._tab_empresa(), "Empresa")
         layout.addWidget(tabs, 1)
 
         btn_row = QHBoxLayout()
@@ -854,98 +860,6 @@ class ConfiguracoesDialog(QDialog):
         wl.addWidget(scroll)
         return wrapper
 
-    # --- aba Empresa ---
-    def _tab_empresa(self) -> QWidget:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-        lbl = QLabel(f"Empresa atual:  {self.empresa_nome}")
-        lbl.setObjectName("TitleLabel")
-        layout.addWidget(lbl)
-        rename_row = QHBoxLayout()
-        rename_row.setSpacing(8)
-        self._edit_nome_empresa = QLineEdit()
-        self._edit_nome_empresa.setText(self.empresa_nome)
-        self._edit_nome_empresa.setObjectName("CredField")
-        self._edit_nome_empresa.setMaximumWidth(300)
-        btn_renomear = QPushButton("Renomear")
-        btn_renomear.setObjectName("SecondaryButton")
-        btn_renomear.clicked.connect(self._renomear_empresa)
-        lbl_nome = QLabel("Nome da empresa:")
-        rename_row.addWidget(lbl_nome)
-        rename_row.addWidget(self._edit_nome_empresa)
-        rename_row.addWidget(btn_renomear)
-        rename_row.addStretch(1)
-        layout.addLayout(rename_row)
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.HLine)
-        layout.addWidget(sep1)
-        btn_trocar = QPushButton("Trocar de Empresa")
-        btn_trocar.setObjectName("SecondaryButton")
-        btn_trocar.clicked.connect(self._trocar_empresa)
-        layout.addWidget(btn_trocar, 0, Qt.AlignLeft)
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        layout.addWidget(sep)
-        rom_cfg = self.config.get("romaneio", {}) or {}
-        fb_cfg = self.config.get("fretebot", {}) or {}
-        form = QFormLayout()
-        self._cep_origem = QLineEdit()
-        self._cep_origem.setText(str(rom_cfg.get("cep_origem", "") or ""))
-        self._cep_origem.setObjectName("CredField")
-        self._cep_origem.setMaximumWidth(200)
-        form.addRow("CEP de Origem:", self._cep_origem)
-        self._paralelo_val = max(1, min(7, int(fb_cfg.get("max_paralelo", 3) or 3)))
-        paralelo_row = QHBoxLayout()
-        paralelo_row.setSpacing(6)
-        self._lbl_paralelo = QLabel(str(self._paralelo_val))
-        self._lbl_paralelo.setFixedWidth(28)
-        self._lbl_paralelo.setAlignment(Qt.AlignCenter)
-        self._lbl_paralelo.setObjectName("CredField")
-        btn_menos = QPushButton("−")
-        btn_menos.setObjectName("MiniButton")
-        btn_menos.setFixedSize(28, 28)
-        btn_mais = QPushButton("+")
-        btn_mais.setObjectName("MiniButton")
-        btn_mais.setFixedSize(28, 28)
-        btn_menos.clicked.connect(lambda: self._ajustar_paralelo(-1))
-        btn_mais.clicked.connect(lambda: self._ajustar_paralelo(1))
-        paralelo_row.addWidget(btn_menos)
-        paralelo_row.addWidget(self._lbl_paralelo)
-        paralelo_row.addWidget(btn_mais)
-        paralelo_row.addStretch(1)
-        paralelo_widget = QWidget()
-        paralelo_widget.setLayout(paralelo_row)
-        form.addRow("Cotações em paralelo:", paralelo_widget)
-        layout.addLayout(form)
-        layout.addStretch(1)
-        return tab
-
-    def _ajustar_paralelo(self, delta: int):
-        self._paralelo_val = max(1, min(7, self._paralelo_val + delta))
-        self._lbl_paralelo.setText(str(self._paralelo_val))
-
-    def _renomear_empresa(self):
-        novo = self._edit_nome_empresa.text().strip()
-        novo = re.sub(r'[<>:"/\\|?*]', '_', novo)
-        if not novo or novo == self.empresa_nome:
-            return
-        if _renomear_pasta_empresa(self.empresa_nome, novo):
-            QMessageBox.information(self, "Sucesso", f"Empresa renomeada para '{novo}'")
-            self.empresa_trocada = novo
-            self.accept()
-        else:
-            QMessageBox.warning(self, "Erro",
-                                f"Não foi possível renomear para '{novo}'.\n"
-                                "Verifique se o nome já existe.")
-
-    def _trocar_empresa(self):
-        dlg = EmpresaSelectorDialog(self)
-        if dlg.exec() == QDialog.Accepted and dlg.empresa_selecionada:
-            self.empresa_trocada = dlg.empresa_selecionada
-            self.accept()
-
     def _salvar(self):
         transp_cfg = self.config.setdefault("transportadoras", {})
         cred_changed = False
@@ -965,47 +879,54 @@ class ConfiguracoesDialog(QDialog):
                 if str(tcfg.get(chave, "") or "") != novo:
                     cred_changed = True
                 tcfg[chave] = novo
-        # CEP origem
-        rom_cfg = self.config.setdefault("romaneio", {})
-        rom_cfg["cep_origem"] = self._cep_origem.text().strip()
-        # Cotações em paralelo
-        fb_cfg = self.config.setdefault("fretebot", {})
-        fb_cfg["max_paralelo"] = self._paralelo_val
         _escrever_config_toml(self.config, self.config_path)
         self._credenciais_mudaram = cred_changed
         QMessageBox.information(self, "Sucesso", "Configurações salvas!")
         self.accept()
 
     def _apply_style(self):
-        self.setStyleSheet(
-            """
-            QDialog { background: #f3f6fb; }
-            QLabel { color: #1f2a44; }
-            #TitleLabel { font-size: 18px; font-weight: 700; color: #16213d; }
-            #SettingsGroup { border: 1px solid #dde3f0; border-radius: 8px;
-                             padding: 12px 10px 10px 10px; margin-top: 6px; background: #fff; }
-            #TranspTitle { font-size: 17px; font-weight: 700; color: #16213d;
-                           padding: 6px 0 8px 0; }
-            #CredField { border: 1px solid #cfd8ea; border-radius: 6px; padding: 5px 8px;
-                         background: #fff; color: #1f2a44; }
-            QTabWidget#MainTabs::pane { border: 1px solid #dde3f0; border-radius: 10px; background: #fff; }
-            QTabBar::tab { background: #e9eef7; color: #1f2a44; border: 1px solid #dde3f0;
+        fb_cfg = self.config.get("fretebot", {}) or {}
+        dark = str(fb_cfg.get("ui_tema", "escuro")).lower() == "escuro"
+        if dark:
+            c_bg = "#0d1117"; c_panel = "#161b22"; c_panel2 = "#1c232c"; c_panel3 = "#21282f"
+            c_border = "#262f3a"; c_ink = "#e6edf3"; c_muted = "#768390"
+            c_ink2 = "#adbac7"; c_faint = "#444c56"; c_accent = "#00b4d8"
+        else:
+            c_bg = "#f0f4f8"; c_panel = "#ffffff"; c_panel2 = "#f8fafc"; c_panel3 = "#f1f5f9"
+            c_border = "#e2e8f0"; c_ink = "#0f172a"; c_muted = "#64748b"
+            c_ink2 = "#334155"; c_faint = "#94a3b8"; c_accent = "#0077b6"
+        self.setStyleSheet(f"""
+            QDialog {{ background: {c_bg}; color: {c_ink}; }}
+            QLabel {{ color: {c_ink}; }}
+            #TitleLabel {{ font-size: 18px; font-weight: 700; color: {c_ink}; }}
+            #SettingsGroup {{ border: 1px solid {c_border}; border-radius: 8px;
+                             padding: 12px 10px 10px 10px; margin-top: 6px; background: {c_panel2}; }}
+            #TranspTitle {{ font-size: 17px; font-weight: 700; color: {c_ink};
+                           padding: 6px 0 8px 0; }}
+            #CredField {{ border: 1px solid {c_border}; border-radius: 6px; padding: 5px 8px;
+                         background: {c_panel2}; color: {c_ink}; }}
+            QTabWidget#MainTabs::pane {{ border: 1px solid {c_border}; border-radius: 10px;
+                                        background: {c_panel}; }}
+            QTabBar::tab {{ background: {c_panel2}; color: {c_muted}; border: 1px solid {c_border};
                            padding: 7px 12px; margin-right: 4px; border-top-left-radius: 8px;
-                           border-top-right-radius: 8px; }
-            QTabBar::tab:selected { background: #fff; border-bottom-color: #fff; }
-            QPushButton { background: #1f6feb; color: #fff; border: none; border-radius: 8px;
-                          padding: 9px 16px; font-weight: 600; }
-            QPushButton:hover { background: #1a5ed6; }
-            QPushButton#SecondaryButton { background: #e9eef7; color: #1f2a44; }
-            QPushButton#SecondaryButton:hover { background: #dde6f5; }
-            QPushButton#MiniButton { background: #e9eef7; color: #1f2a44; border: 1px solid #cfd8ea;
-                                     border-radius: 4px; padding: 2px 8px; font-size: 11px; }
-            QPushButton#MiniButton:hover { background: #dde6f5; }
-            QCheckBox { color: #1f2a44; spacing: 4px; }
-            QLineEdit { color: #1f2a44; background: #fff; }
-            QScrollArea { background: transparent; border: none; }
-            """
-        )
+                           border-top-right-radius: 8px; }}
+            QTabBar::tab:selected {{ background: {c_panel}; color: {c_ink};
+                                     border-bottom-color: {c_panel}; }}
+            QPushButton {{ background: {c_accent}; color: #fff; border: none; border-radius: 8px;
+                          padding: 9px 16px; font-weight: 600; }}
+            QPushButton#SecondaryButton {{ background: {c_panel2}; color: {c_ink2};
+                                          border: 1px solid {c_border}; }}
+            QPushButton#SecondaryButton:hover {{ background: {c_panel3}; color: {c_ink}; }}
+            QPushButton#MiniButton {{ background: {c_panel2}; color: {c_ink2};
+                                     border: 1px solid {c_border}; border-radius: 4px;
+                                     padding: 2px 8px; font-size: 11px; }}
+            QPushButton#MiniButton:hover {{ background: {c_panel3}; }}
+            QCheckBox {{ color: {c_ink}; spacing: 4px; }}
+            QLineEdit {{ color: {c_ink}; background: {c_panel2}; border: 1px solid {c_border};
+                        border-radius: 6px; padding: 5px 8px; }}
+            QScrollArea {{ background: transparent; border: none; }}
+            QGroupBox {{ border: none; }}
+        """)
 
 
 class RomaneioWindow(QMainWindow):
@@ -1026,6 +947,8 @@ class RomaneioWindow(QMainWindow):
         self._cotacao_total = 0
         self._cotacao_concluidas = 0
         self._cep_origem_override = ""
+        self._romaneios_processados: list[dict] = []
+        self._last_cotacao_results: list = []
         self.app_version = _carregar_versao_app()
         self.app_name = f"Fretio {self.app_version} \u2014 {empresa_nome}"
         self._theme_mode = str((self._sessao.config.get("fretebot", {}) or {}).get("ui_tema", "sistema")).lower()
@@ -1134,11 +1057,11 @@ class RomaneioWindow(QMainWindow):
 
         self._nav_items_list: list[NavItem] = []
         _nav_defs = [
-            (0, 'radar', 'Dashboard',    'H', lambda: self._show_page(0)),
-            (1, 'doc',   'Romaneio',     'R', lambda: self._show_page(1)),
-            (2, 'money', 'Cotação',      'C', lambda: self._show_page(2)),
-            (3, 'box',   'Fornecedores', 'F', lambda: self._show_page(3)),
-            (4, 'truck', 'Rastreio',     'T', lambda: self._show_page(4)),
+            (0, 'radar', 'Dashboard',    '', lambda: self._show_page(0)),
+            (1, 'doc',   'Romaneio',     '', lambda: self._show_page(1)),
+            (2, 'money', 'Cotação',      '', lambda: self._show_page(2)),
+            (3, 'box',   'Fornecedores', '', lambda: self._show_page(3)),
+            (4, 'truck', 'Rastreio',     '', lambda: self._show_page(4)),
         ]
         for idx, icon_name, label, kbd, cb in _nav_defs:
             item = NavItem(icon_name, label, kbd)
@@ -1185,7 +1108,7 @@ class RomaneioWindow(QMainWindow):
         bottom_layout.addWidget(toggle_row_w)
 
         # Settings NavItem
-        settings_item = NavItem('cog', 'Configurações', ',')
+        settings_item = NavItem('cog', 'Configurações', '')
         settings_item.clicked.connect(lambda: self._show_page(5))
         bottom_layout.addWidget(settings_item)
         self._nav_buttons[5] = settings_item
@@ -1277,11 +1200,13 @@ class RomaneioWindow(QMainWindow):
         kpi_grid.setHorizontalSpacing(10)
         kpi_grid.setVerticalSpacing(10)
         _kpi_data = [
-            ("ROMANEIOS HOJE",  "3",        "+2 vs. ontem",              "KpiValueAccent"),
-            ("VOLUME TOTAL",    "52",        "1.042 kg · 1,2 m³",        "KpiValue"),
-            ("ECONOMIA",        "R$ 2.840",  "vs. cotação mais cara",     "KpiValueGreen"),
-            ("TAXA SUCESSO",    "94%",       "47 de 50 cotações",         "KpiValueAmber"),
+            ("ROMANEIOS HOJE", "0",  "nesta sessão",       "KpiValueAccent"),
+            ("VOLUME TOTAL",   "0",  "pacotes",             "KpiValue"),
+            ("MELHOR FRETE",   "—",  "da última cotação",   "KpiValueGreen"),
+            ("TAXA SUCESSO",   "—",  "da última cotação",   "KpiValueAmber"),
         ]
+        self._kpi_value_labels: list[QLabel] = []
+        self._kpi_sub_labels: list[QLabel] = []
         for idx, (titulo, valor, sub, val_obj) in enumerate(_kpi_data):
             card = QFrame()
             card.setObjectName("Card")
@@ -1298,9 +1223,11 @@ class RomaneioWindow(QMainWindow):
             cl.addWidget(lbl_v)
             cl.addWidget(lbl_s)
             kpi_grid.addWidget(card, 0, idx)
+            self._kpi_value_labels.append(lbl_v)
+            self._kpi_sub_labels.append(lbl_s)
         home_layout.addLayout(kpi_grid)
 
-        # Two-column area: recentes (left) + ações rápidas + status (right)
+        # Two-column area: recentes (left) + status carriers (right)
         two_col = QHBoxLayout()
         two_col.setSpacing(14)
 
@@ -1326,32 +1253,11 @@ class RomaneioWindow(QMainWindow):
         sep_rh = QFrame(); sep_rh.setFrameShape(QFrame.HLine); sep_rh.setObjectName("SidebarSep")
         recentes_vlayout.addWidget(sep_rh)
 
-        _recent_rows = [
-            ("02/05", "pedidos_2026-05-02.pdf",  "Curitiba/PR",         "12v · 380kg",  "R$ 14.260"),
-            ("01/05", "romaneio_poa.pdf",         "Porto Alegre/RS",     "8v · 240kg",   "R$ 9.180"),
-            ("01/05", "expedicao-294.pdf",        "Florianópolis/SC",    "5v · 120kg",   "R$ 4.420"),
-            ("30/04", "pedidos_sp.pdf",           "São Paulo/SP",        "18v · 540kg",  "R$ 22.140"),
-            ("30/04", "romaneio_mg.pdf",          "Belo Horizonte/MG",   "9v · 290kg",   "R$ 11.200"),
-        ]
-        for i, (data, nome_f, dest, vol, total) in enumerate(_recent_rows):
-            row_w = QWidget()
-            rw_layout = QHBoxLayout(row_w)
-            rw_layout.setContentsMargins(14, 9, 14, 9)
-            rw_layout.setSpacing(10)
-            ld = QLabel(data);   ld.setObjectName("TableMono");     ld.setFixedWidth(36)
-            ln = QLabel(nome_f); ln.setObjectName("TableMono2")
-            lde = QLabel(dest);  lde.setObjectName("TableText")
-            lv = QLabel(vol);    lv.setObjectName("TableMono");     lv.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            lt = QLabel(total);  lt.setObjectName("TableMonoBold"); lt.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            rw_layout.addWidget(ld)
-            rw_layout.addWidget(ln, 2)
-            rw_layout.addWidget(lde, 2)
-            rw_layout.addWidget(lv, 1)
-            rw_layout.addWidget(lt)
-            recentes_vlayout.addWidget(row_w)
-            if i < len(_recent_rows) - 1:
-                sep_r = QFrame(); sep_r.setFrameShape(QFrame.HLine); sep_r.setObjectName("SoftSep")
-                recentes_vlayout.addWidget(sep_r)
+        self._recentes_body_widget = QWidget()
+        self._recentes_body_layout = QVBoxLayout(self._recentes_body_widget)
+        self._recentes_body_layout.setContentsMargins(0, 0, 0, 0)
+        self._recentes_body_layout.setSpacing(0)
+        recentes_vlayout.addWidget(self._recentes_body_widget)
         recentes_vlayout.addStretch(1)
         two_col.addWidget(recentes_card, 1)
 
@@ -1361,46 +1267,6 @@ class RomaneioWindow(QMainWindow):
         right_col_layout = QVBoxLayout(right_col_w)
         right_col_layout.setContentsMargins(0, 0, 0, 0)
         right_col_layout.setSpacing(10)
-
-        # Quick actions card
-        actions_card = QFrame()
-        actions_card.setObjectName("Card")
-        actions_vlayout = QVBoxLayout(actions_card)
-        actions_vlayout.setContentsMargins(14, 12, 14, 12)
-        actions_vlayout.setSpacing(6)
-        ac_lbl = QLabel("AÇÕES RÁPIDAS")
-        ac_lbl.setObjectName("SectionLabel")
-        actions_vlayout.addWidget(ac_lbl)
-
-        self._home_action_icons: list[tuple[QLabel, str]] = []
-        _action_defs = [
-            ('doc',   'Romaneio',     'R', 1),
-            ('money', 'Cotação',      'C', 2),
-            ('box',   'Fornecedores', 'F', 3),
-            ('truck', 'Rastreio',     'T', 4),
-        ]
-        for icon_name, lbl_text, kbd_text, page_idx in _action_defs:
-            abtn = QFrame()
-            abtn.setObjectName("ActionBtn")
-            abtn.setCursor(Qt.PointingHandCursor)
-            abtn.mousePressEvent = (
-                lambda e, pi=page_idx: self._show_page(pi) if e.button() == Qt.LeftButton else None
-            )
-            abtn_layout = QHBoxLayout(abtn)
-            abtn_layout.setContentsMargins(10, 8, 10, 8)
-            abtn_layout.setSpacing(8)
-            icon_lbl = QLabel()
-            icon_lbl.setFixedSize(15, 15)
-            self._home_action_icons.append((icon_lbl, icon_name))
-            abtn_layout.addWidget(icon_lbl)
-            text_lbl = QLabel(lbl_text)
-            text_lbl.setObjectName("ActionBtnText")
-            abtn_layout.addWidget(text_lbl, 1)
-            kbd_badge = QLabel(kbd_text)
-            kbd_badge.setObjectName("KbdBadge")
-            abtn_layout.addWidget(kbd_badge)
-            actions_vlayout.addWidget(abtn)
-        right_col_layout.addWidget(actions_card)
 
         # Carrier status card
         carr_card = QFrame()
@@ -1519,13 +1385,21 @@ class RomaneioWindow(QMainWindow):
         right_layout = QVBoxLayout(right_card)
         right_layout.setContentsMargins(12, 12, 12, 12)
         right_layout.setSpacing(8)
+        result_header = QHBoxLayout()
         lbl_resultado = QLabel("Resultado da cotação:")
         lbl_resultado.setObjectName("SubtitleLabel")
+        btn_copiar_result = QPushButton("Copiar")
+        btn_copiar_result.setObjectName("MiniButton")
+        btn_copiar_result.setFixedWidth(70)
+        btn_copiar_result.clicked.connect(lambda: QApplication.clipboard().setText(self.result_text.toPlainText()))
+        result_header.addWidget(lbl_resultado)
+        result_header.addStretch()
+        result_header.addWidget(btn_copiar_result)
         self.result_text = QPlainTextEdit()
         self.result_text.setReadOnly(True)
         self.result_text.setObjectName("ResultText")
         self.result_text.setPlainText("")
-        right_layout.addWidget(lbl_resultado)
+        right_layout.addLayout(result_header)
         right_layout.addWidget(self.result_text, 1)
 
         tab_colado_layout.addWidget(left_card, 1)
@@ -1687,12 +1561,20 @@ class RomaneioWindow(QMainWindow):
         forn_right_layout = QVBoxLayout(forn_right)
         forn_right_layout.setContentsMargins(12, 12, 12, 12)
         forn_right_layout.setSpacing(8)
+        forn_result_header = QHBoxLayout()
         lbl_forn_result = QLabel("Resultado da cota\u00e7\u00e3o:")
         lbl_forn_result.setObjectName("SubtitleLabel")
+        btn_copiar_forn_result = QPushButton("Copiar")
+        btn_copiar_forn_result.setObjectName("MiniButton")
+        btn_copiar_forn_result.setFixedWidth(70)
+        btn_copiar_forn_result.clicked.connect(lambda: QApplication.clipboard().setText(self.forn_result_text.toPlainText()))
+        forn_result_header.addWidget(lbl_forn_result)
+        forn_result_header.addStretch()
+        forn_result_header.addWidget(btn_copiar_forn_result)
         self.forn_result_text = QPlainTextEdit()
         self.forn_result_text.setReadOnly(True)
         self.forn_result_text.setObjectName("ResultText")
-        forn_right_layout.addWidget(lbl_forn_result)
+        forn_right_layout.addLayout(forn_result_header)
         forn_right_layout.addWidget(self.forn_result_text, 1)
 
         tab_forn_layout.addWidget(forn_left, 1)
@@ -1776,6 +1658,7 @@ class RomaneioWindow(QMainWindow):
         content_wrap.addLayout(footer)
         root.addLayout(content_wrap, 1)
 
+        self._atualizar_dashboard()
         self._apply_style()
         self._show_page(0)
         QShortcut(QKeySequence("Ctrl+K"), self, activated=self._abrir_cmdk)
@@ -1786,6 +1669,8 @@ class RomaneioWindow(QMainWindow):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
+
+        # ── Card básico: empresa / CEP / paralelo ─────────────────────────────
         card = QFrame()
         card.setObjectName("Card")
         form = QFormLayout(card)
@@ -1810,17 +1695,165 @@ class RomaneioWindow(QMainWindow):
         btn_trocar = QPushButton("Trocar empresa")
         btn_trocar.setObjectName("SecondaryButton")
         btn_trocar.clicked.connect(self._trocar_empresa_embutido)
-        btn_avancado = QPushButton("Configurações completas")
-        btn_avancado.setObjectName("SecondaryButton")
-        btn_avancado.clicked.connect(self._abrir_configuracoes_completas)
         actions.addWidget(btn_trocar)
-        actions.addWidget(btn_avancado)
         actions.addStretch(1)
         actions.addWidget(btn_salvar)
         form.addRow(actions)
         layout.addWidget(card)
-        layout.addStretch(1)
+
+        # ── Tabs UFs Atendidas + Credenciais (inline) ─────────────────────────
+        self._cfg_ufs_cbs: dict = {}
+        self._cfg_hab_checks: dict = {}
+        self._cfg_cred_fields: dict = {}
+        tabs = QTabWidget()
+        tabs.setObjectName("MainTabs")
+        tabs.addTab(self._build_tab_ufs_inline(), "UFs Atendidas")
+        tabs.addTab(self._build_tab_credenciais_inline(), "Credenciais")
+        layout.addWidget(tabs, 1)
         return page
+
+    def _build_tab_ufs_inline(self) -> QWidget:
+        """Aba UFs Atendidas para a página de configurações inline."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        content = QWidget()
+        vbox = QVBoxLayout(content)
+        vbox.setSpacing(10)
+        cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
+        transp_cfg = cfg.get("transportadoras", {}) or {}
+        for nome in sorted(["braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex"]):
+            tcfg = transp_cfg.get(nome, {}) or {}
+            ufs_atuais = tcfg.get("ufs_atendidas", [])
+            if isinstance(ufs_atuais, str):
+                ufs_atuais = [u.strip().upper() for u in ufs_atuais.split(",") if u.strip()]
+            else:
+                ufs_atuais = [u.upper() for u in (ufs_atuais or [])]
+            group = QGroupBox()
+            group.setObjectName("SettingsGroup")
+            grid = QGridLayout(group)
+            grid.setSpacing(4)
+            lbl_nome = ConfiguracoesDialog._criar_label_transportadora(nome)
+            grid.addWidget(lbl_nome, 0, 0, 1, 9)
+            cbs: dict = {}
+            for i, uf in enumerate(TODAS_UFS):
+                cb = QCheckBox(uf)
+                cb.setChecked(uf in ufs_atuais)
+                grid.addWidget(cb, 1 + i // 9, i % 9)
+                cbs[uf] = cb
+            self._cfg_ufs_cbs[nome] = cbs
+            btn_row_ufs = QHBoxLayout()
+            btn_all = QPushButton("Todas")
+            btn_all.setFixedHeight(24)
+            btn_all.setObjectName("MiniButton")
+            btn_none = QPushButton("Nenhuma")
+            btn_none.setFixedHeight(24)
+            btn_none.setObjectName("MiniButton")
+            btn_row_ufs.addStretch(1)
+            btn_row_ufs.addWidget(btn_all)
+            btn_row_ufs.addWidget(btn_none)
+            last_row = 1 + (len(TODAS_UFS) - 1) // 9 + 1
+            spacer = QLabel("")
+            spacer.setFixedHeight(6)
+            grid.addWidget(spacer, last_row, 0, 1, 9)
+            grid.addLayout(btn_row_ufs, last_row + 1, 0, 1, 9)
+            btn_all.clicked.connect(lambda _, c=cbs: [v.setChecked(True) for v in c.values()])
+            btn_none.clicked.connect(lambda _, c=cbs: [v.setChecked(False) for v in c.values()])
+            vbox.addWidget(group)
+        btn_salvar_ufs = QPushButton("Salvar UFs Atendidas")
+        btn_salvar_ufs.clicked.connect(self._salvar_ufs_embutido)
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        footer.addWidget(btn_salvar_ufs)
+        vbox.addLayout(footer)
+        vbox.addStretch(1)
+        scroll.setWidget(content)
+        wrapper = QWidget()
+        wl = QVBoxLayout(wrapper)
+        wl.setContentsMargins(0, 0, 0, 0)
+        wl.addWidget(scroll)
+        return wrapper
+
+    def _build_tab_credenciais_inline(self) -> QWidget:
+        """Aba Credenciais para a página de configurações inline."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        content = QWidget()
+        vbox = QVBoxLayout(content)
+        vbox.setSpacing(10)
+        cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
+        transp_cfg = cfg.get("transportadoras", {}) or {}
+        for nome in sorted(CAMPOS_CREDENCIAIS):
+            campos = CAMPOS_CREDENCIAIS[nome]
+            tcfg = transp_cfg.get(nome, {}) or {}
+            group = QGroupBox()
+            group.setObjectName("SettingsGroup")
+            form = QFormLayout(group)
+            form.setSpacing(6)
+            lbl_nome_cred = ConfiguracoesDialog._criar_label_transportadora(nome)
+            form.addRow(lbl_nome_cred)
+            cb_hab = QCheckBox("Habilitado")
+            cb_hab.setChecked(bool(tcfg.get("habilitado", False)))
+            form.addRow("", cb_hab)
+            self._cfg_hab_checks[nome] = cb_hab
+            fields: dict = {}
+            for chave, label, eh_senha in campos:
+                le = QLineEdit()
+                valor = str(tcfg.get(chave, "") or "")
+                if nome == "agex" and chave == "email" and not valor:
+                    legado = str(tcfg.get("cnpj", "") or "").strip()
+                    if "@" in legado:
+                        valor = legado
+                le.setText(valor)
+                if eh_senha:
+                    le.setEchoMode(QLineEdit.Password)
+                le.setObjectName("CredField")
+                form.addRow(f"{label}:", le)
+                fields[chave] = le
+            self._cfg_cred_fields[nome] = fields
+            vbox.addWidget(group)
+        btn_salvar_cred = QPushButton("Salvar Credenciais")
+        btn_salvar_cred.clicked.connect(self._salvar_credenciais_embutido)
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        footer.addWidget(btn_salvar_cred)
+        vbox.addLayout(footer)
+        vbox.addStretch(1)
+        scroll.setWidget(content)
+        wrapper = QWidget()
+        wl = QVBoxLayout(wrapper)
+        wl.setContentsMargins(0, 0, 0, 0)
+        wl.addWidget(scroll)
+        return wrapper
+
+    def _salvar_ufs_embutido(self):
+        cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
+        transp_cfg = cfg.setdefault("transportadoras", {})
+        for nome, cbs in self._cfg_ufs_cbs.items():
+            tcfg = transp_cfg.setdefault(nome, {})
+            tcfg["ufs_atendidas"] = [uf for uf, cb in cbs.items() if cb.isChecked()]
+        _escrever_config_toml(cfg, self._config_path)
+        self.label_info.setText("UFs atendidas salvas.")
+
+    def _salvar_credenciais_embutido(self):
+        cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
+        transp_cfg = cfg.setdefault("transportadoras", {})
+        cred_changed = False
+        for nome, cb in self._cfg_hab_checks.items():
+            tcfg = transp_cfg.setdefault(nome, {})
+            tcfg["habilitado"] = cb.isChecked()
+        for nome, fields in self._cfg_cred_fields.items():
+            tcfg = transp_cfg.setdefault(nome, {})
+            for chave, le in fields.items():
+                novo = le.text().strip()
+                if str(tcfg.get(chave, "") or "") != novo:
+                    cred_changed = True
+                tcfg[chave] = novo
+        _escrever_config_toml(cfg, self._config_path)
+        if cred_changed:
+            self._reiniciar_sessao()
+        self.label_info.setText("Credenciais salvas.")
 
     def _on_toggle_tema(self, dark: bool) -> None:
         self._theme_mode = "escuro" if dark else "claro"
@@ -1860,7 +1893,7 @@ class RomaneioWindow(QMainWindow):
         self.label_info.setText("Configurações salvas com sucesso.")
 
     def _trocar_empresa_embutido(self):
-        dlg = EmpresaSelectorDialog(self)
+        dlg = EmpresaSelectorDialog(self, dark=self._usar_tema_escuro())
         if dlg.exec() == QDialog.Accepted and dlg.empresa_selecionada:
             self._proxima_empresa = dlg.empresa_selecionada
             self.close()
@@ -1978,8 +2011,6 @@ class RomaneioWindow(QMainWindow):
             #TableMono2 {{ font-family: 'JetBrains Mono'; font-size: 11px; color: {c_ink2}; }}
             #TableText {{ font-size: 12px; color: {c_muted}; }}
             #TableMonoBold {{ font-family: 'JetBrains Mono'; font-size: 13px; font-weight: 600; color: {c_ink}; }}
-            #ActionBtn {{ background: {c_panel2}; border: 1px solid {c_border}; border-radius: 6px; }}
-            #ActionBtnText {{ font-size: 13px; font-weight: 500; color: {c_ink}; }}
             #CarrierRowName {{ font-family: 'JetBrains Mono'; font-size: 12px; color: {c_ink2}; }}
             #TagGreen {{ background: {c_green_dim}; color: {c_green}; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }}
             #TagRed {{ background: {c_red_dim}; color: {c_red}; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }}
@@ -2003,6 +2034,11 @@ class RomaneioWindow(QMainWindow):
             #RastreioStatusTransito {{ font-size: 13px; font-weight: 700; color: {c_amber}; }}
             #RastreioStatusErro {{ font-size: 13px; font-weight: 700; color: {c_red}; }}
             #RastreioStatusPendente {{ font-size: 13px; font-weight: 600; color: {c_muted}; }}
+            #RastreioBlockText {{ background: transparent; border: none; color: {c_ink};
+                                  font-size: 12px; font-family: 'JetBrains Mono'; }}
+            {"#RastreioBlueBlock  { background: #0d1f35; border: 1px solid #1a3353; border-radius: 8px; }" if dark else "#RastreioBlueBlock  { background: #f0f7ff; border: 1px solid #bfdbfe; border-radius: 8px; }"}
+            {"#RastreioGreenBlock { background: #0d2010; border: 1px solid #1a3a20; border-radius: 8px; }" if dark else "#RastreioGreenBlock { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; }"}
+            {"#RastreioSlateBlock { background: #1c232c; border: 1px solid #262f3a; border-radius: 8px; }" if dark else "#RastreioSlateBlock { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }"}
             QPushButton {{ background: {c_accent}; color: #ffffff; border: none; border-radius: 8px; padding: 10px 14px; font-weight: 600; }}
             QPushButton:hover {{ background: {c_accent}; }}
             QPushButton#SecondaryButton {{ background: {c_panel2}; color: {c_ink2}; border: 1px solid {c_border}; }}
@@ -2010,6 +2046,23 @@ class RomaneioWindow(QMainWindow):
             #InputField {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 6px; padding: 6px 8px; }}
             #FornLabel {{ font-size: 13px; font-weight: 600; color: {c_ink}; padding-right: 6px; }}
             #FornUnit {{ font-size: 12px; color: {c_muted}; }}
+            QTabWidget#MainTabs::pane {{ border: 1px solid {c_border}; border-radius: 10px; background: {c_panel}; }}
+            QTabBar::tab {{ background: {c_panel2}; color: {c_muted}; border: 1px solid {c_border};
+                           padding: 7px 12px; margin-right: 4px; border-top-left-radius: 8px;
+                           border-top-right-radius: 8px; }}
+            QTabBar::tab:selected {{ background: {c_panel}; color: {c_ink}; border-bottom-color: {c_panel}; }}
+            #SettingsGroup {{ border: 1px solid {c_border}; border-radius: 8px;
+                             padding: 12px 10px 10px 10px; margin-top: 6px; background: {c_panel2}; }}
+            QGroupBox#SettingsGroup {{ border: 1px solid {c_border}; background: {c_panel2}; }}
+            #TranspTitle {{ font-size: 17px; font-weight: 700; color: {c_ink}; padding: 6px 0 8px 0; }}
+            #CredField {{ border: 1px solid {c_border}; border-radius: 6px; padding: 5px 8px;
+                         background: {c_panel2}; color: {c_ink}; }}
+            QPushButton#MiniButton {{ background: {c_panel2}; color: {c_ink2};
+                                     border: 1px solid {c_border}; border-radius: 4px;
+                                     padding: 2px 8px; font-size: 11px; }}
+            QPushButton#MiniButton:hover {{ background: {c_panel3}; }}
+            QCheckBox {{ color: {c_ink}; spacing: 4px; }}
+            QScrollArea {{ background: transparent; border: none; }}
         """)
 
         # Refresh NavItem widgets
@@ -2031,9 +2084,6 @@ class RomaneioWindow(QMainWindow):
         if hasattr(self, '_cmd_icon_lbl'):
             self._cmd_icon_lbl.setPixmap(svg_icon(NAV_ICONS['search'], 13, c_muted))
 
-        # Refresh home action button icons
-        for icon_lbl, icon_name in getattr(self, '_home_action_icons', []):
-            icon_lbl.setPixmap(svg_icon(NAV_ICONS.get(icon_name, ''), 15, c_muted))
 
 
     def _wrap_page_with_back(self, title_text: str, content_widget: QWidget) -> QWidget:
@@ -2152,6 +2202,8 @@ class RomaneioWindow(QMainWindow):
         self._show_page(1)
         self.label_info.setText(f"OK: {len(self.pedidos)} pedido(s) extraido(s) de {Path(arquivo).name}")
         self.label_info.setStyleSheet("color: #067647;")
+        self._registrar_romaneio(arquivo)
+        self._atualizar_dashboard()
 
     def _atualizar_estado_romaneio_colado(self):
         texto = (self.romaneio_colado_text.toPlainText() or "").strip()
@@ -2324,7 +2376,7 @@ class RomaneioWindow(QMainWindow):
                 self._loop.run_until_complete(self._cotar_transportadoras_async())
         except Exception as exc:
             print(f"[FreteBot] Erro na cotação: {exc}", file=sys.stderr, flush=True)
-            self._post_event_safe(UdpateResultEvent(f"Erro ao cotar: {exc}"))
+            self._post_event_safe(UpdateResultEvent(f"Erro ao cotar: {exc}"))
             self._post_event_safe(UpdateFinishedEvent())
 
     async def _cotar_transportadoras_async(self):
@@ -2342,13 +2394,14 @@ class RomaneioWindow(QMainWindow):
                 _cotar_kwargs["cnpj_remetente"] = self._cnpj_fornecedor
                 _cotar_kwargs["tipo_frete"] = "2"  # FOB
             resultados = await cotar_transportadoras_romaneio_colado(**_cotar_kwargs)
+            self._last_cotacao_results = resultados
             resumo = formatar_resultados_cotacao(resultados)
-            
+
             # As atualizações da UI devem ser feitas na thread principal
-            self._post_event_safe(UdpateResultEvent(resumo))
+            self._post_event_safe(UpdateResultEvent(resumo))
 
         except Exception as e:
-            self._post_event_safe(UdpateResultEvent(f"Erro ao cotar transportadoras: {e}"))
+            self._post_event_safe(UpdateResultEvent(f"Erro ao cotar transportadoras: {e}"))
         finally:
             self._post_event_safe(UpdateFinishedEvent())
 
@@ -2382,7 +2435,7 @@ class RomaneioWindow(QMainWindow):
         _result = self.forn_result_text if is_forn else self.result_text
         _progress = self.forn_progress_bar if is_forn else self.progress_bar
 
-        if isinstance(event, UdpateResultEvent):
+        if isinstance(event, UpdateResultEvent):
             _result.setPlainText(event.result)
             if not is_forn:
                 self._show_page(2)
@@ -2415,22 +2468,113 @@ class RomaneioWindow(QMainWindow):
             self.btn_select.setEnabled(True)
             self.btn_cotar_fornecedor.setEnabled(True)
             self._atualizar_estado_romaneio_colado()
+            self._atualizar_dashboard()
         elif isinstance(event, StatusUpdateEvent):
             self.label_info.setText(event.msg)
             self.label_info.setStyleSheet("color: #1f6feb;")
         elif isinstance(event, LoginStatusEvent):
-            lbl = self._login_status_labels.get(event.nome)
-            if lbl is not None:
-                nome_upper = event.nome.upper()
-                if event.status == "ok":
-                    lbl.setText(f"✅ {nome_upper}")
-                    lbl.setStyleSheet("color: #067647; font-size: 11px; font-weight: 600;")
-                elif event.status == "fail":
-                    lbl.setText(f"❌ {nome_upper}")
-                    lbl.setStyleSheet("color: #b42318; font-size: 11px; font-weight: 600;")
-                else:
-                    lbl.setText(f"⏳ {nome_upper}")
-                    lbl.setStyleSheet("color: #8896ab; font-size: 11px; font-weight: 600;")
+            dot = self._login_status_dots.get(event.nome)
+            if dot is not None:
+                dot.set_status(event.status)
+            # Atualiza também o card de status no dashboard
+            pair = self._home_carrier_info.get(event.nome)
+            if pair is not None:
+                cr_dot, cr_tag = pair
+                _color_map = {
+                    "ok":      ("#3fb950", "online",     "TagGreen"),
+                    "fail":    ("#f85149", "erro",       "TagRed"),
+                    "pending": ("#e3b341", "aguardando", "TagAmber"),
+                }
+                color, text, tag_obj = _color_map.get(event.status, ("#768390", "—", "TagAmber"))
+                cr_dot.setStyleSheet(f"border-radius:3px;background:{color};")
+                cr_tag.setText(text)
+                cr_tag.setObjectName(tag_obj)
+                cr_tag.style().unpolish(cr_tag)
+                cr_tag.style().polish(cr_tag)
+    def _registrar_romaneio(self, arquivo: str) -> None:
+        from datetime import date as _date
+        destino = (self.pedidos[0].local_entrega or "—") if self.pedidos else "—"
+        self._romaneios_processados.append({
+            "data": _date.today().strftime("%d/%m"),
+            "nome": Path(arquivo).name,
+            "destino": destino,
+            "volumes": len(self.pedidos),
+        })
+
+    def _atualizar_dashboard(self) -> None:
+        if not hasattr(self, '_kpi_value_labels'):
+            return
+
+        # KPI 0: romaneios
+        total_rom = len(self._romaneios_processados)
+        self._kpi_value_labels[0].setText(str(total_rom))
+
+        # KPI 1: volumes
+        total_vol = sum(r["volumes"] for r in self._romaneios_processados)
+        self._kpi_value_labels[1].setText(str(total_vol))
+
+        # KPI 2 e 3: baseados na última cotação
+        ok_results = [
+            r for r in self._last_cotacao_results
+            if r.status == "ok" and r.valor_frete is not None
+        ]
+        if ok_results:
+            melhor = min(r.valor_frete for r in ok_results)
+            self._kpi_value_labels[2].setText(f"R$ {melhor:.2f}")
+        else:
+            self._kpi_value_labels[2].setText("—")
+
+        total_cot = len(self._last_cotacao_results)
+        ok_cot = len(ok_results)
+        if total_cot > 0:
+            pct = round(ok_cot / total_cot * 100)
+            self._kpi_value_labels[3].setText(f"{pct}%")
+            self._kpi_sub_labels[3].setText(f"{ok_cot} de {total_cot} cotações")
+        else:
+            self._kpi_value_labels[3].setText("—")
+
+        # Tabela recentes: limpar e reconstruir
+        layout = self._recentes_body_layout
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        if not self._romaneios_processados:
+            ph = QLabel("Nenhum romaneio processado nesta sessão")
+            ph.setObjectName("KpiSub")
+            ph.setContentsMargins(14, 12, 14, 12)
+            layout.addWidget(ph)
+            return
+
+        rows = list(reversed(self._romaneios_processados))
+        for i, r in enumerate(rows):
+            row_w = QWidget()
+            rw_layout = QHBoxLayout(row_w)
+            rw_layout.setContentsMargins(14, 9, 14, 9)
+            rw_layout.setSpacing(10)
+            ld = QLabel(r["data"])
+            ld.setObjectName("TableMono")
+            ld.setFixedWidth(36)
+            ln = QLabel(r["nome"])
+            ln.setObjectName("TableMono2")
+            lde = QLabel(r["destino"])
+            lde.setObjectName("TableText")
+            lv = QLabel(f'{r["volumes"]}v')
+            lv.setObjectName("TableMono")
+            lv.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            rw_layout.addWidget(ld)
+            rw_layout.addWidget(ln, 2)
+            rw_layout.addWidget(lde, 2)
+            rw_layout.addWidget(lv, 1)
+            layout.addWidget(row_w)
+            if i < len(rows) - 1:
+                sep_r = QFrame()
+                sep_r.setFrameShape(QFrame.HLine)
+                sep_r.setObjectName("SoftSep")
+                layout.addWidget(sep_r)
+
     def _formatar_linha_progresso(self, resultado: ResultadoCotacao) -> str:
         nome = (resultado.transportadora or "GERAL").strip().upper()
         if resultado.status == "ok" and resultado.valor_frete is not None:
@@ -2576,7 +2720,7 @@ class RomaneioWindow(QMainWindow):
 
         # ── Bloco 1: Dados Adicionais da Nota Fiscal ─────────────────────────
         bloco_pedido = QFrame()
-        bloco_pedido.setStyleSheet("background: #f0f7ff; border: 1px solid #bfdbfe; border-radius: 8px;")
+        bloco_pedido.setObjectName("RastreioBlueBlock")
         pedido_layout = QVBoxLayout(bloco_pedido)
         pedido_layout.setContentsMargins(10, 8, 10, 8)
         pedido_layout.setSpacing(3)
@@ -2585,54 +2729,52 @@ class RomaneioWindow(QMainWindow):
         lbl_pedido_title.setObjectName("RastreioBlockTitle")
         pedido_layout.addWidget(lbl_pedido_title)
 
+        _adic_lines = []
         if nf.destinatario_nome:
             dest = nf.destinatario_nome
             if nf.destinatario_cidade and nf.destinatario_uf:
                 dest += f" ({nf.destinatario_cidade}/{nf.destinatario_uf})"
-            pedido_layout.addWidget(self._make_info_row("Destinatario:", dest))
+            _adic_lines.append(("Destinatario", dest))
         if nf.destinatario_cep:
             import re as _re2
             cep_fmt = nf.destinatario_cep
             if len(cep_fmt) == 8:
                 cep_fmt = f"{cep_fmt[:5]}-{cep_fmt[5:]}"
-            pedido_layout.addWidget(self._make_info_row("CEP:", cep_fmt))
+            _adic_lines.append(("CEP", cep_fmt))
         if info.get("local_entrega"):
-            pedido_layout.addWidget(self._make_info_row("Local Entrega:", info["local_entrega"]))
+            _adic_lines.append(("Local Entrega", info["local_entrega"]))
         if info.get("agendamento"):
-            pedido_layout.addWidget(self._make_info_row("Agendamento:", info["agendamento"]))
+            _adic_lines.append(("Agendamento", info["agendamento"]))
         if info.get("horario"):
-            pedido_layout.addWidget(self._make_info_row("Horario:", info["horario"]))
+            _adic_lines.append(("Horario", info["horario"]))
         if info.get("recebedor"):
-            pedido_layout.addWidget(self._make_info_row("Recebedor:", info["recebedor"]))
+            _adic_lines.append(("Recebedor", info["recebedor"]))
         if info.get("observacoes"):
-            obs = info["observacoes"]
-            if len(obs) > 120:
-                obs = obs[:117] + "..."
-            pedido_layout.addWidget(self._make_info_row("Observacoes:", obs))
+            _adic_lines.append(("Observacoes", info["observacoes"]))
         if nf.volumes:
-            pedido_layout.addWidget(self._make_info_row("Volumes:", str(nf.volumes)))
+            _adic_lines.append(("Volumes", str(nf.volumes)))
         if nf.peso_bruto:
-            pedido_layout.addWidget(self._make_info_row("Peso Bruto:", f"{nf.peso_bruto:.3f} kg"))
+            _adic_lines.append(("Peso Bruto", f"{nf.peso_bruto:.3f} kg"))
         if nf.peso_liquido and nf.peso_liquido != nf.peso_bruto:
-            pedido_layout.addWidget(self._make_info_row("Peso Liquido:", f"{nf.peso_liquido:.3f} kg"))
+            _adic_lines.append(("Peso Liquido", f"{nf.peso_liquido:.3f} kg"))
         if nf.valor_total:
             vf = f"R$ {nf.valor_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            pedido_layout.addWidget(self._make_info_row("Valor NF:", vf))
+            _adic_lines.append(("Valor NF", vf))
         if nf.valor_frete:
             vfr = f"R$ {nf.valor_frete:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            pedido_layout.addWidget(self._make_info_row("Valor Frete:", vfr))
-        if (not info.get("local_entrega") and not nf.destinatario_nome
-                and not nf.volumes and not nf.valor_total):
-            lbl_sem = QLabel("Sem dados adicionais")
-            lbl_sem.setObjectName("RastreioBlockValue")
-            lbl_sem.setStyleSheet("color: #8896ab; font-style: italic;")
-            pedido_layout.addWidget(lbl_sem)
-        pedido_layout.addStretch(1)
+            _adic_lines.append(("Valor Frete", vfr))
+        _adic_txt = "\n".join(f"{lbl:<14} {val}" for lbl, val in _adic_lines) if _adic_lines else "Sem dados adicionais"
+        te_adicionais = QPlainTextEdit(_adic_txt)
+        te_adicionais.setReadOnly(True)
+        te_adicionais.setFrameShape(QFrame.NoFrame)
+        te_adicionais.setObjectName("RastreioBlockText")
+        te_adicionais.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        pedido_layout.addWidget(te_adicionais, 1)
         blocos_row.addWidget(bloco_pedido, 1)
 
         # ── Bloco 2: Dados Complementares PE → CRM ───────────────────────────
         bloco_complementar = QFrame()
-        bloco_complementar.setStyleSheet("background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px;")
+        bloco_complementar.setObjectName("RastreioGreenBlock")
         complementar_layout = QVBoxLayout(bloco_complementar)
         complementar_layout.setContentsMargins(10, 8, 10, 8)
         complementar_layout.setSpacing(3)
@@ -2641,31 +2783,30 @@ class RomaneioWindow(QMainWindow):
         lbl_comp_title.setObjectName("RastreioBlockTitle")
         complementar_layout.addWidget(lbl_comp_title)
 
+        _comp_lines = []
         if info.get("pedido_compra"):
-            complementar_layout.addWidget(self._make_info_row("Ped. Compra:", info["pedido_compra"]))
+            _comp_lines.append(("Ped. Compra", info["pedido_compra"]))
         if info.get("pedido_venda"):
-            complementar_layout.addWidget(self._make_info_row("Ped. Venda:", info["pedido_venda"]))
-
+            _comp_lines.append(("Ped. Venda", info["pedido_venda"]))
         bloco2 = info.get("bloco2_campos", [])
         _label_map = {
-            "PE": "PE:", "ATA": "ATA:", "OC": "OC:", "OP": "OP:",
-            "NR": "NR:", "CRM": "CRM:",
+            "PE": "PE", "ATA": "ATA", "OC": "OC", "OP": "OP",
+            "NR": "NR", "CRM": "CRM",
         }
         for lbl, val in bloco2:
-            label_display = _label_map.get(lbl.upper(), f"{lbl}:")
-            complementar_layout.addWidget(self._make_info_row(label_display, val))
-
-        if (not info.get("pedido_compra") and not info.get("pedido_venda") and not bloco2):
-            lbl_sem2 = QLabel("Sem dados complementares")
-            lbl_sem2.setObjectName("RastreioBlockValue")
-            lbl_sem2.setStyleSheet("color: #8896ab; font-style: italic;")
-            complementar_layout.addWidget(lbl_sem2)
-        complementar_layout.addStretch(1)
+            _comp_lines.append((_label_map.get(lbl.upper(), lbl), val))
+        _comp_txt = "\n".join(f"{lbl:<14} {val}" for lbl, val in _comp_lines) if _comp_lines else "Sem dados complementares"
+        te_complementar = QPlainTextEdit(_comp_txt)
+        te_complementar.setReadOnly(True)
+        te_complementar.setFrameShape(QFrame.NoFrame)
+        te_complementar.setObjectName("RastreioBlockText")
+        te_complementar.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        complementar_layout.addWidget(te_complementar, 1)
         blocos_row.addWidget(bloco_complementar, 1)
 
         # ── Bloco 3: Rastreamento ─────────────────────────────────────────────
         bloco_rastreio = QFrame()
-        bloco_rastreio.setStyleSheet("background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;")
+        bloco_rastreio.setObjectName("RastreioSlateBlock")
         rastreio_layout = QVBoxLayout(bloco_rastreio)
         rastreio_layout.setContentsMargins(10, 8, 10, 8)
         rastreio_layout.setSpacing(4)
@@ -2706,6 +2847,8 @@ class RomaneioWindow(QMainWindow):
         val = QLabel(value)
         val.setObjectName("RastreioBlockValue")
         val.setWordWrap(True)
+        val.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        val.setCursor(Qt.IBeamCursor)
         row_layout.addWidget(lbl)
         row_layout.addWidget(val, 1)
         return row
@@ -2860,11 +3003,14 @@ class RomaneioWindow(QMainWindow):
         """Limpa sess\u00e3o atual e faz login novamente com a config atualizada."""
         self.label_info.setText("Reiniciando sess\u00f5es...")
         self.label_info.setStyleSheet("color: #1f6feb;")
-        for lbl in self._login_status_labels.values():
-            raw = lbl.text()
-            nome_upper = raw.split(" ", 1)[-1] if " " in raw else raw
-            lbl.setText(f"\u23f3 {nome_upper}")
-            lbl.setStyleSheet("color: #8896ab; font-size: 11px; font-weight: 600;")
+        for dot in self._login_status_dots.values():
+            dot.set_status("pending")
+        for cr_dot, cr_tag in self._home_carrier_info.values():
+            cr_dot.setStyleSheet("border-radius:3px;background:#e3b341;")
+            cr_tag.setText("aguardando")
+            cr_tag.setObjectName("TagAmber")
+            cr_tag.style().unpolish(cr_tag)
+            cr_tag.style().polish(cr_tag)
 
         def _do():
             with self._loop_lock:
