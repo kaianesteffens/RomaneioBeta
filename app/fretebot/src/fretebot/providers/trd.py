@@ -1524,7 +1524,7 @@ class TRDProvider(ProviderBase):
                 if await modal.count() > 0:
                     await modal.get_by_role("button", name="Continuar").first.click()
                     await self._page.wait_for_timeout(300)
-            except:
+            except Exception:
                 pass
 
             # Garante transição para ETAPA 2.

@@ -65,13 +65,15 @@ def _github_api(url: str) -> Any:
 
 
 def _parse_version(tag: str) -> tuple[int, ...]:
-    """Converte '1.22' ou 'v1.22' em (1, 22) para comparação."""
+    """Converte '1.22', 'v1.22' ou '1.22-beta' em (1, 22) para comparação."""
+    import re as _re
     tag = tag.lstrip("vV").strip()
     parts: list[int] = []
     for p in tag.split("."):
-        try:
-            parts.append(int(p))
-        except ValueError:
+        m = _re.match(r"(\d+)", p)
+        if m:
+            parts.append(int(m.group(1)))
+        else:
             break
     return tuple(parts) if parts else (0,)
 
@@ -237,6 +239,12 @@ def apply_update(
             shutil.rmtree(str(extract_dir), ignore_errors=True)
 
         with zipfile.ZipFile(zip_path, "r") as zf:
+            # Valida path traversal antes de extrair
+            resolved_extract = extract_dir.resolve()
+            for member in zf.namelist():
+                member_path = (extract_dir / member).resolve()
+                if not str(member_path).startswith(str(resolved_extract)):
+                    raise ValueError(f"Path traversal detectado no ZIP: {member!r}")
             zf.extractall(extract_dir)
 
         # Detecta raiz do conteúdo extraído

@@ -110,7 +110,8 @@ class NavItem(QWidget):
         self._text_lbl = QLabel(label)
         layout.addWidget(self._text_lbl, 1)
         self._kbd_lbl = QLabel(kbd)
-        layout.addWidget(self._kbd_lbl)
+        if kbd:
+            layout.addWidget(self._kbd_lbl)
         self._update_labels()
 
     def refresh_theme(

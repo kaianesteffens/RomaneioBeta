@@ -36,7 +36,7 @@ if not defined APP_VERSION set "APP_VERSION=0.0"
 echo Versao: !APP_VERSION!
 
 set "ZIP_NAME=FreteBot-Update-!APP_VERSION!.zip"
-set "ZIP_PATH=%~dp0installer\!ZIP_NAME!"
+set "ZIP_PATH=%~dp0!ZIP_NAME!"
 
 REM Remover ZIP anterior se existir
 if exist "%ZIP_PATH%" del "%ZIP_PATH%"

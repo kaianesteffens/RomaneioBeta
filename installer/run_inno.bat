@@ -19,7 +19,18 @@ if not defined ISCC (
 
 echo Usando: %ISCC%
 
-"%ISCC%" /DMyAppName="Romaneio Beta" /DMyAppVersion=2.3 /DMyOutputBaseFilename="Romaneio-Beta-Setup-2.3" /DMySetupIconFile="%~dp0assets\romaneio.ico" "%~dp0FreteBot-installer.iss"
+REM Ler versão de version.txt (evita hardcode)
+set "APP_VERSION=2.9"
+set "VERSION_FILE=%~dp0..\app\version.txt"
+if exist "%VERSION_FILE%" (
+    for /f "usebackq tokens=*" %%v in ("%VERSION_FILE%") do set "APP_VERSION=%%v"
+)
+echo Versao: %APP_VERSION%
+
+set "ICON_FILE=%~dp0..\app\assets\romaneio.ico"
+if not exist "%ICON_FILE%" set "ICON_FILE=%~dp0assets\romaneio.ico"
+
+"%ISCC%" /DMyAppName="Romaneio Beta" /DMyAppVersion=%APP_VERSION% /DMyOutputBaseFilename="Romaneio-Beta-Setup-%APP_VERSION%" /DMySetupIconFile="%ICON_FILE%" "%~dp0FreteBot-installer.iss"
 
 if %ERRORLEVEL% neq 0 (
     echo ERRO: Inno Setup falhou!
@@ -28,5 +39,5 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
-echo [OK] Instalador Romaneio-Beta-Setup-2.3.exe gerado!
+echo [OK] Instalador Romaneio-Beta-Setup-%APP_VERSION%.exe gerado!
 pause
