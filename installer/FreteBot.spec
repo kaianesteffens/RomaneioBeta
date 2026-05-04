@@ -7,7 +7,7 @@ Gera: dist/FreteBot/ com FreteBot.exe + dependências
 from pathlib import Path
 import os
 
-project_root = Path(SPECPATH).parent.parent / "app"  # Diretório do app com romaneio_app.py
+project_root = Path(SPECPATH).parent / "app"  # Diretório do app com romaneio_app.py
 
 # ── Hidden imports (módulos que PyInstaller não detecta automaticamente) ───
 hiddenimports = [
