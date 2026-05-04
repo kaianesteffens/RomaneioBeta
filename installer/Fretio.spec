@@ -12,21 +12,21 @@ project_root = Path(SPECPATH).parent / "app"  # Diretório do app com romaneio_a
 # ── Hidden imports (módulos que PyInstaller não detecta automaticamente) ───
 hiddenimports = [
     # Providers
-    \"fretio.providers.braspress_playwright",
-    \"fretio.providers.trd",
-    \"fretio.providers.agex",
-    \"fretio.providers.eucatur",
-    \"fretio.providers.rodonaves",
-    \"fretio.providers.alfa",
-    \"fretio.providers.coopex",
-    \"fretio.providers._win_taskbar",
-    \"fretio.providers.base",
+    "fretio.providers.braspress_playwright",
+    "fretio.providers.trd",
+    "fretio.providers.agex",
+    "fretio.providers.eucatur",
+    "fretio.providers.rodonaves",
+    "fretio.providers.alfa",
+    "fretio.providers.coopex",
+    "fretio.providers._win_taskbar",
+    "fretio.providers.base",
     # Fretio core
-    \"fretio.models",
-    \"fretio.logging_conf",
-    \"fretio.config",
-    \"fretio.cache",
-    \"fretio.calc",
+    "fretio.models",
+    "fretio.logging_conf",
+    "fretio.config",
+    "fretio.cache",
+    "fretio.calc",
     # Dependências externas
     "bs4",
     "httpx",
@@ -79,7 +79,7 @@ if version_file.exists():
 
 # Assets da interface (ícones)
 assets_dir = project_root / "assets"
-for asset_name in ("romaneio.ico", \"fretio.ico"):
+for asset_name in ("romaneio.ico", "fretio.ico"):
     asset_path = assets_dir / asset_name
     if asset_path.exists():
         datas.append((str(asset_path), "assets"))
@@ -147,8 +147,8 @@ exe = EXE(
     entitlements_file=None,
     icon=str(project_root / "assets" / "romaneio.ico")
         if (project_root / "assets" / "romaneio.ico").exists()
-        else (str(project_root / "assets" / \"fretio.ico")
-              if (project_root / "assets" / \"fretio.ico").exists() else None),
+        else (str(project_root / "assets" / "fretio.ico")
+              if (project_root / "assets" / "fretio.ico").exists() else None),
 )
 
 # ── COLLECT (junta tudo numa pasta) ───────────────────────────────────────
