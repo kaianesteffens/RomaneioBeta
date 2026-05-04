@@ -1,4 +1,4 @@
-Romaneio Beta / FreteBot
+Fretio / Fretio
 Aplicativo desktop Windows para operacao de romaneios, cotacao de frete e rastreio de entregas. O projeto extrai dados de pedidos em PDF e NF-e em XML/DANFE, consulta transportadoras em paralelo e centraliza a operacao por empresa com configuracoes separadas.
 O que o sistema faz
 Extrai pedidos de PDF e monta o romaneio para consulta e copia.
@@ -8,7 +8,7 @@ Rastreia entregas a partir de XMLs de NF-e e gera screenshots quando o fluxo exi
 Trabalha com multiplas empresas no mesmo computador, cada uma com seu proprio `CONFIG.toml`.
 Valida licenca na inicializacao e suporta atualizacao automatica via GitHub Releases.
 Transportadoras atuais
-Os providers implementados no repositorio ficam em `app\\fretebot\\src\\fretebot\\providers\\` e hoje cobrem:
+Os providers implementados no repositorio ficam em `app\\Fretio\\src\\Fretio\\providers\\` e hoje cobrem:
 Braspress
 TRD
 AGEX
@@ -33,14 +33,14 @@ Rastreio: importar XML(s) de NF-e e acompanhar entrega
 Configuracao
 O projeto usa configuracao por empresa em:
 ```text
-%APPDATA%\\FreteBot\\empresas\\<nome-da-empresa>\\CONFIG.toml
+%APPDATA%\\Fretio\\empresas\\<nome-da-empresa>\\CONFIG.toml
 ```
 O arquivo-base para referencia esta em:
 ```text
 app\\CONFIG.example.toml
 ```
 Principais secoes:
-`\[fretebot]`: cubagem, cache, repositorio de releases, licenciamento e reporte de erros
+`\[Fretio]`: cubagem, cache, repositorio de releases, licenciamento e reporte de erros
 `\[romaneio]`: CEP de origem padrao
 `\[transportadoras.<nome>]`: habilitacao, credenciais, `headless`, UFs atendidas e campos especificos de cada integracao
 > `CONFIG.toml`, credenciais e licencas sao dados locais e nao devem ser versionados.
@@ -67,7 +67,7 @@ build.bat
 ```
 O processo gera, entre outros artefatos:
 `installer\\installer\\Romaneio-Beta-Setup-<versao>.exe`
-`installer\\installer\\FreteBot-Update-<versao>.zip`
+`installer\\installer\\Fretio-Update-<versao>.zip`
 `installer\\installer\\Romaneio.exe`
 GitHub Actions
 O workflow `.github\\workflows\\build-release.yml` roda manualmente e:
@@ -84,7 +84,7 @@ Caminho	Responsabilidade
 `app\\rastreamento.py`	Rastreio de entregas e captura de screenshots
 `app\\updater.py`	Atualizacao automatica via GitHub Releases
 `app\\license.py` / `app\\license\_manager.py`	Validacao e persistencia de licenca
-`app\\fretebot\\src\\fretebot\\providers\\`	Integracoes com transportadoras
+`app\\Fretio\\src\\Fretio\\providers\\`	Integracoes com transportadoras
 `installer\\`	Empacotamento PyInstaller e instalador Inno Setup
 Notas para manutencao
 O app usa threads para manter a UI responsiva; Playwright nao deve rodar na thread principal do Qt.

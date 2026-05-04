@@ -7,10 +7,10 @@ import re
 import socket
 import subprocess
 from playwright.async_api import async_playwright
-from fretebot.providers.base import ProviderBase, find_chrome, _find_free_port, _kill_proc
-from fretebot.providers._win_taskbar import ocultar_taskbar_por_pagina, trazer_janela_frente
-from fretebot.models import Cotacao
-from fretebot.logging_conf import get_logger
+from fretio.providers.base import ProviderBase, find_chrome, _find_free_port, _kill_proc
+from fretio.providers._win_taskbar import ocultar_taskbar_por_pagina, trazer_janela_frente
+from fretio.models import Cotacao
+from fretio.logging_conf import get_logger
 
 logger = get_logger(__name__)
 
@@ -178,6 +178,7 @@ class RodonavesProvider(ProviderBase):
         self._cdp_session = None
         self._window_id = None
         self._chrome_proc = None
+        self._passo_atual: str = "inicio"
 
     # ── helpers ────────────────────────────────────────────────────────
 
@@ -363,7 +364,7 @@ class RodonavesProvider(ProviderBase):
     @staticmethod
     def _user_data_dir() -> str:
         """Diretório persistente para cache do navegador (evita redownload)."""
-        base = os.path.join(os.path.expanduser("~"), ".fretebot", "browser_data")
+        base = os.path.join(os.path.expanduser("~"), ".fretio", "browser_data")
         os.makedirs(base, exist_ok=True)
         return base
 
@@ -457,7 +458,7 @@ class RodonavesProvider(ProviderBase):
 
             if self.headless:
                 import tempfile
-                self._profile_tmp = tempfile.mkdtemp(prefix="fretebot_rodo_")
+                self._profile_tmp = tempfile.mkdtemp(prefix="fretio_rodo_")
                 udd = self._profile_tmp
             else:
                 udd = self._user_data_dir()
@@ -1153,6 +1154,7 @@ class RodonavesProvider(ProviderBase):
             except Exception:
                 return ""
 
+        self._passo_atual = "aguardando_captcha"
         token = await _captcha_token()
         if not token.strip() and not self.headless:
             logger.warning(
@@ -1240,6 +1242,7 @@ class RodonavesProvider(ProviderBase):
                         raise
                     logger.warning(f"[{self.nome}] Click no Calcular falhou (tentativa {_click_attempt+1}): {click_err}")
                     await page.wait_for_timeout(2000)
+            self._passo_atual = "aguardando_resultado_api"
             logger.info(f"[{self.nome}] Botao Calcular clicado, aguardando resultado...")
 
             for _poll in range(120):
@@ -1458,14 +1461,18 @@ class RodonavesProvider(ProviderBase):
             if len(cep_dest) != 8:
                 raise RuntimeError("CEP de destino inválido")
 
+            self._passo_atual = "init_browser"
             await self._init_browser()
             logger.info(f"[{self.nome}] Browser inicializado OK")
+            self._passo_atual = "login"
             await self._login()
             logger.info(f"[{self.nome}] Login OK")
 
             # Na segunda cotação em diante, navega de volta ao formulário
+            self._passo_atual = "navegando_cotacao"
             await self._navegar_cotacao()
 
+            self._passo_atual = "preenchendo_formulario"
             cep_orig = self._digits(origem) if preencher_cep_origem else ""
             await self._preencher_cotacao(
                 valor=valor,
@@ -1474,6 +1481,7 @@ class RodonavesProvider(ProviderBase):
                 cep_destino=cep_dest,
                 cep_origem=cep_orig,
             )
+            self._passo_atual = "submetendo_cotacao"
             return await self._submeter_e_extrair()
         except Exception as error:
             self.last_error = str(error)

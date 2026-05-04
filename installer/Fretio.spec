@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-FreteBot — PyInstaller spec (one-folder mode)
-Gera: dist/FreteBot/ com FreteBot.exe + dependências
+Fretio — PyInstaller spec (one-folder mode)
+Gera: dist/Fretio/ com Fretio.exe + dependências
 """
 
 from pathlib import Path
@@ -12,21 +12,21 @@ project_root = Path(SPECPATH).parent / "app"  # Diretório do app com romaneio_a
 # ── Hidden imports (módulos que PyInstaller não detecta automaticamente) ───
 hiddenimports = [
     # Providers
-    "fretebot.providers.braspress_playwright",
-    "fretebot.providers.trd",
-    "fretebot.providers.agex",
-    "fretebot.providers.eucatur",
-    "fretebot.providers.rodonaves",
-    "fretebot.providers.alfa",
-    "fretebot.providers.coopex",
-    "fretebot.providers._win_taskbar",
-    "fretebot.providers.base",
-    # Fretebot core
-    "fretebot.models",
-    "fretebot.logging_conf",
-    "fretebot.config",
-    "fretebot.cache",
-    "fretebot.calc",
+    \"fretio.providers.braspress_playwright",
+    \"fretio.providers.trd",
+    \"fretio.providers.agex",
+    \"fretio.providers.eucatur",
+    \"fretio.providers.rodonaves",
+    \"fretio.providers.alfa",
+    \"fretio.providers.coopex",
+    \"fretio.providers._win_taskbar",
+    \"fretio.providers.base",
+    # Fretio core
+    \"fretio.models",
+    \"fretio.logging_conf",
+    \"fretio.config",
+    \"fretio.cache",
+    \"fretio.calc",
     # Dependências externas
     "bs4",
     "httpx",
@@ -54,9 +54,9 @@ hiddenimports = [
 datas = []
 
 # CONFIG.example.toml (template para o usuário)
-config_example = project_root / "fretebot" / "CONFIG.example.toml"
+config_example = project_root / "fretio" / "CONFIG.example.toml"
 if config_example.exists():
-    datas.append((str(config_example), "fretebot"))
+    datas.append((str(config_example), "fretio"))
 
 config_root = project_root / "CONFIG.example.toml"
 if config_root.exists():
@@ -72,14 +72,14 @@ romaneio_ex = project_root / "romaneio_exemplo.csv"
 if romaneio_ex.exists():
     datas.append((str(romaneio_ex), "."))
 
-# Versão exibida na interface (Romaneio Beta X.Y)
+# Versão exibida na interface (Fretio X.Y)
 version_file = project_root / "version.txt"
 if version_file.exists():
     datas.append((str(version_file), "."))
 
 # Assets da interface (ícones)
 assets_dir = project_root / "assets"
-for asset_name in ("romaneio.ico", "fretebot.ico"):
+for asset_name in ("romaneio.ico", \"fretio.ico"):
     asset_path = assets_dir / asset_name
     if asset_path.exists():
         datas.append((str(asset_path), "assets"))
@@ -103,7 +103,7 @@ a = Analysis(
     [str(project_root / "romaneio_app.py")],
     pathex=[
         str(project_root),
-        str(project_root / "fretebot" / "src"),
+        str(project_root / "fretio" / "src"),
     ],
     binaries=[],
     datas=datas,
@@ -134,7 +134,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,   # one-folder mode
-    name="FreteBot",
+    name="Fretio",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -147,8 +147,8 @@ exe = EXE(
     entitlements_file=None,
     icon=str(project_root / "assets" / "romaneio.ico")
         if (project_root / "assets" / "romaneio.ico").exists()
-        else (str(project_root / "assets" / "fretebot.ico")
-              if (project_root / "assets" / "fretebot.ico").exists() else None),
+        else (str(project_root / "assets" / \"fretio.ico")
+              if (project_root / "assets" / \"fretio.ico").exists() else None),
 )
 
 # ── COLLECT (junta tudo numa pasta) ───────────────────────────────────────
@@ -159,5 +159,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name="FreteBot",
+    name="Fretio",
 )

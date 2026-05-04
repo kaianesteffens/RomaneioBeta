@@ -1,4 +1,4 @@
-[fretebot]
+[fretio]
 fator_cubagem = 6000
 cache_dir = "cache"
 github_repo = "kaianesteffens/RomaneioBeta-releases"  # Repositório GitHub para auto-update

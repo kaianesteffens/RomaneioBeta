@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-FreteBot Launcher — PyInstaller spec (one-file, sem versão no nome)
+Fretio Launcher — PyInstaller spec (one-file, sem versão no nome)
 Entrada : installer/launcher.py
 Saída   : installer/dist/Romaneio.exe
 """
@@ -9,7 +9,7 @@ from pathlib import Path
 
 _assets = Path(SPECPATH).parent.parent / "app" / "assets"
 _icon = None
-for _name in ("romaneio.ico", "fretebot.ico"):
+for _name in ("romaneio.ico", "fretio.ico"):
     if (_assets / _name).exists():
         _icon = str(_assets / _name)
         break

@@ -2,7 +2,7 @@
 setlocal EnableDelayedExpansion
 
 REM ============================================================
-REM FreteBot — Build do Instalador Windows
+REM Fretio — Build do Instalador Windows
 REM NAO precisa instalar Python no sistema!
 REM Baixa Python 3.12 embutido automaticamente.
 REM Unico requisito: Inno Setup 6 (opcional, para gerar .exe)
@@ -10,7 +10,7 @@ REM ============================================================
 
 echo.
 echo ============================================================
-echo  FreteBot - Build do Instalador Windows
+echo  Fretio - Build do Instalador Windows
 echo ============================================================
 echo.
 
@@ -83,39 +83,39 @@ if not defined APP_VERSION (
     exit /b 1
 )
 >"%VERSION_FILE%" echo !APP_VERSION!
-set "APP_NAME=Romaneio Beta"
-set "OUTPUT_BASENAME=Romaneio-Beta-Setup-!APP_VERSION!"
+set "APP_NAME=Fretio"
+set "OUTPUT_BASENAME=Fretio-Setup-!APP_VERSION!"
 echo [OK] Versao deste build: !APP_VERSION!
 
-REM ── 3. Fechar FreteBot se estiver rodando ──────────────────────────────
+REM ── 3. Fechar Fretio se estiver rodando ──────────────────────────────
 echo.
-tasklist /FI "IMAGENAME eq FreteBot.exe" 2>nul | find /I "FreteBot.exe" >nul
+tasklist /FI "IMAGENAME eq Fretio.exe" 2>nul | find /I "Fretio.exe" >nul
 if %ERRORLEVEL% == 0 (
-    echo [AVISO] FreteBot.exe esta rodando. Fechando...
-    taskkill /IM FreteBot.exe /F >nul 2>&1
+    echo [AVISO] Fretio.exe esta rodando. Fechando...
+    taskkill /IM Fretio.exe /F >nul 2>&1
     timeout /t 3 /nobreak >nul
 )
 REM Limpar dist anterior
-if exist "dist\FreteBot" (
-    rmdir /S /Q "dist\FreteBot" 2>nul
+if exist "dist\Fretio" (
+    rmdir /S /Q "dist\Fretio" 2>nul
     timeout /t 2 /nobreak >nul
 )
 
 REM ── 4. Gerar executavel com PyInstaller ──────────────────────
 echo.
 echo [4/5] Gerando executavel com PyInstaller...
-"%PY%" -m PyInstaller --clean --noconfirm FreteBot.spec
+"%PY%" -m PyInstaller --clean --noconfirm Fretio.spec
 if %ERRORLEVEL% neq 0 (
     echo ERRO: PyInstaller falhou!
     %FB_PAUSE_CMD%
     exit /b 1
 )
-echo [OK] Executavel gerado em dist\FreteBot\
+echo [OK] Executavel gerado em dist\Fretio\
 
 REM ── 5. Garantir arquivos de configuracao no dist ─────────────────
-if not exist "dist\FreteBot\_internal\CONFIG.example.toml" (
+if not exist "dist\Fretio\_internal\CONFIG.example.toml" (
     if exist "%~dp0..\app\CONFIG.example.toml" (
-        copy /Y "%~dp0..\app\CONFIG.example.toml" "dist\FreteBot\_internal\CONFIG.example.toml" >nul
+        copy /Y "%~dp0..\app\CONFIG.example.toml" "dist\Fretio\_internal\CONFIG.example.toml" >nul
         echo [OK] CONFIG.example.toml copiado para dist\_internal
     ) else (
         echo [AVISO] app\CONFIG.example.toml nao encontrado.
@@ -124,15 +124,15 @@ if not exist "dist\FreteBot\_internal\CONFIG.example.toml" (
     echo [OK] CONFIG.example.toml ja presente em dist\_internal
 )
 
-if not exist "dist\FreteBot\_internal\CONFIG.toml" (
+if not exist "dist\Fretio\_internal\CONFIG.toml" (
     if exist "%~dp0..\app\CONFIG.toml" (
-        copy /Y "%~dp0..\app\CONFIG.toml" "dist\FreteBot\_internal\CONFIG.toml" >nul
+        copy /Y "%~dp0..\app\CONFIG.toml" "dist\Fretio\_internal\CONFIG.toml" >nul
         echo [OK] CONFIG.toml copiado de app para dist\_internal
-    ) else if exist "dist\FreteBot\_internal\CONFIG.example.toml" (
-        copy /Y "dist\FreteBot\_internal\CONFIG.example.toml" "dist\FreteBot\_internal\CONFIG.toml" >nul
+    ) else if exist "dist\Fretio\_internal\CONFIG.example.toml" (
+        copy /Y "dist\Fretio\_internal\CONFIG.example.toml" "dist\Fretio\_internal\CONFIG.toml" >nul
         echo [OK] CONFIG.toml gerado a partir de CONFIG.example.toml
     ) else (
-        echo [AVISO] Nao foi possivel gerar dist\FreteBot\_internal\CONFIG.toml
+        echo [AVISO] Nao foi possivel gerar dist\Fretio\_internal\CONFIG.toml
     )
 ) else (
     echo [OK] CONFIG.toml ja presente em dist\_internal
@@ -153,7 +153,7 @@ if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" (
     echo.
     echo ============================================================
     echo  AVISO: Inno Setup 6 nao encontrado.
-    echo  O executavel foi gerado em: dist\FreteBot\FreteBot.exe
+    echo  O executavel foi gerado em: dist\Fretio\Fretio.exe
     echo  Voce pode rodar direto daqui!
     echo.
     echo  Para criar o instalador .exe, instale o Inno Setup:
@@ -163,7 +163,7 @@ if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" (
     goto :skip_inno
 )
 
-"%ISCC%" /DMyAppName="!APP_NAME!" /DMyAppVersion=!APP_VERSION! /DMyOutputBaseFilename="!OUTPUT_BASENAME!" /DMySetupIconFile="%~dp0assets\romaneio.ico" FreteBot-installer.iss
+"%ISCC%" /DMyAppName="!APP_NAME!" /DMyAppVersion=!APP_VERSION! /DMyOutputBaseFilename="!OUTPUT_BASENAME!" /DMySetupIconFile="%~dp0assets\romaneio.ico" Fretio-installer.iss
 if %ERRORLEVEL% neq 0 (
     echo ERRO: Inno Setup falhou!
     %FB_PAUSE_CMD%
@@ -201,7 +201,7 @@ REM Garante que pyinstaller esta disponivel no Python do sistema
 %SYSPY% -m pip install pyinstaller --quiet --disable-pip-version-check
 %SYSPY% -m PyInstaller --clean --noconfirm launcher.spec
 if %ERRORLEVEL% neq 0 (
-    echo [AVISO] Falha ao compilar Romaneio.exe. O FreteBot principal foi gerado normalmente.
+    echo [AVISO] Falha ao compilar Romaneio.exe. O Fretio principal foi gerado normalmente.
     goto :skip_launcher
 )
 
@@ -218,7 +218,7 @@ echo ============================================================
 echo  BUILD CONCLUIDO!
 echo.
 echo  App:         !APP_NAME! !APP_VERSION!
-echo  Executavel:  dist\FreteBot\FreteBot.exe
+echo  Executavel:  dist\Fretio\Fretio.exe
 if exist "installer\!OUTPUT_BASENAME!.exe" (
     echo  Instalador:  installer\!OUTPUT_BASENAME!.exe
 )

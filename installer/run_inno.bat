@@ -30,7 +30,7 @@ echo Versao: %APP_VERSION%
 set "ICON_FILE=%~dp0..\app\assets\romaneio.ico"
 if not exist "%ICON_FILE%" set "ICON_FILE=%~dp0assets\romaneio.ico"
 
-"%ISCC%" /DMyAppName="Romaneio Beta" /DMyAppVersion=%APP_VERSION% /DMyOutputBaseFilename="Romaneio-Beta-Setup-%APP_VERSION%" /DMySetupIconFile="%ICON_FILE%" "%~dp0FreteBot-installer.iss"
+"%ISCC%" /DMyAppName="Fretio" /DMyAppVersion=%APP_VERSION% /DMyOutputBaseFilename="Fretio-Setup-%APP_VERSION%" /DMySetupIconFile="%ICON_FILE%" "%~dp0Fretio-installer.iss"
 
 if %ERRORLEVEL% neq 0 (
     echo ERRO: Inno Setup falhou!
@@ -39,5 +39,5 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
-echo [OK] Instalador Romaneio-Beta-Setup-%APP_VERSION%.exe gerado!
+echo [OK] Instalador Fretio-Setup-%APP_VERSION%.exe gerado!
 pause

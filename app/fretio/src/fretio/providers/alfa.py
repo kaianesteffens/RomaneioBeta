@@ -17,9 +17,9 @@ from typing import Optional, Any
 
 from playwright.async_api import async_playwright
 
-from fretebot.providers.base import ProviderBase
-from fretebot.models import Cotacao
-from fretebot.logging_conf import get_logger
+from fretio.providers.base import ProviderBase
+from fretio.models import Cotacao
+from fretio.logging_conf import get_logger
 
 logger = get_logger(__name__)
 
@@ -150,7 +150,7 @@ class AlfaProvider(ProviderBase):
 
     @staticmethod
     def _user_data_dir() -> str:
-        base = os.path.join(os.path.expanduser("~"), ".fretebot", "alfa_browser_data")
+        base = os.path.join(os.path.expanduser("~"), ".fretio", "alfa_browser_data")
         os.makedirs(base, exist_ok=True)
         return base
 
@@ -264,7 +264,7 @@ class AlfaProvider(ProviderBase):
         if self.headless:
             if self._context:
                 return
-            from fretebot.providers.base import launch_browser_resilient
+            from fretio.providers.base import launch_browser_resilient
             self._browser = await launch_browser_resilient(
                 headless=True,
                 args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
@@ -847,7 +847,7 @@ class AlfaProvider(ProviderBase):
     async def _save_debug_screenshot(self, suffix: str = "") -> None:
         """Salva screenshot para diagnóstico em ~/.fretebot/alfa_debug/."""
         try:
-            debug_dir = os.path.join(os.path.expanduser("~"), ".fretebot", "alfa_debug")
+            debug_dir = os.path.join(os.path.expanduser("~"), ".fretio", "alfa_debug")
             os.makedirs(debug_dir, exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             fname = f"alfa_{ts}_{suffix}.png" if suffix else f"alfa_{ts}.png"

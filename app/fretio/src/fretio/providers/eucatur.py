@@ -1,17 +1,17 @@
-"""Provider COOPEX - Sistema SSW de Transportes (mesmo portal da Eucatur)."""
+"""Provider Eucatur - Sistema SSW de Transportes."""
 from datetime import datetime
 from typing import Optional
 import re
 from playwright.async_api import async_playwright, Page
-from fretebot.providers.base import ProviderBase
-from fretebot.models import Cotacao
-from fretebot.logging_conf import get_logger
+from fretio.providers.base import ProviderBase
+from fretio.models import Cotacao
+from fretio.logging_conf import get_logger
 
 logger = get_logger(__name__)
 
 
-class CoopexProvider(ProviderBase):
-    """Provider COOPEX via portal SSW (sistema.ssw.inf.br)."""
+class EucaturProvider(ProviderBase):
+    """Provider Eucatur via portal SSW (sistema.ssw.inf.br)."""
 
     LOGIN_URL = "https://sistema.ssw.inf.br/bin/ssw0422"
     COTACAO_URL = "https://sistema.ssw.inf.br/bin/ssw1608"
@@ -24,17 +24,17 @@ class CoopexProvider(ProviderBase):
         usar_cache: bool = True,
         headless: bool = True,
     ):
-        super().__init__(nome="COOPEX")
+        super().__init__(nome="Eucatur")
         self.dominio = dominio
         self.usuario = usuario
         self.senha = senha
         self.headless = headless
-        self.last_error: str | None = None
         self._browser = None
         self._context = None
         self._page = None
         self._playwright = None
         self._logged_in = False
+        self.last_error: str | None = None
 
     async def _init_browser(self):
         """Inicializa browser Playwright."""
@@ -44,7 +44,7 @@ class CoopexProvider(ProviderBase):
             logger.warning(f"[{self.nome}] Browser desconectado, reinicializando...")
             await self.cleanup()
 
-        from fretebot.providers.base import launch_browser_resilient
+        from fretio.providers.base import launch_browser_resilient
         self._browser = await launch_browser_resilient(
             headless=self.headless,
             args=['--disable-blink-features=AutomationControlled', '--no-sandbox'],
@@ -148,6 +148,7 @@ class CoopexProvider(ProviderBase):
 
         has_form = await self._page.locator('input[name=f2]').count()
         if has_form == 0:
+            # Sessão pode ter expirado — tentar re-login
             logger.warning(f"[{self.nome}] Formulário não encontrado, tentando re-login...")
             self._logged_in = False
             await self._login()
@@ -175,7 +176,7 @@ class CoopexProvider(ProviderBase):
             f2.value = '{cnpj_pagador}';
             if (typeof pag === 'function') pag('{cnpj_pagador}');
         }}''')
-        await page.wait_for_timeout(300)
+        await page.wait_for_timeout(1000)
 
         # CEP origem + trigger lookup
         cep_orig = origem.replace('-', '').strip()
@@ -184,7 +185,7 @@ class CoopexProvider(ProviderBase):
             f6.value = '{cep_orig}';
             if (typeof ce2 === 'function') ce2('{cep_orig}');
         }}''')
-        await page.wait_for_timeout(300)
+        await page.wait_for_timeout(1000)
 
         # CEP destino + trigger lookup
         cep_dest = destino.replace('-', '').strip()
@@ -193,7 +194,7 @@ class CoopexProvider(ProviderBase):
             f8.value = '{cep_dest}';
             if (typeof cep === 'function') cep('{cep_dest}');
         }}''')
-        await page.wait_for_timeout(300)
+        await page.wait_for_timeout(1000)
 
         # Frete CIF/FOB, Coletar S, Contribuinte S, Entrega difícil N
         await page.evaluate('''(tipoFrete) => {
@@ -205,6 +206,10 @@ class CoopexProvider(ProviderBase):
             document.querySelector('input[name=f14]').value = 'N';
         }''', tipo_frete)
 
+        # Campos explicitados para esta tela:
+        # - Mercadoria: f4 (valor fixo 001)
+        # - CNPJ remetente: cgc_rem
+        # - CNPJ destinatário: f12
         cnpj_rem = cnpj_remetente.replace('.', '').replace('/', '').replace('-', '').strip()
         cnpj_dest = cnpj_destinatario.replace('.', '').replace('/', '').replace('-', '').strip()
         await page.evaluate(
@@ -290,31 +295,23 @@ class CoopexProvider(ProviderBase):
                 }}
             }}''')
 
-        # Preencher cubagem por volume (campos cuba1..cuba11)
-        # Agrupa caixas de mesmo tamanho para economizar campos
+        # Preencher cubagem por volume (campos cuba1..cuba11) usando somente linhas reais
         cubagens_validas = self._normalizar_cubagens_cm(cubagens)
-        if cubagens_validas:
-            # Agrupa por dimensão: {"50x40x30": quantidade_total}
-            grupos: dict[str, int] = {}
-            for cub in cubagens_validas:
-                chave = f'{int(cub["comprimento_cm"])}x{int(cub["largura_cm"])}x{int(cub["altura_cm"])}'
-                grupos[chave] = grupos.get(chave, 0) + int(cub["quantidade"])
-
-            # Expande os grupos em valores individuais
-            cuba_values: list[str] = []
-            for dim, qtd in grupos.items():
-                for _ in range(qtd):
-                    cuba_values.append(dim)
-
-            if len(cuba_values) <= 11:
-                for i, cuba_value in enumerate(cuba_values, start=1):
-                    await page.evaluate(f'''() => {{
-                        const el = document.querySelector('input[name=cuba{i}]');
-                        if (el) el.value = '{cuba_value}';
-                    }}''')
-                logger.info(f"[{self.nome}] Preencheu {len(cuba_values)} campos cuba individuais")
-            else:
-                logger.info(f"[{self.nome}] {len(cuba_values)} volumes > 11 campos cuba, usando apenas cubagem m³ total")
+        cuba_values: list[str] = []
+        for cub in cubagens_validas:
+            for _ in range(int(cub["quantidade"])):
+                cuba_values.append(
+                    f'{int(cub["comprimento_cm"])}x{int(cub["largura_cm"])}x{int(cub["altura_cm"])}'
+                )
+        if not cuba_values:
+            raise Exception("Eucatur sem cubagens reais para preencher os campos cubaN")
+        if len(cuba_values) > 11:
+            raise Exception("Eucatur não suporta mais de 11 volumes (campos cuba1..cuba11)")
+        for i, cuba_value in enumerate(cuba_values, start=1):
+            await page.evaluate(f'''() => {{
+                const el = document.querySelector('input[name=cuba{i}]');
+                if (el) el.value = '{cuba_value}';
+            }}''')
 
         # Reaplica f15 no final, pois alguns scripts do SSW podem limpar/reformatar o campo.
         await page.evaluate(
@@ -403,31 +400,6 @@ class CoopexProvider(ProviderBase):
 
         logger.info(f"[{self.nome}] Todos os campos resultado DOM: {results}")
 
-        # Se prazo foi encontrado mas vlr_frete ainda está vazio, tenta mais 10s
-        # (SSW às vezes popula os campos em fases distintas)
-        vlr_early = (results.get('vlr_frete', '') or results.get('vlr_total', '') or
-                     results.get('valor_frete', '') or results.get('total_geral', '') or
-                     results.get('total_frete', ''))
-        prazo_early = results.get('prazo', '')
-        if (not vlr_early or vlr_early == '0,00') and prazo_early:
-            logger.info(f"[{self.nome}] Prazo={prazo_early!r} encontrado mas vlr_frete vazio, aguardando mais 10s...")
-            for _extra in range(10):
-                await page.wait_for_timeout(1000)
-                results_extra = await page.evaluate('''() => {
-                    const result = {};
-                    document.querySelectorAll('input').forEach(el => {
-                        if (el.name) result[el.name] = el.value || '';
-                    });
-                    return result;
-                }''')
-                vlr_extra = (results_extra.get('vlr_frete', '') or results_extra.get('vlr_total', '') or
-                             results_extra.get('valor_frete', '') or results_extra.get('total_geral', '') or
-                             results_extra.get('total_frete', ''))
-                if vlr_extra and vlr_extra != '0,00':
-                    logger.info(f"[{self.nome}] vlr_frete encontrado na espera extra: {vlr_extra}")
-                    results = results_extra
-                    break
-
         # Verificar erros na resposta XML
         erro = None
         erro_msg = None
@@ -437,12 +409,14 @@ class CoopexProvider(ProviderBase):
             if erro_match and erro_match.group(1) != '':
                 erro = erro_match.group(1)
                 msg = msg_match.group(1) if msg_match else ''
+                # Decodificar entidades HTML
                 msg = msg.replace('&amp;nbsp;', ' ').replace('&amp;', '&')
                 msg = re.sub(r'&\w+;', ' ', msg).replace('<br>', ' ').strip()
                 msg = re.sub(r'<[^>]+>', '', msg).strip()
                 erro_msg = msg
                 logger.warning(f"[{self.nome}] Aviso SSW: {erro} - {msg}")
 
+        # Se SSW retornou erro de rota não atendida, descartar cotação
         restricao_risco = None
         if erro and 'ERRO' in erro.upper():
             # "area de risco" e aviso, nao rejeicao
@@ -569,16 +543,11 @@ class CoopexProvider(ProviderBase):
             if xml_responses:
                 for idx, xml in enumerate(xml_responses):
                     logger.warning(f"[{self.nome}] XML #{idx+1} capturado ({len(xml)} chars): {xml[:500]}")
-            if prazo_str:
-                self.last_error = (
-                    f"Sem valor de frete retornado (prazo={prazo_str!r} encontrado — "
-                    f"rota possivelmente sem precificação automática no SSW)"
-                )
-            else:
-                self.last_error = f"Sem valor de frete retornado (campos DOM: vlr_frete={vlr_frete_str!r}, nro_cotacao={nro_cotacao!r}, prazo={prazo_str!r})"
+            self.last_error = f"Sem valor de frete retornado (campos DOM: vlr_frete={vlr_frete_str!r}, nro_cotacao={nro_cotacao!r}, prazo={prazo_str!r})"
             logger.warning(f"[{self.nome}] {self.last_error}")
             return None
 
+        # Parse valor do frete
         try:
             valor_frete = float(vlr_frete_str.replace('.', '').replace(',', '.'))
         except ValueError:
@@ -586,6 +555,7 @@ class CoopexProvider(ProviderBase):
             logger.error(f"[{self.nome}] {self.last_error}")
             return None
 
+        # Parse prazo (formato DD/MM/YY)
         prazo_dias = 0
         if prazo_str:
             try:
@@ -596,11 +566,13 @@ class CoopexProvider(ProviderBase):
             except ValueError:
                 logger.warning(f"[{self.nome}] Prazo não parseável: {prazo_str}")
 
+        restricoes = restricao_risco
+
         cotacao = Cotacao(
             transportadora=self.nome,
             prazo_dias=prazo_dias,
             valor_frete=valor_frete,
-            restricoes=restricao_risco,
+            restricoes=restricoes,
         )
         logger.info(f"[{self.nome}] Cotação #{nro_cotacao}: R$ {valor_frete:.2f}, {prazo_dias} dias")
         return cotacao
@@ -611,19 +583,17 @@ class CoopexProvider(ProviderBase):
                     cnpj_remetente: str = "", cnpj_destinatario: str = "",
                     cubagens: Optional[list[dict]] = None,
                     cnpj_pagador: str = "", tipo_frete: str = "1") -> Optional[Cotacao]:
-        """Realiza cotação de frete via portal SSW COOPEX."""
-        self.last_error = None
+        """Realiza cotação de frete via portal SSW Eucatur."""
         try:
             cubagens_cm = self._normalizar_cubagens_cm(cubagens)
             if cubagens_cm:
                 soma = sum(int(c["quantidade"]) for c in cubagens_cm)
-                volumes = soma
-                # Calcula m³ total a partir das cubagens individuais
-                if cubagem_m3 <= 0:
-                    cubagem_m3 = sum(
-                        (c["comprimento_cm"] * c["largura_cm"] * c["altura_cm"] / 1_000_000.0) * c["quantidade"]
-                        for c in cubagens_cm
+                if int(volumes or 0) > 0 and int(volumes) != soma:
+                    logger.error(
+                        f"[{self.nome}] Cotação bloqueada: VOL ({volumes}) diverge da soma das cubagens ({soma})"
                     )
+                    return None
+                volumes = soma
             elif volumes > 0 and comprimento_cm > 0 and largura_cm > 0 and altura_cm > 0:
                 cubagens_cm = [
                     {
@@ -633,17 +603,11 @@ class CoopexProvider(ProviderBase):
                         "altura_cm": int(altura_cm),
                     }
                 ]
-                if cubagem_m3 <= 0:
-                    cubagem_m3 = (comprimento_cm * largura_cm * altura_cm / 1_000_000.0) * volumes
-            elif cubagem_m3 > 0:
-                # Sem cubagens individuais, mas tem m³ total — prossegue
-                cubagens_cm = []
             else:
-                self.last_error = (
-                    f"Cotação bloqueada: cubagens reais ausentes/inválidas "
-                    f"(volumes={volumes}, dims_cm={comprimento_cm}x{largura_cm}x{altura_cm}, m3={cubagem_m3})"
+                logger.error(
+                    f"[{self.nome}] Cotação bloqueada: cubagens reais ausentes/inválidas "
+                    f"(volumes={volumes}, dims_cm={comprimento_cm}x{largura_cm}x{altura_cm})"
                 )
-                logger.error(f"[{self.nome}] {self.last_error}")
                 return None
 
             await self._init_browser()

@@ -22,7 +22,7 @@ except Exception:
 
 # Inicializar logging dos providers
 try:
-    from fretebot.logging_conf import setup_logging
+    from fretio.logging_conf import setup_logging
     setup_logging()
 except Exception:
     pass
@@ -32,13 +32,13 @@ try:
 except Exception:  # pragma: no cover
     tomllib = None
 
-# Adiciona a pasta 'src' ao sys.path para encontrar os módulos do fretebot
-def _add_fretebot_src_to_path() -> None:
+# Adiciona a pasta 'src' ao sys.path para encontrar os módulos do Fretio
+def _add_Fretio_src_to_path() -> None:
     repo_root = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
-    src = repo_root / "fretebot" / "src"
+    src = repo_root / "fretio" / "src"
     if src.exists() and str(src) not in sys.path:
         sys.path.insert(0, str(src))
-_add_fretebot_src_to_path()
+_add_Fretio_src_to_path()
 
 
 # Imports lazy — carregados sob demanda na primeira inicialização para
@@ -63,37 +63,37 @@ def _ensure_provider_imports() -> None:
     with _provider_import_lock:
         if BraspressProvider is not None:
             return  # double-checked: outra thread já carregou
-        from fretebot.providers.braspress_playwright import BraspressPlaywrightProvider as _BP
-        from fretebot.providers.trd import TRDProvider as _TRD
+        from fretio.providers.braspress_playwright import BraspressPlaywrightProvider as _BP
+        from fretio.providers.trd import TRDProvider as _TRD
         BraspressProvider = _BP
         TRDProvider = _TRD
         try:
-            from fretebot.providers.bauer_auto import BauerAutoProvider as _BAU
+            from fretio.providers.bauer_auto import BauerAutoProvider as _BAU
         except ImportError:
             _BAU = None
         BauerAutoProvider = _BAU
         try:
-            from fretebot.providers.agex import AGEXProvider as _AG
+            from fretio.providers.agex import AGEXProvider as _AG
         except ImportError:
             _AG = None
         AGEXProvider = _AG
         try:
-            from fretebot.providers.eucatur import EucaturProvider as _EU
+            from fretio.providers.eucatur import EucaturProvider as _EU
         except ImportError:
             _EU = None
         EucaturProvider = _EU
         try:
-            from fretebot.providers.rodonaves import RodonavesProvider as _RO
+            from fretio.providers.rodonaves import RodonavesProvider as _RO
         except ImportError:
             _RO = None
         RodonavesProvider = _RO
         try:
-            from fretebot.providers.alfa import AlfaProvider as _AL
+            from fretio.providers.alfa import AlfaProvider as _AL
         except ImportError:
             _AL = None
         AlfaProvider = _AL
         try:
-            from fretebot.providers.coopex import CoopexProvider as _CO
+            from fretio.providers.coopex import CoopexProvider as _CO
         except ImportError:
             _CO = None
         CoopexProvider = _CO
@@ -101,7 +101,7 @@ def _ensure_provider_imports() -> None:
 
 CEP_ORIGEM_PADRAO = "99740000"
 MODO_FOCO_TRANSPORTADORA = ""  # Vazio = sem foco; cota todas as transportadoras habilitadas.
-_CONFIG_FALLBACK = """[fretebot]
+_CONFIG_FALLBACK = """[fretio]
 fator_cubagem = 6000
 cache_dir = "cache"
 
@@ -280,7 +280,7 @@ def _trd_headless_config_value(tcfg: dict[str, Any], foco_trd: bool) -> bool:
 def _log_path() -> Path:
     appdata = os.getenv("APPDATA")
     if appdata:
-        log_dir = Path(appdata) / "FreteBot"
+        log_dir = Path(appdata) / "Fretio"
         log_dir.mkdir(parents=True, exist_ok=True)
         return log_dir / "romaneio_cotacao.log"
     return _base_dir() / "romaneio_cotacao.log"
@@ -300,9 +300,9 @@ def _log_diag(msg: str) -> None:
 def _config_template_path() -> Path | None:
     base = _base_dir()
     candidates = [
-        base / "fretebot" / "CONFIG.example.toml",
+        base / "Fretio" / "CONFIG.example.toml",
         base / "CONFIG.example.toml",
-        Path.cwd() / "fretebot" / "CONFIG.example.toml",
+        Path.cwd() / "Fretio" / "CONFIG.example.toml",
         Path.cwd() / "CONFIG.example.toml",
     ]
     for candidate in candidates:
@@ -314,7 +314,7 @@ def _config_template_path() -> Path | None:
 def _default_config_path() -> Path:
     appdata = os.getenv("APPDATA")
     if appdata:
-        return Path(appdata) / "FreteBot" / "CONFIG.toml"
+        return Path(appdata) / "Fretio" / "CONFIG.toml"
     return _base_dir() / "CONFIG.toml"
 
 
@@ -342,19 +342,19 @@ def _candidatos_config(config_path: Path | None = None) -> list[Path]:
 
     base = _base_dir()
     candidates = [
-        base / "fretebot" / "CONFIG.toml",
+        base / "Fretio" / "CONFIG.toml",
         base / "CONFIG.toml",
-        Path.cwd() / "fretebot" / "CONFIG.toml",
+        Path.cwd() / "Fretio" / "CONFIG.toml",
         Path.cwd() / "CONFIG.toml",
     ]
 
     appdata = os.getenv("APPDATA")
     if appdata:
-        candidates.append(Path(appdata) / "FreteBot" / "CONFIG.toml")
+        candidates.append(Path(appdata) / "Fretio" / "CONFIG.toml")
 
     programdata = os.getenv("PROGRAMDATA")
     if programdata:
-        candidates.append(Path(programdata) / "FreteBot" / "CONFIG.toml")
+        candidates.append(Path(programdata) / "Fretio" / "CONFIG.toml")
 
     return candidates
 
@@ -801,18 +801,18 @@ def _cubagens_validas(cubagens_raw: Any) -> list[dict[str, Any]]:
     return validas
 
 
-def _kill_orphan_fretebot_chromes() -> None:
-    """Mata processos Chrome órfãos de sessões anteriores do FreteBot.
+def _kill_orphan_Fretio_chromes() -> None:
+    """Mata processos Chrome órfãos de sessões anteriores do Fretio.
 
     Procura por processos chrome.exe cujo command-line contenha
-    o diretório .fretebot (user-data-dir dos providers Alfa e Rodonaves).
+    o diretório .Fretio (user-data-dir dos providers Alfa e Rodonaves).
     Tenta wmic primeiro (rápido); se falhar usa Get-CimInstance (Windows 11+).
     """
     if sys.platform != "win32":
         return
     import subprocess as _sp
-    fretebot_marker = os.path.join(os.path.expanduser("~"), ".fretebot").replace("/", "\\").lower()
-    fretebot_temp_marker = "fretebot_chrome_"
+    fretio_marker = os.path.join(os.path.expanduser("~"), ".fretio").replace("/", "\\").lower()
+    fretio_temp_marker = "fretio_chrome_"
 
     def _kill_pids_from_lines(lines: list[str]) -> None:
         pid = None
@@ -820,18 +820,18 @@ def _kill_orphan_fretebot_chromes() -> None:
         for line in lines:
             line = line.strip()
             if not line:
-                if pid is not None and (fretebot_marker in cmd.lower() or fretebot_temp_marker in cmd.lower()):
+                if pid is not None and (fretio_marker in cmd.lower() or fretio_temp_marker in cmd.lower()):
                     try:
                         _sp.run(
                             ["taskkill", "/F", "/T", "/PID", str(pid)],
                             capture_output=True, timeout=10,
                             creationflags=_sp.CREATE_NO_WINDOW,
                         )
-                        _log_diag(f"Matou Chrome órfão do FreteBot PID={pid} (tree kill)")
+                        _log_diag(f"Matou Chrome órfão do Fretio PID={pid} (tree kill)")
                     except Exception:
                         try:
                             os.kill(pid, 9)
-                            _log_diag(f"Matou Chrome órfão do FreteBot PID={pid} (os.kill)")
+                            _log_diag(f"Matou Chrome órfão do Fretio PID={pid} (os.kill)")
                         except OSError:
                             pass
                 pid = None
@@ -844,10 +844,10 @@ def _kill_orphan_fretebot_chromes() -> None:
                     pid = int(line[len("ProcessId="):])
                 except ValueError:
                     pid = None
-        if pid is not None and (fretebot_marker in cmd.lower() or fretebot_temp_marker in cmd.lower()):
+        if pid is not None and (fretio_marker in cmd.lower() or fretio_temp_marker in cmd.lower()):
             try:
                 os.kill(pid, 9)
-                _log_diag(f"Matou Chrome órfão do FreteBot PID={pid}")
+                _log_diag(f"Matou Chrome órfão do Fretio PID={pid}")
             except OSError:
                 pass
 
@@ -878,7 +878,7 @@ def _kill_orphan_fretebot_chromes() -> None:
         )
         _kill_pids_from_lines(result.stdout.splitlines())
     except Exception as e:
-        _log_diag(f"_kill_orphan_fretebot_chromes falhou: {e}")
+        _log_diag(f"_kill_orphan_Fretio_chromes falhou: {e}")
 
 
 # Prioridade de lentidão: maior = mais lento (baseado em testes reais).
@@ -892,6 +892,26 @@ _PRIORIDADE_LENTIDAO: dict[str, int] = {
     "RODONAVES": 300,
     "AGEX": 100,
 }
+
+# Timeouts por provider (fluxos reais medidos):
+# - TRD: login 2×60s + etapas + modais → mínimo ~45-50s, pior caso >150s
+# - RODONAVES: CAPTCHA 45s + polling resultado 30s → mínimo ~75s
+# - AGEX: wait_for_url resultado 60s + login 30s → mínimo ~53s
+_TIMEOUT_COTACAO_S: dict[str, int] = {
+    "ALFA": 60,
+    "TRD": 120,
+    "RODONAVES": 120,
+    "AGEX": 90,
+}
+_TIMEOUT_COTACAO_PADRAO_S = 45
+
+_TIMEOUT_PRELOGIN_S: dict[str, int] = {
+    "ALFA": 90,
+    "TRD": 90,
+    "RODONAVES": 60,
+    "AGEX": 60,
+}
+_TIMEOUT_PRELOGIN_PADRAO_S = 45
 
 
 class TransportadoraSession:
@@ -917,8 +937,8 @@ class TransportadoraSession:
         login_status_callback(nome, status) para status individual ('pending','ok','fail')."""
         # Importa providers sob demanda (lazy) para não atrasar a abertura da janela
         _ensure_provider_imports()
-        # Mata processos Chrome órfãos de sessões anteriores do FreteBot
-        _kill_orphan_fretebot_chromes()
+        # Mata processos Chrome órfãos de sessões anteriores do Fretio
+        _kill_orphan_Fretio_chromes()
         if self._inicializado:
             # Se já inicializado, apenas garante que providers fora do foco sejam encerrados.
             if MODO_FOCO_TRANSPORTADORA and self.providers:
@@ -1108,7 +1128,7 @@ class TransportadoraSession:
         async def _pre_login_one(nome, prov):
             # Alfa pode aguardar Turnstile manual; timeout maior
             is_alfa = nome.lower() == "alfa"
-            timeout_s = 90 if is_alfa else 45
+            timeout_s = _TIMEOUT_PRELOGIN_S.get(nome.upper(), _TIMEOUT_PRELOGIN_PADRAO_S)
             max_retries = 0 if is_alfa else 1
             backoff = 3  # segundos entre tentativas
 
@@ -1163,7 +1183,7 @@ class TransportadoraSession:
 
         # Oculta janelas "Default IME" que possam ter ficado visíveis
         try:
-            from fretebot.providers._win_taskbar import ocultar_janelas_ime
+            from fretio.providers._win_taskbar import ocultar_janelas_ime
             n = ocultar_janelas_ime()
             if n:
                 _log_diag(f"Ocultou {n} janela(s) IME residual(is)")
@@ -1981,7 +2001,7 @@ async def _executar_cotacoes_com_dados(
     tasks.sort(key=lambda t: _PRIORIDADE_LENTIDAO.get(str(t[0]).upper(), 0), reverse=True)
 
     # Cotações em paralelo (configurável, padrão 3)
-    fb_cfg = config.get("fretebot", {}) if isinstance(config, dict) else {}
+    fb_cfg = config.get("fretio", {}) if isinstance(config, dict) else {}
     max_paralelo = max(1, min(7, int(fb_cfg.get("max_paralelo", 3) or 3)))
     nomes_tasks = ", ".join(nome for nome, _provider, _kwargs in tasks)
     _log_diag(f"Executando {len(tasks)} cotações em paralelo (máx {max_paralelo}): {nomes_tasks}")
@@ -1996,17 +2016,16 @@ async def _executar_cotacoes_com_dados(
         _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=erro_setup)
     semaforo = asyncio.Semaphore(max_paralelo)
 
-    timeout_por_transportadora_s = 45
-
     async def _run_cotacao(i: int, nome: str, provider: Any, kwargs: dict[str, Any], is_alfa: bool):
-        effective_timeout = timeout_por_transportadora_s + 15 if is_alfa else timeout_por_transportadora_s
+        effective_timeout = _TIMEOUT_COTACAO_S.get(nome.upper(), _TIMEOUT_COTACAO_PADRAO_S)
         try:
             coro = provider.coteir(**kwargs)
             cotacao = await asyncio.wait_for(coro, timeout=effective_timeout)
             return i, nome, provider, kwargs, cotacao, None
         except asyncio.TimeoutError:
+            last_step = getattr(provider, '_passo_atual', 'desconhecido')
             return i, nome, provider, kwargs, None, TimeoutError(
-                f"Timeout de {effective_timeout}s na cotação {nome}"
+                f"Timeout de {effective_timeout}s na cotação {nome} (passo: {last_step})"
             )
         except asyncio.CancelledError as exc:
             detalhe = str(exc).strip() or "sem detalhe"

@@ -1,4 +1,4 @@
-# FreteBot — Como Gerar o Instalador Windows
+# Fretio — Como Gerar o Instalador Windows
 
 ## Pré-requisitos
 
@@ -19,8 +19,8 @@ O script faz tudo automaticamente:
 1. Instala dependências Python (`pip install -r requirements.txt`)
 2. Instala PyInstaller
 3. Instala Chromium via Playwright
-4. Gera o executável com PyInstaller (pasta `dist\FreteBot\`)
-5. Compila o instalador com Inno Setup (`installer\FreteBot-Setup.exe`)
+4. Gera o executável com PyInstaller (pasta `dist\Fretio\`)
+5. Compila o instalador com Inno Setup (`installer\Fretio-Setup.exe`)
 
 ## Build Manual (passo a passo)
 
@@ -36,57 +36,57 @@ python -m playwright install chromium
 ### 2. Gerar executável
 
 ```cmd
-pyinstaller --clean --noconfirm FreteBot.spec
+pyinstaller --clean --noconfirm Fretio.spec
 ```
 
-Saída: `dist\FreteBot\FreteBot.exe` + dependências na mesma pasta.
+Saída: `dist\Fretio\Fretio.exe` + dependências na mesma pasta.
 
 ### 3. Copiar CONFIG.toml (se tiver credenciais)
 
 ```cmd
-copy fretebot\CONFIG.toml dist\FreteBot\fretebot\CONFIG.toml
+copy Fretio\CONFIG.toml dist\Fretio\Fretio\CONFIG.toml
 ```
 
 ### 4. Compilar instalador
 
 ```cmd
-"%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" FreteBot-installer.iss
+"%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" Fretio-installer.iss
 ```
 
-Saída: `installer\FreteBot-Setup.exe`
+Saída: `installer\Fretio-Setup.exe`
 
 ## Estrutura do Instalador
 
 ```
-FreteBot-Setup.exe
-├── Instala em: C:\Program Files\FreteBot\
-│   ├── FreteBot.exe           (aplicação principal)
+Fretio-Setup.exe
+├── Instala em: C:\Program Files\Fretio\
+│   ├── Fretio.exe           (aplicação principal)
 │   ├── *.dll / *.pyd          (dependências Python empacotadas)
-│   ├── fretebot\              (pacote Python)
+│   ├── Fretio\              (pacote Python)
 │   │   └── CONFIG.example.toml
 │   └── instalar_navegador.bat (instala Chromium pós-instalação)
 │
-├── Cria: %APPDATA%\FreteBot\
+├── Cria: %APPDATA%\Fretio\
 │   ├── CONFIG.toml            (copiado do example na 1ª instalação)
 │   └── cache\                 (cache de cotações)
 │
-├── Atalho: Menu Iniciar → FreteBot
+├── Atalho: Menu Iniciar → Fretio
 └── Atalho: Área de Trabalho (opcional)
 ```
 
 ## Após Instalar no Windows do Usuário
 
-1. Executar o instalador `FreteBot-Setup.exe`
+1. Executar o instalador `Fretio-Setup.exe`
 2. Na tela final, marcar "Instalar navegador Chromium" → executa `instalar_navegador.bat`
-3. Editar `%APPDATA%\FreteBot\CONFIG.toml` com as credenciais reais
-4. Executar FreteBot pelo atalho no Menu Iniciar
+3. Editar `%APPDATA%\Fretio\CONFIG.toml` com as credenciais reais
+4. Executar Fretio pelo atalho no Menu Iniciar
 
 ## Arquivos do Build
 
 | Arquivo | Função |
 |---|---|
-| `FreteBot.spec` | Configuração PyInstaller (one-folder, GUI, sem console) |
-| `FreteBot-installer.iss` | Script Inno Setup (instalador Windows) |
+| `Fretio.spec` | Configuração PyInstaller (one-folder, GUI, sem console) |
+| `Fretio-installer.iss` | Script Inno Setup (instalador Windows) |
 | `build.bat` | Script automatizado de build |
 | `instalar_navegador.bat` | Instala Chromium após instalação |
 | `requirements.txt` | Dependências Python |
@@ -96,4 +96,4 @@ FreteBot-Setup.exe
 - **Playwright/Chromium**: O navegador Chromium (~150MB) é instalado separadamente pelo `instalar_navegador.bat`. Não é empacotado dentro do .exe para manter o instalador leve.
 - **CONFIG.toml**: Contém credenciais das transportadoras. Nunca é sobrescrito em atualizações (flag `onlyifdoesntexist` no Inno Setup).
 - **Modo GUI**: O .exe roda sem janela de console (`console=False` no PyInstaller).
-- **Desinstalação**: Pelo Windows → Configurações → Apps → FreteBot → Desinstalar.
+- **Desinstalação**: Pelo Windows → Configurações → Apps → Fretio → Desinstalar.

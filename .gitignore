@@ -20,12 +20,12 @@ installer/python-3.12/
 installer/installer/
 app/build/
 app/_internal/
-app/FreteBot.exe
+app/Fretio.exe
 app/python-3.12/
 app/installer/
 app/__pycache__/
-app/fretebot/src/fretebot/__pycache__/
-app/fretebot/src/fretebot/providers/__pycache__/
+app/Fretio/src/Fretio/__pycache__/
+app/Fretio/src/Fretio/providers/__pycache__/
 
 # Inno Setup output
 installer/installer/*.exe
@@ -75,7 +75,7 @@ skills/
 
 # Configs com credenciais (NÃO commitar!)
 app/CONFIG.toml
-app/fretebot/CONFIG.toml
+app/Fretio/CONFIG.toml
 
 # Licenças admin (dados sensíveis)
 app/licenses_admin.json

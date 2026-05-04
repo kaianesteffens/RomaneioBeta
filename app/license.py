@@ -1,5 +1,5 @@
 """
-FreteBot — Sistema de Licenciamento.
+Fretio — Sistema de Licenciamento.
 
 Valida licenças contra um JSON remoto (GitHub Gist secreto).
 Cada instalação precisa de uma chave para funcionar.
@@ -40,9 +40,9 @@ def _load_toml_file(path: Path) -> dict:
 def _license_dir() -> Path:
     appdata = os.getenv("APPDATA")
     if appdata:
-        d = Path(appdata) / "FreteBot"
+        d = Path(appdata) / "Fretio"
     else:
-        d = Path.home() / ".fretebot"
+        d = Path.home() / ".Fretio"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -141,7 +141,7 @@ class LicenseStatus:
 
 def _get_gist_url() -> str:
     """Lê a URL do gist de licenças do CONFIG.toml ou variável de ambiente."""
-    url = os.environ.get("FRETEBOT_LICENSE_URL", "").strip()
+    url = os.environ.get("Fretio_LICENSE_URL", "").strip()
     if url:
         return url
 
@@ -149,7 +149,7 @@ def _get_gist_url() -> str:
         config_paths: list[Path] = []
         appdata = os.getenv("APPDATA")
         if appdata:
-            config_paths.append(Path(appdata) / "FreteBot" / "CONFIG.toml")
+            config_paths.append(Path(appdata) / "Fretio" / "CONFIG.toml")
         base = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
         config_paths.append(base / "CONFIG.toml")
 
@@ -157,7 +157,7 @@ def _get_gist_url() -> str:
             if not cp.exists():
                 continue
             cfg = _load_toml_file(cp)
-            url = cfg.get("fretebot", {}).get("license_url", "")
+            url = cfg.get("fretio", {}).get("license_url", "")
             if url:
                 return str(url).strip()
     except Exception:
@@ -169,7 +169,7 @@ def _fetch_licenses(gist_url: str) -> dict:
     """Busca o JSON de licenças do gist remoto."""
     req = Request(gist_url, headers={
         "Accept": "application/json",
-        "User-Agent": "FreteBot-License/1.0",
+        "User-Agent": "Fretio-License/1.0",
     })
     with urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
         return json.loads(resp.read())
@@ -194,14 +194,14 @@ def _get_gist_config() -> tuple[str, str]:
     """Retorna (license_gist_id, token) do CONFIG.toml."""
     try:
         for candidate in [
-            Path(os.getenv("APPDATA", "")) / "FreteBot" / "CONFIG.toml",
+            Path(os.getenv("APPDATA", "")) / "Fretio" / "CONFIG.toml",
             Path(getattr(sys, "_MEIPASS", "")) / "CONFIG.toml",
             Path(__file__).parent / "CONFIG.toml",
         ]:
             if not candidate.exists():
                 continue
             cfg = _load_toml_file(candidate)
-            fb = cfg.get("fretebot", {})
+            fb = cfg.get("fretio", {})
             # Extrai o gist ID da license_url
             url = fb.get("license_url", "")
             gist_id = ""

@@ -8,9 +8,9 @@ import time
 import tempfile
 from pathlib import Path
 from playwright.async_api import async_playwright, Frame
-from fretebot.providers.base import ProviderBase
-from fretebot.models import Cotacao
-from fretebot.logging_conf import get_logger
+from fretio.providers.base import ProviderBase
+from fretio.models import Cotacao
+from fretio.logging_conf import get_logger
 
 logger = get_logger(__name__)
 
@@ -55,7 +55,8 @@ class TRDProvider(ProviderBase):
         self._page = None
         self._playwright = None
         self._logged_in = False
-    
+        self._passo_atual: str = "inicio"
+
     _STEALTH_JS = """
         Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
         Object.defineProperty(navigator, 'plugins', {
@@ -82,7 +83,7 @@ class TRDProvider(ProviderBase):
             logger.warning(f"[{self.nome}] Browser desconectado, reinicializando...")
             await self.cleanup()
         
-        from fretebot.providers.base import launch_browser_resilient
+        from fretio.providers.base import launch_browser_resilient
         self._browser = await launch_browser_resilient(
             headless=self.headless,
             args=[
@@ -1043,7 +1044,7 @@ class TRDProvider(ProviderBase):
             return paths
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        base_dir = Path(tempfile.gettempdir()) / "fretebot_trd_debug"
+        base_dir = Path(tempfile.gettempdir()) / "fretio_trd_debug"
         try:
             base_dir.mkdir(parents=True, exist_ok=True)
         except Exception:
@@ -1184,11 +1185,12 @@ class TRDProvider(ProviderBase):
                 f"linhas_cubagem={len(cubagens_m)} cnpj_dest={cnpj_dest_digits[:8]}..."
             )
             
+            self._passo_atual = "login"
             if not await self._login():
                 if not self.last_error:
                     self.last_error = "Falha no login TRD"
                 return None
-            
+
             # Criar nova página para cada cotação (mantém sessão via cookies do contexto)
             if self._logged_in:
                 try:
@@ -1264,6 +1266,7 @@ class TRDProvider(ProviderBase):
 
             _registrar_listener()
 
+            self._passo_atual = "navegando_cotacao"
             logger.info(f"[{self.nome}] Navegando para cotação...")
             await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=30000)
             await self._page.wait_for_timeout(500)
@@ -1295,6 +1298,7 @@ class TRDProvider(ProviderBase):
                 await self._page.wait_for_timeout(500)
 
             # ETAPA 1: DADOS DO FRETE
+            self._passo_atual = "etapa1_cnpj_cep"
             logger.info(f"[{self.nome}] Preenchendo ETAPA 1...")
 
             # Modo fornecedor: trocar pagador para DESTINATARIO e preencher remetente
@@ -1546,6 +1550,7 @@ class TRDProvider(ProviderBase):
                 return None
             
             # ETAPA 2: DADOS DA CARGA
+            self._passo_atual = "etapa2_valor_peso_cubagem"
             logger.info(f"[{self.nome}] Preenchendo ETAPA 2...")
             
             # Valor da mercadoria (com retry e fallback robusto)
@@ -1588,6 +1593,7 @@ class TRDProvider(ProviderBase):
                 await self._page.wait_for_timeout(300)
             
             # Confirmar simulação (botão "Continuar" = vm.confirmaSimulacao())
+            self._passo_atual = "confirmando_simulacao"
             logger.info(f"[{self.nome}] Enviando cotação...")
             await self._page.locator('button[ng-click="vm.confirmaSimulacao()"]').click()
             await self._page.wait_for_timeout(500)
@@ -1612,6 +1618,7 @@ class TRDProvider(ProviderBase):
             await self._page.wait_for_timeout(500)
             
             # EXTRAÇÃO via status-card-js (HTML real)
+            self._passo_atual = "extraindo_resultado"
             logger.info(f"[{self.nome}] Extraindo resultado...")
 
             # Aguardar resultado aparecer (status-card "Valor da prestação")

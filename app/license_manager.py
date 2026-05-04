@@ -1,5 +1,5 @@
 """
-FreteBot — Gerador e Gerenciador de Licenças (uso do administrador).
+Fretio — Gerador e Gerenciador de Licenças (uso do administrador).
 
 Uso:
     python license_manager.py gerar "Nome do Cliente"
