@@ -20,8 +20,8 @@ from urllib.parse import urljoin
 import httpx
 from bs4 import BeautifulSoup
 
-from fretebot.logging_conf import get_logger
-from fretebot.providers.base import launch_browser_resilient
+from fretio.logging_conf import get_logger
+from fretio.providers.base import launch_browser_resilient
 
 logger = get_logger(__name__)
 
@@ -74,9 +74,9 @@ def _download_dir() -> Path:
         return d
     appdata = os.getenv("APPDATA")
     if appdata:
-        d = Path(appdata) / "FreteBot" / "rastreamento"
+        d = Path(appdata) / "Fretio" / "rastreamento"
     else:
-        d = Path.cwd() / "FreteBot_rastreamento"
+        d = Path.cwd() / "Fretio_rastreamento"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

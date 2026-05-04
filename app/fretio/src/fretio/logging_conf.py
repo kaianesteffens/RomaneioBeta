@@ -9,14 +9,14 @@ def _is_frozen() -> bool:
 def _log_dir() -> Path:
     appdata = os.getenv("APPDATA")
     if appdata:
-        d = Path(appdata) / "FreteBot"
+        d = Path(appdata) / "Fretio"
     else:
         d = Path("logs")
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 def setup_logging() -> None:
-    log_file = _log_dir() / "fretebot.log"
+    log_file = _log_dir() / "fretio.log"
     if _is_frozen():
         # Rotaciona: trunca se > 5 MB para não crescer indefinidamente
         try:

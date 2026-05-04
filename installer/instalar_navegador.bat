@@ -1,9 +1,9 @@
 @echo off
-REM FreteBot - Verificar Google Chrome
-REM O FreteBot usa o Google Chrome instalado no computador (nao usa Chromium)
+REM Fretio - Verificar Google Chrome
+REM O Fretio usa o Google Chrome instalado no computador (nao usa Chromium)
 
 echo ============================================
-echo FreteBot - Verificando Google Chrome...
+echo Fretio - Verificando Google Chrome...
 echo ============================================
 echo.
 
@@ -15,14 +15,14 @@ if exist "%LocalAppData%\Google\Chrome\Application\chrome.exe" set "FOUND=1"
 
 if defined FOUND (
     echo Google Chrome encontrado!
-    echo O FreteBot esta pronto para uso.
+    echo O Fretio esta pronto para uso.
 ) else (
     echo ATENCAO: Google Chrome NAO encontrado!
     echo.
-    echo O FreteBot requer o Google Chrome instalado.
+    echo O Fretio requer o Google Chrome instalado.
     echo Baixe em: https://www.google.com/chrome/
     echo.
-    echo Apos instalar o Chrome, o FreteBot funcionara normalmente.
+    echo Apos instalar o Chrome, o Fretio funcionara normalmente.
 )
 
 echo.

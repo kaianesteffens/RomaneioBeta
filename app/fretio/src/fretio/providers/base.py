@@ -8,8 +8,8 @@ import tempfile
 
 from playwright.async_api import async_playwright
 
-from fretebot.models import Cotacao
-from fretebot.logging_conf import get_logger
+from fretio.models import Cotacao
+from fretio.logging_conf import get_logger
 
 _base_logger = get_logger(__name__)
 
@@ -46,7 +46,7 @@ def find_chrome() -> str:
     for path in candidates:
         if path and os.path.isfile(path):
             return path
-    raise FileNotFoundError("Google Chrome nao encontrado. Instale o Chrome para usar o FreteBot.")
+    raise FileNotFoundError("Google Chrome nao encontrado. Instale o Chrome para usar o Fretio.")
 
 
 def _find_free_port() -> int:
@@ -147,7 +147,7 @@ async def launch_browser_resilient(playwright=None, *, headless: bool = True, ar
     for attempt in range(3 if manage_pw else 1):
         pw = None
         port = _find_free_port()
-        profile_dir = tempfile.mkdtemp(prefix="fretebot_chrome_")
+        profile_dir = tempfile.mkdtemp(prefix="fretio_chrome_")
         proc = None
 
         try:

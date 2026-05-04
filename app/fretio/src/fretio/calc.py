@@ -1,4 +1,4 @@
-from fretebot.models import Pedido, Pesos
+from fretio.models import Pedido, Pesos
 
 def calcular_cubagem(altura: float, largura: float, profundidade: float) -> float:
     return (altura * largura * profundidade) / 1_000_000

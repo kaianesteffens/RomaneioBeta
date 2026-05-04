@@ -1,10 +1,10 @@
 """
-FreteBot — Relatório de Erros Remoto.
+Fretio — Relatório de Erros Remoto.
 
 Envia erros automaticamente para um GitHub Gist (como comentários).
 Cada erro vira um comentário no gist, sem criar arquivos locais.
 Falhas no envio são silenciosas — nunca impacta o uso do app.
-Diagnóstico gravado em %APPDATA%/FreteBot/error_reporter.log.
+Diagnóstico gravado em %APPDATA%/Fretio/error_reporter.log.
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ _log_lock = threading.Lock()
 def _log_path() -> Path:
     appdata = os.getenv("APPDATA", "")
     if appdata:
-        return Path(appdata) / "FreteBot" / "error_reporter.log"
+        return Path(appdata) / "Fretio" / "error_reporter.log"
     return Path(__file__).parent / "error_reporter.log"
 
 
@@ -92,9 +92,9 @@ def _iter_config_candidates():
     """Gera candidatos de CONFIG.toml em ordem de preferência."""
     appdata = Path(os.getenv("APPDATA", ""))
     # Raiz do APPDATA (legado / futuro uso)
-    yield appdata / "FreteBot" / "CONFIG.toml"
+    yield appdata / "Fretio" / "CONFIG.toml"
     # Pasta de empresas — varre todas e usa a primeira com as chaves
-    empresas_dir = appdata / "FreteBot" / "empresas"
+    empresas_dir = appdata / "Fretio" / "empresas"
     if empresas_dir.exists():
         try:
             for emp_dir in sorted(empresas_dir.iterdir()):
@@ -125,7 +125,7 @@ def _load_config() -> None:
             except Exception as e:
                 _diag("WARN", f"Falha ao ler {candidate}: {e}")
                 continue
-            fb = cfg.get("fretebot", {})
+            fb = cfg.get("fretio", {})
             gist_id = fb.get("error_gist_id", "").strip()
             token = fb.get("error_report_token", "").strip()
             if gist_id and token:
@@ -163,7 +163,7 @@ def configure(config_path) -> None:
             _diag("WARN", f"configure(): arquivo não existe: {config_path}")
             return
         cfg = _load_toml_file(p)
-        fb = cfg.get("fretebot", {})
+        fb = cfg.get("fretio", {})
         gist_id = fb.get("error_gist_id", "").strip()
         token = fb.get("error_report_token", "").strip()
         if gist_id and token:
@@ -205,7 +205,7 @@ def _get_machine_hash() -> str:
 def _get_license_key() -> str:
     """Lê a chave de licença salva (para identificar o cliente)."""
     try:
-        f = Path(os.getenv("APPDATA", "")) / "FreteBot" / "license.key"
+        f = Path(os.getenv("APPDATA", "")) / "Fretio" / "license.key"
         if f.exists():
             key = f.read_text(encoding="utf-8").strip()
             # Retorna só os primeiros 9 chars para privacidade (FBOT-XXXX)
@@ -333,18 +333,30 @@ def report_error(
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         os_info = f"{platform.system()} {platform.release()} ({platform.version()})"
 
+        exc_msg_full = str(exc_value)
         body_parts = [
-            f"## {exc_type_name}: {str(exc_value)[:200]}",
+            f"## {exc_type_name}: {exc_msg_full[:200]}",
             "",
             f"| Campo | Valor |",
             f"|-------|-------|",
             f"| Versão | `{version}` |",
+            f"| Python | `{sys.version.split()[0]}` |",
             f"| Máquina | `{machine}` |",
             f"| Licença | `{license_id}` |",
             f"| OS | `{os_info}` |",
             f"| Data/Hora | `{timestamp}` |",
             f"| Contexto | `{context or 'N/A'}` |",
             f"| Fingerprint | `{fp}` |",
+        ]
+        if len(exc_msg_full) > 200:
+            body_parts += [
+                "",
+                "### Mensagem Completa",
+                "```",
+                exc_msg_full,
+                "```",
+            ]
+        body_parts += [
             "",
             "### Traceback",
             "```python",
@@ -387,6 +399,8 @@ def report_error_message(message: str, context: str = "", wait: bool = False) ->
         machine = _get_machine_hash()
         license_id = _get_license_key()
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        os_info = f"{platform.system()} {platform.release()} ({platform.version()})"
+        caller_stack = "".join(traceback.format_stack()[:-1]).strip()
 
         body_parts = [
             f"## ⚠️ {message[:200]}",
@@ -394,10 +408,17 @@ def report_error_message(message: str, context: str = "", wait: bool = False) ->
             f"| Campo | Valor |",
             f"|-------|-------|",
             f"| Versão | `{version}` |",
+            f"| Python | `{sys.version.split()[0]}` |",
             f"| Máquina | `{machine}` |",
             f"| Licença | `{license_id}` |",
+            f"| OS | `{os_info}` |",
             f"| Data/Hora | `{timestamp}` |",
             f"| Contexto | `{context or 'N/A'}` |",
+            "",
+            "### Stack de Chamada",
+            "```python",
+            caller_stack,
+            "```",
         ]
         body = "\n".join(body_parts)
 
@@ -443,9 +464,10 @@ def install_global_hooks() -> None:
     _original_threading_excepthook = threading.excepthook
 
     def _thread_excepthook(args):
+        thread_name = getattr(args.thread, "name", None) or str(args.thread)
         report_error(
             args.exc_type, args.exc_value, args.exc_traceback,
-            context=f"thread:{args.thread}",
+            context=f"thread:{thread_name}",
         )
         if _original_threading_excepthook:
             try:

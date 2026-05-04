@@ -1,10 +1,10 @@
 ---
 name: fretebot-provider
 description: >-
-  Use sempre que o usuário pedir para adicionar, criar, debugar ou ajustar uma transportadora (provider) no FreteBot/RomaneioBeta — qualquer menção a "nova transportadora", "nova carrier", "scraper de cotação", nomes como AGEX/BRASPRESS/RODONAVES/TRD/EUCATUR/ALFA/COOPEX/BAUER/BORNELLI/MENGUE/VIOPEX, ou pedidos para automatizar login/cotação em portal de frete brasileiro com Playwright. Cobre o padrão completo — subclasse de `ProviderBase`, login resiliente, preenchimento de formulário com máscaras BR (CNPJ/CEP/peso/valor), extração do resultado, retorno em `Cotacao`, registro em `__init__.py` e `CONFIG.example.toml`. Use também quando o usuário disser "o provider X não está pegando o resultado", "preciso atualizar os seletores da Y", ou enviar HTML capturado de um portal.
+  Use sempre que o usuário pedir para adicionar, criar, debugar ou ajustar uma transportadora (provider) no Fretio/RomaneioBeta — qualquer menção a "nova transportadora", "nova carrier", "scraper de cotação", nomes como AGEX/BRASPRESS/RODONAVES/TRD/EUCATUR/ALFA/COOPEX/BAUER/BORNELLI/MENGUE/VIOPEX, ou pedidos para automatizar login/cotação em portal de frete brasileiro com Playwright. Cobre o padrão completo — subclasse de `ProviderBase`, login resiliente, preenchimento de formulário com máscaras BR (CNPJ/CEP/peso/valor), extração do resultado, retorno em `Cotacao`, registro em `__init__.py` e `CONFIG.example.toml`. Use também quando o usuário disser "o provider X não está pegando o resultado", "preciso atualizar os seletores da Y", ou enviar HTML capturado de um portal.
 ---
 
-# Adicionando uma nova transportadora ao FreteBot
+# Adicionando uma nova transportadora ao Fretio
 
 Este projeto cota frete em vários portais brasileiros. Cada transportadora vira um **provider**: uma classe assíncrona que abre o Chrome via Playwright, faz login no portal, preenche o formulário de cotação, extrai o resultado e devolve um `Cotacao`. Todas as providers herdam de `ProviderBase` (em `app/fretebot/src/fretebot/providers/base.py`) e seguem o mesmo "esqueleto" — quando você acerta esse esqueleto, o resto é só HTML do portal específico.
 
@@ -250,9 +250,9 @@ Quando o arquivo `<nome>.py` estiver pronto, atualize 3 lugares:
 
 2. **`app/CONFIG.example.toml`** — adicione uma seção `[transportadoras.<nome>]` com `habilitado = false` por default e todas as chaves do `__init__` documentadas.
 
-3. **`installer/FreteBot.spec`** — adicione `"fretebot.providers.<nome>"` à lista `hiddenimports`. PyInstaller não detecta imports dinâmicos, então sem isso o `.exe` empacotado não vê o provider.
+3. **`installer/Fretio.spec`** — adicione `"fretio.providers.<nome>"` à lista `hiddenimports`. PyInstaller não detecta imports dinâmicos, então sem isso o `.exe` empacotado não vê o provider.
 
-Se o provider tem logo, jogue `app/assets/logos/<nome>.png` (idealmente 64x64 PNG transparente) — o `FreteBot.spec` já varre essa pasta.
+Se o provider tem logo, jogue `app/assets/logos/<nome>.png` (idealmente 64x64 PNG transparente) — o `Fretio.spec` já varre essa pasta.
 
 ## Testando
 
@@ -288,7 +288,7 @@ Rode com `headless=False` na primeira vez pra ver o que tá rolando. Quando esti
 |---|---|---|
 | `Chrome encerrou inesperadamente` | Chrome local não instalado ou path errado | `find_chrome()` em `base.py` levanta erro claro — instale o Chrome |
 | `Timeout 30000ms exceeded` no login | Seletor frágil ou modal cobrindo | Capture HTML de novo, prefira role/text, feche modais antes |
-| Funciona local, falha no `.exe` | Provider faltando em `hiddenimports` | Adicione no `FreteBot.spec` e rebuild |
+| Funciona local, falha no `.exe` | Provider faltando em `hiddenimports` | Adicione no `Fretio.spec` e rebuild |
 | Sessão perdida entre cotações em SPA | Você abriu `new_page()` | Em SPA reaproveite `self._page` e faça `goto("/inicio")` |
 | `last_error: ''` mas `cotear` retorna `None` | Esqueceu de setar `last_error` | Sempre defina antes de retornar `None` |
 | Resultado vazio mesmo aparecendo no browser | Portal usa XHR que carrega depois | Capture via `page.on("response", ...)` em vez de scrape do DOM |

@@ -2,18 +2,18 @@
 setlocal EnableDelayedExpansion
 
 REM ============================================================
-REM  FreteBot — Gerar ZIP de Atualização para GitHub Release
-REM  Roda APÓS o build.bat ter gerado dist\FreteBot\
-REM  Gera: installer\FreteBot-Update-X.Y.zip
+REM  Fretio — Gerar ZIP de Atualização para GitHub Release
+REM  Roda APÓS o build.bat ter gerado dist\Fretio\
+REM  Gera: installer\Fretio-Update-X.Y.zip
 REM ============================================================
 
 echo.
 echo ============================================================
-echo  FreteBot - Gerar ZIP de Atualização
+echo  Fretio - Gerar ZIP de Atualização
 echo ============================================================
 echo.
 
-set "DIST_DIR=%~dp0dist\FreteBot"
+set "DIST_DIR=%~dp0dist\Fretio"
 set "VERSION_FILE=%~dp0..\app\version.txt"
 
 if defined CI (
@@ -23,8 +23,8 @@ if defined CI (
 )
 
 REM Verificar se dist existe
-if not exist "%DIST_DIR%\FreteBot.exe" (
-    echo ERRO: dist\FreteBot\FreteBot.exe nao encontrado.
+if not exist "%DIST_DIR%\Fretio.exe" (
+    echo ERRO: dist\Fretio\Fretio.exe nao encontrado.
     echo Execute build.bat primeiro!
     %FB_PAUSE_CMD%
     exit /b 1
@@ -35,13 +35,13 @@ for /f "usebackq tokens=*" %%v in ("%VERSION_FILE%") do set "APP_VERSION=%%v"
 if not defined APP_VERSION set "APP_VERSION=0.0"
 echo Versao: !APP_VERSION!
 
-set "ZIP_NAME=FreteBot-Update-!APP_VERSION!.zip"
+set "ZIP_NAME=Fretio-Update-!APP_VERSION!.zip"
 set "ZIP_PATH=%~dp0installer\!ZIP_NAME!"
 
 REM Remover ZIP anterior se existir
 if exist "%ZIP_PATH%" del "%ZIP_PATH%"
 
-REM Criar ZIP com todo o conteudo de dist\FreteBot\
+REM Criar ZIP com todo o conteudo de dist\Fretio\
 echo Compactando distribuicao...
 powershell -NoProfile -Command "Compress-Archive -Path '%DIST_DIR%\*' -DestinationPath '%ZIP_PATH%' -Force"
 

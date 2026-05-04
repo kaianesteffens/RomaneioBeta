@@ -1,4 +1,4 @@
-name: Build and Release FreteBot
+name: Build and Release Fretio
 
 on:
   workflow_dispatch:
@@ -22,10 +22,14 @@ jobs:
       - name: Inject error reporting credentials
         shell: pwsh
         run: |
-          $gistId = "${{ secrets.ERROR_GIST_ID }}"
-          $token  = "${{ secrets.ERROR_REPORT_TOKEN }}"
+          $gistId    = "${{ secrets.ERROR_GIST_ID }}"
+          $token     = "${{ secrets.ERROR_REPORT_TOKEN }}"
+          $githubRepo = "kaianesteffens/RomaneioBeta-releases"
+          $licenseUrl = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
           $content = @(
-            '[fretebot]'
+            '[fretio]'
+            "github_repo = `"$githubRepo`""
+            "license_url = `"$licenseUrl`""
             "error_gist_id = `"$gistId`""
             "error_report_token = `"$token`""
           ) -join "`r`n"
@@ -35,7 +39,7 @@ jobs:
             [System.Text.Encoding]::UTF8
           )
           if ($gistId -and $token) {
-            Write-Host "[OK] Credenciais de error reporting injetadas em app\CONFIG.toml"
+            Write-Host "[OK] Credenciais injetadas em app\CONFIG.toml (github_repo, license_url, error reporting)"
           } else {
             Write-Host "::warning::ERROR_GIST_ID ou ERROR_REPORT_TOKEN nao definidos — error reporting desabilitado neste build"
           }
@@ -73,10 +77,10 @@ jobs:
         shell: pwsh
         run: |
           $ver = (Get-Content "app\version.txt").Trim()
-          $setup = "installer\installer\Romaneio-Beta-Setup-$ver.exe"
-          $zip = "installer\installer\FreteBot-Update-$ver.zip"
+          $setup = "installer\installer\Fretio-Setup-$ver.exe"
+          $zip = "installer\installer\Fretio-Update-$ver.zip"
           $launcher = "installer\installer\Romaneio.exe"
-          $distExe = "installer\dist\FreteBot\FreteBot.exe"
+          $distExe = "installer\dist\Fretio\Fretio.exe"
 
           if (!(Test-Path $distExe)) { throw "Executavel nao encontrado: $distExe" }
           if (!(Test-Path $zip)) { throw "ZIP de update nao encontrado: $zip" }
@@ -92,12 +96,12 @@ jobs:
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: romaneio-beta-windows-v${{ steps.meta.outputs.version }}
+          name: fretio-windows-v${{ steps.meta.outputs.version }}
           if-no-files-found: error
           path: |
-            installer/dist/FreteBot/**
-            installer/installer/Romaneio-Beta-Setup-${{ steps.meta.outputs.version }}.exe
-            installer/installer/FreteBot-Update-${{ steps.meta.outputs.version }}.zip
+            installer/dist/Fretio/**
+            installer/installer/Fretio-Setup-${{ steps.meta.outputs.version }}.exe
+            installer/installer/Fretio-Update-${{ steps.meta.outputs.version }}.zip
             installer/installer/Romaneio.exe
 
       - name: Commit version bump
@@ -121,14 +125,14 @@ jobs:
         run: |
           $ver = "${{ steps.meta.outputs.version }}"
           $tag = "v$ver"
-          $zip = "installer/installer/FreteBot-Update-$ver.zip"
-          $setup = "installer/installer/Romaneio-Beta-Setup-$ver.exe"
+          $zip = "installer/installer/Fretio-Update-$ver.zip"
+          $setup = "installer/installer/Fretio-Setup-$ver.exe"
 
           gh release view $tag --repo "kaianesteffens/RomaneioBeta-releases" 2>$null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag `
               --repo "kaianesteffens/RomaneioBeta-releases" `
-              --title "Romaneio Beta v$ver" `
+              --title "Fretio v$ver" `
               --latest `
               --notes "Build automatico Windows - v$ver"
           }

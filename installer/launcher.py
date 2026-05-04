@@ -1,11 +1,11 @@
 """
-FreteBot Launcher — bootstrapper universal sem versão no nome.
+Fretio Launcher — bootstrapper universal sem versão no nome.
 
 Fluxo:
-  1. Verifica %APPDATA%\\FreteBot\\app\\ por instalação existente
+  1. Verifica %APPDATA%\\Fretio\\app\\ por instalação existente
   2. Consulta GitHub pela release mais recente
   3. Baixa e extrai o ZIP de atualização se necessário
-  4. Lança FreteBot.exe
+  4. Lança Fretio.exe
 """
 from __future__ import annotations
 
@@ -28,8 +28,8 @@ except ImportError:
     _HAS_TK = False
 
 GITHUB_REPO = "kaianesteffens/RomaneioBeta-releases"
-APP_DIR = Path(os.environ.get("APPDATA", Path.home())) / "FreteBot" / "app"
-APP_EXE = APP_DIR / "FreteBot.exe"
+APP_DIR = Path(os.environ.get("APPDATA", Path.home())) / "Fretio" / "app"
+APP_EXE = APP_DIR / "Fretio.exe"
 VERSION_CANDIDATES = [
     APP_DIR / "version.txt",
     APP_DIR / "_internal" / "version.txt",
@@ -61,14 +61,14 @@ def _fetch_latest() -> dict | None:
     url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
     req = Request(url, headers={
         "Accept": "application/vnd.github+json",
-        "User-Agent": "FreteBot-Launcher/1.0",
+        "User-Agent": "Fretio-Launcher/1.0",
     })
     with urlopen(req, timeout=HTTP_TIMEOUT) as resp:
         return json.loads(resp.read())
 
 
 def _download(url: str, dest: Path, total: int, status_cb, progress_cb) -> None:
-    req = Request(url, headers={"User-Agent": "FreteBot-Launcher/1.0"})
+    req = Request(url, headers={"User-Agent": "Fretio-Launcher/1.0"})
     downloaded = 0
     with urlopen(req, timeout=180) as resp, open(dest, "wb") as f:
         while True:
@@ -94,7 +94,7 @@ def _launch_app() -> None:
 class _Window(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Romaneio Beta")
+        self.title("Fretio")
         self.geometry("400x148")
         self.resizable(False, False)
         self.configure(bg="#1e1e2e")
@@ -103,7 +103,7 @@ class _Window(tk.Tk):
         self.geometry(f"+{(sw - 400)//2}+{(sh - 148)//2}")
 
         self._lbl = tk.Label(
-            self, text="Iniciando Romaneio Beta...",
+            self, text="Iniciando Fretio...",
             bg="#1e1e2e", fg="#cdd6f4", font=("Segoe UI", 11),
         )
         self._lbl.pack(pady=(22, 6))
@@ -215,7 +215,7 @@ def _worker(win: "_Window | None") -> None:
 
         if needs_dl and zip_asset:
             ver_str = remote_ver or "?"
-            label(f"Baixando Romaneio Beta v{ver_str}...")
+            label(f"Baixando Fretio v{ver_str}...")
             progress(0)
 
             tmp = Path(os.environ.get("TEMP", APP_DIR.parent)) / "_romaneio_launcher.zip"
@@ -243,14 +243,14 @@ def _worker(win: "_Window | None") -> None:
             progress(100)
             status(f"v{ver_str} instalado com sucesso!")
         else:
-            label("Romaneio Beta está atualizado!")
+            label("Fretio está atualizado!")
             status(f"Versão {local_ver} — abrindo...")
 
         time.sleep(0.7)
         label("Abrindo aplicativo...")
 
         if not APP_EXE.exists():
-            raise FileNotFoundError(f"FreteBot.exe não encontrado em {APP_DIR}")
+            raise FileNotFoundError(f"Fretio.exe não encontrado em {APP_DIR}")
 
         _launch_app()
 

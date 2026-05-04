@@ -1,5 +1,5 @@
 """
-FreteBot Auto-Updater via GitHub Releases.
+Fretio Auto-Updater via GitHub Releases.
 
 Verifica se há nova versão disponível no GitHub e atualiza os arquivos
 do aplicativo automaticamente, sem precisar gerar um novo instalador.
@@ -58,7 +58,7 @@ def _github_api(url: str) -> Any:
     """Faz GET na API do GitHub e retorna JSON."""
     req = Request(url, headers={
         "Accept": "application/vnd.github+json",
-        "User-Agent": "FreteBot-Updater/1.0",
+        "User-Agent": "Fretio-Updater/1.0",
     })
     with urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
         return json.loads(resp.read())
@@ -81,7 +81,7 @@ def _parse_version(tag: str) -> tuple[int, ...]:
 def get_repo_from_config() -> str:
     """Lê o repositório GitHub do CONFIG ou retorna string vazia."""
     # Tenta ler de variável de ambiente primeiro
-    repo = os.environ.get("FRETEBOT_GITHUB_REPO", "").strip()
+    repo = os.environ.get("Fretio_GITHUB_REPO", "").strip()
     if repo:
         return repo
 
@@ -90,7 +90,7 @@ def get_repo_from_config() -> str:
         config_paths: list[Path] = []
         appdata = os.getenv("APPDATA")
         if appdata:
-            config_paths.append(Path(appdata) / "FreteBot" / "CONFIG.toml")
+            config_paths.append(Path(appdata) / "Fretio" / "CONFIG.toml")
         base = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
         config_paths.append(base / "CONFIG.toml")
 
@@ -98,7 +98,7 @@ def get_repo_from_config() -> str:
             if not cp.exists():
                 continue
             cfg = _load_toml_file(cp)
-            repo = cfg.get("fretebot", {}).get("github_repo", "")
+            repo = cfg.get("fretio", {}).get("github_repo", "")
             if repo:
                 return str(repo).strip()
     except Exception:
@@ -114,7 +114,7 @@ def check_for_update(
     Verifica se há uma versão mais nova no GitHub.
 
     Args:
-        repo: "owner/repo" (ex: "meu-usuario/FreteBot")
+        repo: "owner/repo" (ex: "meu-usuario/Fretio")
         current_version: versão atual (ex: "1.21")
 
     Returns:
@@ -165,7 +165,7 @@ def check_for_update(
 def _get_app_dir() -> Path:
     """Retorna o diretório raiz do app (onde está o exe ou script)."""
     if getattr(sys, "frozen", False):
-        # PyInstaller one-folder: exe está em dist/FreteBot/FreteBot.exe
+        # PyInstaller one-folder: exe está em dist/Fretio/Fretio.exe
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent
 
@@ -177,7 +177,7 @@ def _download_with_progress(
     callback: Optional[Callable[[str], None]] = None,
 ) -> None:
     """Baixa arquivo com progresso."""
-    req = Request(url, headers={"User-Agent": "FreteBot-Updater/1.0"})
+    req = Request(url, headers={"User-Agent": "Fretio-Updater/1.0"})
     with urlopen(req, timeout=120) as resp:
         downloaded = 0
         chunk_size = 64 * 1024  # 64 KB
@@ -265,8 +265,8 @@ def apply_update(
         # Arquivos/pastas protegidos (não sobrescrever)
         bat_content = f'''@echo off
 chcp 65001 >nul 2>&1
-title FreteBot - Atualizando...
-echo Aguardando FreteBot fechar...
+title Fretio - Atualizando...
+echo Aguardando Fretio fechar...
 
 :wait_loop
 tasklist /FI "PID eq {pid}" 2>nul | find /I "{pid}" >nul
@@ -275,7 +275,7 @@ if %ERRORLEVEL% == 0 (
     goto wait_loop
 )
 
-echo FreteBot fechou. Aplicando atualizacao v{info.version}...
+echo Fretio fechou. Aplicando atualizacao v{info.version}...
 timeout /t 2 /nobreak >nul
 
 xcopy /E /Y /I /Q "{source_dir}" "{app_dir}" >nul 2>&1
@@ -329,9 +329,9 @@ def _license_dir_update() -> Path:
     """Diretório para armazenar updates temporários."""
     appdata = os.getenv("APPDATA")
     if appdata:
-        d = Path(appdata) / "FreteBot" / "update"
+        d = Path(appdata) / "Fretio" / "update"
     else:
-        d = Path.home() / ".fretebot" / "update"
+        d = Path.home() / ".Fretio" / "update"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

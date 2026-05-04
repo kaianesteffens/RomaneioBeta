@@ -375,18 +375,33 @@ CAMPOS_CREDENCIAIS: dict[str, list[tuple[str, str, bool]]] = {
 }
 
 
-def _fretebot_appdata_dir() -> Path:
+def _migrate_appdata_fretebot_to_fretio() -> None:
+    """Migra %APPDATA%\\FreteBot → %APPDATA%\\Fretio na primeira execução após renomeação."""
+    appdata = os.getenv("APPDATA")
+    if not appdata:
+        return
+    old_dir = Path(appdata) / "FreteBot"
+    new_dir = Path(appdata) / "Fretio"
+    if old_dir.exists() and not new_dir.exists():
+        try:
+            import shutil
+            shutil.move(str(old_dir), str(new_dir))
+        except Exception:
+            pass
+
+
+def _fretio_appdata_dir() -> Path:
     appdata = os.getenv("APPDATA")
     if appdata:
-        d = Path(appdata) / "FreteBot"
+        d = Path(appdata) / "Fretio"
     else:
-        d = Path.cwd() / "FreteBot_data"
+        d = Path.cwd() / "Fretio_data"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def _empresas_dir() -> Path:
-    d = _fretebot_appdata_dir() / "empresas"
+    d = _fretio_appdata_dir() / "empresas"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -406,7 +421,7 @@ def _listar_empresas() -> list[str]:
 
 
 def _ultima_empresa_path() -> Path:
-    return _fretebot_appdata_dir() / "ultima_empresa.txt"
+    return _fretio_appdata_dir() / "ultima_empresa.txt"
 
 
 def _ler_ultima_empresa() -> str:
@@ -478,7 +493,7 @@ def _escrever_config_toml(config: dict[str, Any], path: Path) -> None:
 def _criar_config_empresa_vazia(nome: str) -> None:
     """Cria CONFIG.toml com todas as transportadoras desabilitadas."""
     config: dict[str, Any] = {
-        "fretebot": {"fator_cubagem": 6000, "cache_dir": "cache", "github_repo": "", "license_url": ""},
+        "fretio": {"fator_cubagem": 6000, "cache_dir": "cache", "github_repo": "", "license_url": ""},
         "romaneio": {"cep_origem": ""},
         "transportadoras": {
             "braspress": {"habilitado": False, "cnpj": "", "senha": "",
@@ -513,11 +528,11 @@ def _migrar_config_se_necessario() -> None:
     base = Path(__file__).resolve().parent
     candidatos = [
         base / "CONFIG.toml",
-        base / "fretebot" / "CONFIG.toml",
+        base / "Fretio" / "CONFIG.toml",
     ]
     appdata = os.getenv("APPDATA")
     if appdata:
-        candidatos.append(Path(appdata) / "FreteBot" / "CONFIG.toml")
+        candidatos.append(Path(appdata) / "Fretio" / "CONFIG.toml")
     for c in candidatos:
         if c.exists():
             destino = _empresa_config_path("darlu")
@@ -564,7 +579,7 @@ class EmpresaSelectorDialog(QDialog):
     def __init__(self, parent=None, dark: bool = True):
         super().__init__(parent)
         self._dark = dark
-        self.setWindowTitle("FreteBot — Selecionar Empresa")
+        self.setWindowTitle("Fretio — Selecionar Empresa")
         self.setFixedSize(420, 340)
         self.empresa_selecionada: str | None = None
         icon_path = _resource_path("assets/romaneio.ico")
@@ -678,7 +693,8 @@ class EmpresaSelectorDialog(QDialog):
             #SubtitleLabel {{ font-size: 12px; color: {c_muted}; }}
             QLabel {{ color: {c_ink}; }}
             QListWidget {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border};
-                          border-radius: 8px; padding: 6px; font-size: 13px; }}
+                          border-radius: 8px; padding: 6px; font-size: 13px; outline: none; }}
+            QListWidget:focus {{ border: 1px solid {c_border}; outline: none; }}
             QListWidget::item {{ padding: 8px; border-radius: 6px; }}
             QListWidget::item:selected {{ background: {c_accent}; color: #fff; }}
             QPushButton {{ background: {c_accent}; color: #fff; border: none; border-radius: 8px;
@@ -885,7 +901,7 @@ class ConfiguracoesDialog(QDialog):
         self.accept()
 
     def _apply_style(self):
-        fb_cfg = self.config.get("fretebot", {}) or {}
+        fb_cfg = self.config.get("fretio", {}) or {}
         dark = str(fb_cfg.get("ui_tema", "escuro")).lower() == "escuro"
         if dark:
             c_bg = "#0d1117"; c_panel = "#161b22"; c_panel2 = "#1c232c"; c_panel3 = "#21282f"
@@ -900,7 +916,9 @@ class ConfiguracoesDialog(QDialog):
             QLabel {{ color: {c_ink}; }}
             #TitleLabel {{ font-size: 18px; font-weight: 700; color: {c_ink}; }}
             #SettingsGroup {{ border: 1px solid {c_border}; border-radius: 8px;
-                             padding: 12px 10px 10px 10px; margin-top: 6px; background: {c_panel2}; }}
+                             padding: 12px 10px 10px 10px; margin-top: 6px; background: {c_panel}; }}
+            QGroupBox#SettingsGroup {{ border: 1px solid {c_border}; background: {c_panel}; border-radius: 8px; margin-top: 0px; }}
+            QGroupBox#SettingsGroup::title {{ subcontrol-origin: margin; height: 0px; width: 0px; padding: 0px; color: transparent; }}
             #TranspTitle {{ font-size: 17px; font-weight: 700; color: {c_ink};
                            padding: 6px 0 8px 0; }}
             #CredField {{ border: 1px solid {c_border}; border-radius: 6px; padding: 5px 8px;
@@ -951,7 +969,7 @@ class RomaneioWindow(QMainWindow):
         self._last_cotacao_results: list = []
         self.app_version = _carregar_versao_app()
         self.app_name = f"Fretio {self.app_version} \u2014 {empresa_nome}"
-        self._theme_mode = str((self._sessao.config.get("fretebot", {}) or {}).get("ui_tema", "sistema")).lower()
+        self._theme_mode = str((self._sessao.config.get("fretio", {}) or {}).get("ui_tema", "sistema")).lower()
         if self._theme_mode not in ("sistema", "claro", "escuro"):
             self._theme_mode = "sistema"
 
@@ -1670,7 +1688,26 @@ class RomaneioWindow(QMainWindow):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
-        # ── Card básico: empresa / CEP / paralelo ─────────────────────────────
+        self._cfg_ufs_cbs: dict = {}
+        self._cfg_hab_checks: dict = {}
+        self._cfg_cred_fields: dict = {}
+        tabs = QTabWidget()
+        tabs.setObjectName("MainTabs")
+        tabs.addTab(self._build_tab_empresa_inline(), "Empresa")
+        tabs.addTab(self._build_tab_ufs_inline(), "UFs Atendidas")
+        tabs.addTab(self._build_tab_credenciais_inline(), "Credenciais")
+        layout.addWidget(tabs, 1)
+        return page
+
+    def _build_tab_empresa_inline(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        content = QWidget()
+        vbox = QVBoxLayout(content)
+        vbox.setSpacing(10)
+        vbox.setContentsMargins(8, 8, 8, 8)
+
         card = QFrame()
         card.setObjectName("Card")
         form = QFormLayout(card)
@@ -1678,7 +1715,7 @@ class RomaneioWindow(QMainWindow):
         form.setSpacing(8)
         cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
         rom_cfg = cfg.get("romaneio", {}) or {}
-        fb_cfg = cfg.get("fretebot", {}) or {}
+        fb_cfg = cfg.get("fretio", {}) or {}
         self._cfg_cep_origem = QLineEdit(str(rom_cfg.get("cep_origem", "") or ""))
         self._cfg_cep_origem.setObjectName("InputField")
         self._cfg_paralelo = QLineEdit(str(int(fb_cfg.get("max_paralelo", 3) or 3)))
@@ -1699,18 +1736,15 @@ class RomaneioWindow(QMainWindow):
         actions.addStretch(1)
         actions.addWidget(btn_salvar)
         form.addRow(actions)
-        layout.addWidget(card)
 
-        # ── Tabs UFs Atendidas + Credenciais (inline) ─────────────────────────
-        self._cfg_ufs_cbs: dict = {}
-        self._cfg_hab_checks: dict = {}
-        self._cfg_cred_fields: dict = {}
-        tabs = QTabWidget()
-        tabs.setObjectName("MainTabs")
-        tabs.addTab(self._build_tab_ufs_inline(), "UFs Atendidas")
-        tabs.addTab(self._build_tab_credenciais_inline(), "Credenciais")
-        layout.addWidget(tabs, 1)
-        return page
+        vbox.addWidget(card)
+        vbox.addStretch(1)
+        scroll.setWidget(content)
+        wrapper = QWidget()
+        wl = QVBoxLayout(wrapper)
+        wl.setContentsMargins(0, 0, 0, 0)
+        wl.addWidget(scroll)
+        return wrapper
 
     def _build_tab_ufs_inline(self) -> QWidget:
         """Aba UFs Atendidas para a página de configurações inline."""
@@ -1858,7 +1892,7 @@ class RomaneioWindow(QMainWindow):
     def _on_toggle_tema(self, dark: bool) -> None:
         self._theme_mode = "escuro" if dark else "claro"
         cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
-        fb = cfg.setdefault("fretebot", {})
+        fb = cfg.setdefault("fretio", {})
         fb["ui_tema"] = self._theme_mode
         _escrever_config_toml(cfg, self._config_path)
         self._apply_style()
@@ -1870,7 +1904,7 @@ class RomaneioWindow(QMainWindow):
     def _salvar_config_embutido(self):
         cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
         rom = cfg.setdefault("romaneio", {})
-        fb = cfg.setdefault("fretebot", {})
+        fb = cfg.setdefault("fretio", {})
         rom["cep_origem"] = self._cfg_cep_origem.text().strip()
         try:
             fb["max_paralelo"] = max(1, min(7, int(self._cfg_paralelo.text().strip() or "3")))
@@ -2052,8 +2086,9 @@ class RomaneioWindow(QMainWindow):
                            border-top-right-radius: 8px; }}
             QTabBar::tab:selected {{ background: {c_panel}; color: {c_ink}; border-bottom-color: {c_panel}; }}
             #SettingsGroup {{ border: 1px solid {c_border}; border-radius: 8px;
-                             padding: 12px 10px 10px 10px; margin-top: 6px; background: {c_panel2}; }}
-            QGroupBox#SettingsGroup {{ border: 1px solid {c_border}; background: {c_panel2}; }}
+                             padding: 12px 10px 10px 10px; margin-top: 6px; background: {c_panel}; }}
+            QGroupBox#SettingsGroup {{ border: 1px solid {c_border}; background: {c_panel}; border-radius: 8px; margin-top: 0px; }}
+            QGroupBox#SettingsGroup::title {{ subcontrol-origin: margin; height: 0px; width: 0px; padding: 0px; color: transparent; }}
             #TranspTitle {{ font-size: 17px; font-weight: 700; color: {c_ink}; padding: 6px 0 8px 0; }}
             #CredField {{ border: 1px solid {c_border}; border-radius: 6px; padding: 5px 8px;
                          background: {c_panel2}; color: {c_ink}; }}
@@ -2114,7 +2149,7 @@ class RomaneioWindow(QMainWindow):
     def _show_page(self, index: int):
         self.stack.setCurrentIndex(index)
         if hasattr(self, "page_title_label"):
-            self.page_title_label.setText(self._page_titles.get(index, "FreteBot"))
+            self.page_title_label.setText(self._page_titles.get(index, "Fretio"))
         for btn_index, item in self._nav_buttons.items():
             if isinstance(item, NavItem):
                 item.set_active(btn_index == index)
@@ -2367,7 +2402,8 @@ class RomaneioWindow(QMainWindow):
                     login_status_callback=_login_status_callback,
                 ))
         except Exception as exc:
-            print(f"[FreteBot] Erro no pre-login: {exc}", file=sys.stderr, flush=True)
+            report_error(*sys.exc_info(), context="pre_login")
+            print(f"[fretio] Erro no pre-login: {exc}", file=sys.stderr, flush=True)
 
     def _run_async_cotacao(self):
         try:
@@ -2375,7 +2411,8 @@ class RomaneioWindow(QMainWindow):
                 asyncio.set_event_loop(self._loop)
                 self._loop.run_until_complete(self._cotar_transportadoras_async())
         except Exception as exc:
-            print(f"[FreteBot] Erro na cotação: {exc}", file=sys.stderr, flush=True)
+            report_error(*sys.exc_info(), context="run_async_cotacao")
+            print(f"[fretio] Erro na cotação: {exc}", file=sys.stderr, flush=True)
             self._post_event_safe(UpdateResultEvent(f"Erro ao cotar: {exc}"))
             self._post_event_safe(UpdateFinishedEvent())
 
@@ -2401,6 +2438,7 @@ class RomaneioWindow(QMainWindow):
             self._post_event_safe(UpdateResultEvent(resumo))
 
         except Exception as e:
+            report_error(*sys.exc_info(), context="cotar_async")
             self._post_event_safe(UpdateResultEvent(f"Erro ao cotar transportadoras: {e}"))
         finally:
             self._post_event_safe(UpdateFinishedEvent())
@@ -2617,8 +2655,8 @@ class RomaneioWindow(QMainWindow):
                     self._loop_lock.release()
             # Força encerramento de Chromes órfãos restantes
             try:
-                from cotacao_transportadoras import _kill_orphan_fretebot_chromes
-                _kill_orphan_fretebot_chromes()
+                from cotacao_transportadoras import _kill_orphan_Fretio_chromes
+                _kill_orphan_Fretio_chromes()
             except Exception:
                 pass
 
@@ -2902,7 +2940,8 @@ class RomaneioWindow(QMainWindow):
                 resultados = self._loop.run_until_complete(self._rastrear_notas_async())
             self._post_event_safe(RastreioFinishedEvent(resultados))
         except Exception as exc:
-            print(f"[FreteBot] Erro no rastreamento: {exc}", file=sys.stderr, flush=True)
+            report_error(*sys.exc_info(), context="rastreamento")
+            print(f"[fretio] Erro no rastreamento: {exc}", file=sys.stderr, flush=True)
             self._post_event_safe(RastreioFinishedEvent([]))
 
     async def _rastrear_notas_async(self):
@@ -2990,9 +3029,9 @@ class RomaneioWindow(QMainWindow):
         """Abre a pasta de screenshots no explorador de arquivos."""
         appdata = os.getenv("APPDATA")
         if appdata:
-            pasta = Path(appdata) / "FreteBot" / "rastreamento"
+            pasta = Path(appdata) / "Fretio" / "rastreamento"
         else:
-            pasta = Path.cwd() / "FreteBot_rastreamento"
+            pasta = Path.cwd() / "Fretio_rastreamento"
         pasta.mkdir(parents=True, exist_ok=True)
         os.startfile(str(pasta))
 
@@ -3087,7 +3126,7 @@ def _instalar_thread_excepthook():
     _original = threading.excepthook
     def _hook(args):
         msg = "".join(_tb.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
-        print(f"[FreteBot] Exceção em thread {args.thread}:\n{msg}",
+        print(f"[fretio] Exceção em thread {args.thread}:\n{msg}",
               file=sys.stderr, flush=True)
         try:
             import logging
@@ -3148,12 +3187,12 @@ def _executavel_instalacao_canonica() -> Path:
     local_appdata = os.getenv("LOCALAPPDATA", "").strip()
     if not local_appdata:
         return Path(sys.executable).resolve()
-    return Path(local_appdata) / "Programs" / "Romaneio Beta" / Path(sys.executable).name
+    return Path(local_appdata) / "Programs" / "Fretio" / Path(sys.executable).name
 
 
 def _avisar_instalacao_paralela(caminho_canonico: Path) -> None:
     msg = (
-        "Detectamos mais de uma cópia do FreteBot neste computador.\n\n"
+        "Detectamos mais de uma cópia do Fretio neste computador.\n\n"
         f"A instalação oficial é:\n{caminho_canonico}\n\n"
         "Esta cópia será encerrada para evitar conflito."
     )
@@ -3161,9 +3200,9 @@ def _avisar_instalacao_paralela(caminho_canonico: Path) -> None:
         import ctypes
         MB_OK = 0x00000000
         MB_ICONWARNING = 0x00000030
-        ctypes.windll.user32.MessageBoxW(None, msg, "FreteBot", MB_OK | MB_ICONWARNING)
+        ctypes.windll.user32.MessageBoxW(None, msg, "Fretio", MB_OK | MB_ICONWARNING)
     except Exception:
-        print(f"[FreteBot] {msg}", file=sys.stderr, flush=True)
+        print(f"[fretio] {msg}", file=sys.stderr, flush=True)
 
 
 def _garantir_instalacao_unica() -> bool:
@@ -3207,7 +3246,7 @@ def _garantir_instancia_unica() -> bool:
         create_mutex.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
         create_mutex.restype = wintypes.HANDLE
 
-        _SINGLE_INSTANCE_MUTEX_HANDLE = create_mutex(None, False, "Local\\FreteBot.Singleton.v1")
+        _SINGLE_INSTANCE_MUTEX_HANDLE = create_mutex(None, False, "Local\\Fretio.Singleton.v1")
         if not _SINGLE_INSTANCE_MUTEX_HANDLE:
             return True
 
@@ -3219,25 +3258,28 @@ def _garantir_instancia_unica() -> bool:
 
 def _avisar_instancia_ativa() -> None:
     msg = (
-        "O FreteBot já está em execução neste computador.\n\n"
+        "O Fretio já está em execução neste computador.\n\n"
         "Feche a janela atual antes de abrir outra instância."
     )
     try:
         import ctypes
         MB_OK = 0x00000000
         MB_ICONWARNING = 0x00000030
-        ctypes.windll.user32.MessageBoxW(None, msg, "FreteBot", MB_OK | MB_ICONWARNING)
+        ctypes.windll.user32.MessageBoxW(None, msg, "Fretio", MB_OK | MB_ICONWARNING)
     except Exception:
-        print(f"[FreteBot] {msg}", file=sys.stderr, flush=True)
+        print(f"[fretio] {msg}", file=sys.stderr, flush=True)
 
 
 def main():
+    # Migrar dados de Fretio → Fretio (uma vez, na primeira execução após renomeação)
+    _migrate_appdata_fretebot_to_fretio()
+
     # Redireciona stderr para arquivo de crash ANTES de qualquer import falhar
     _crash_log = None
     try:
         _appdata = os.getenv("APPDATA")
         if _appdata:
-            _log_dir = Path(_appdata) / "FreteBot"
+            _log_dir = Path(_appdata) / "Fretio"
             _log_dir.mkdir(parents=True, exist_ok=True)
             _crash_log = _log_dir / "crash.log"
             # Rotaciona se > 2 MB
@@ -3313,11 +3355,11 @@ def main():
 
         # Log de inicialização (diagnóstico: versão, caminhos, etc.)
         try:
-            from fretebot.logging_conf import setup_logging, get_logger
+            from fretio.logging_conf import setup_logging, get_logger
             setup_logging()
             _startup_logger = get_logger("startup")
             _startup_logger.info("="*60)
-            _startup_logger.info("FreteBot iniciando")
+            _startup_logger.info("Fretio iniciando")
             _startup_logger.info(f"Python: {sys.version}")
             _startup_logger.info(f"Frozen: {getattr(sys, 'frozen', False)}")
             _startup_logger.info(f"Exe: {sys.executable}")
@@ -3332,7 +3374,7 @@ def main():
                     _v = '?'
             _startup_logger.info(f"Versão: {_v}")
         except Exception as _log_err:
-            print(f"[FreteBot] Falha ao configurar logging: {_log_err}", file=sys.stderr, flush=True)
+            print(f"[fretio] Falha ao configurar logging: {_log_err}", file=sys.stderr, flush=True)
 
         _preparar_runtime_qt()
         QApplication.setAttribute(Qt.AA_UseSoftwareOpenGL, True)
@@ -3353,7 +3395,7 @@ def main():
                 while True:
                     _lic_key, _ok = QInputDialog.getText(
                         None,
-                        "Ativação — FreteBot",
+                        "Ativação — Fretio",
                         "Digite sua chave de licença:\n\n"
                         "Formato: FBOT-XXXX-XXXX-XXXX-XXXX",
                     )
@@ -3382,7 +3424,7 @@ def main():
                     # Dar chance de inserir outra chave
                     _lic_key2, _ok2 = QInputDialog.getText(
                         None,
-                        "Ativação — FreteBot",
+                        "Ativação — Fretio",
                         "Sua licença foi revogada.\n"
                         "Digite uma nova chave de licença:",
                     )
@@ -3402,7 +3444,7 @@ def main():
             raise
         except Exception as _lic_err:
             report_error(context="verificacao_licenca")
-            print(f"[FreteBot] Verificação de licença falhou: {_lic_err}", file=sys.stderr, flush=True)
+            print(f"[fretio] Verificação de licença falhou: {_lic_err}", file=sys.stderr, flush=True)
 
         # ── Verificação de atualização via GitHub ──
         try:
@@ -3434,7 +3476,7 @@ def main():
                         QMessageBox.information(
                             None,
                             "Atualização Concluída",
-                            f"FreteBot foi atualizado para v{_update_info.version}.\n"
+                            f"Fretio foi atualizado para v{_update_info.version}.\n"
                             "O aplicativo vai reiniciar automaticamente.",
                         )
                         restart_app()  # Lança o .bat e fecha o app
@@ -3447,7 +3489,7 @@ def main():
                         )
         except Exception as _upd_err:
             report_error(context="verificacao_atualizacao")
-            print(f"[FreteBot] Verificação de atualização falhou: {_upd_err}", file=sys.stderr, flush=True)
+            print(f"[fretio] Verificação de atualização falhou: {_upd_err}", file=sys.stderr, flush=True)
 
         _migrar_config_se_necessario()
 
@@ -3475,10 +3517,10 @@ def main():
     except Exception:
         crash_msg = _tb.format_exc()
         report_error(context="crash_fatal", wait=True)
-        print(f"[FreteBot] CRASH FATAL:\n{crash_msg}", file=sys.stderr, flush=True)
+        print(f"[fretio] CRASH FATAL:\n{crash_msg}", file=sys.stderr, flush=True)
         # Tenta mostrar msgbox para o usuário
         try:
-            QMessageBox.critical(None, "FreteBot - Erro Fatal", f"O aplicativo encontrou um erro:\n\n{crash_msg[:800]}")
+            QMessageBox.critical(None, "Fretio - Erro Fatal", f"O aplicativo encontrou um erro:\n\n{crash_msg[:800]}")
         except Exception:
             pass
         sys.exit(1)

@@ -1,13 +1,13 @@
 """Provider <Nome> - Automação via Playwright.
 
 Esqueleto inicial. Para criar uma nova transportadora:
-1. Copie este arquivo para app/fretebot/src/fretebot/providers/<nome>.py
+1. Copie este arquivo para app/Fretio/src/Fretio/providers/<nome>.py
 2. Renomeie a classe (ex: MinhaTransportadoraProvider).
 3. Ajuste LOGIN_URL e COTACAO_URL.
 4. Implemente _login, _preencher_cotacao e _extrair_resultado de acordo com
    os HTML capturados em app/<NOME>/*.txt.
-5. Registre em app/fretebot/src/fretebot/providers/__init__.py,
-   app/CONFIG.example.toml e installer/FreteBot.spec (hiddenimports).
+5. Registre em app/Fretio/src/Fretio/providers/__init__.py,
+   app/CONFIG.example.toml e installer/Fretio.spec (hiddenimports).
 """
 from datetime import datetime
 from typing import Optional
@@ -15,9 +15,9 @@ import re
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
-from fretebot.providers.base import ProviderBase, launch_browser_resilient
-from fretebot.models import Cotacao
-from fretebot.logging_conf import get_logger
+from Fretio.providers.base import ProviderBase, launch_browser_resilient
+from Fretio.models import Cotacao
+from Fretio.logging_conf import get_logger
 
 logger = get_logger(__name__)
 

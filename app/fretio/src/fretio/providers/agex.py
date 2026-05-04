@@ -4,9 +4,9 @@ from typing import Optional
 from decimal import Decimal, ROUND_HALF_UP
 import re
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
-from fretebot.providers.base import ProviderBase
-from fretebot.models import Cotacao
-from fretebot.logging_conf import get_logger
+from fretio.providers.base import ProviderBase
+from fretio.models import Cotacao
+from fretio.logging_conf import get_logger
 
 logger = get_logger(__name__)
 
@@ -58,6 +58,7 @@ class AGEXProvider(ProviderBase):
         self._page = None
         self._logged_in = False
         self.last_error: str | None = None
+        self._passo_atual: str = "inicio"
 
     def atualizar_carga(
         self,
@@ -225,7 +226,7 @@ class AGEXProvider(ProviderBase):
                 return
             logger.warning(f"[{self.nome}] Browser desconectado, reinicializando...")
             await self.cleanup()
-        from fretebot.providers.base import launch_browser_resilient
+        from fretio.providers.base import launch_browser_resilient
         self._browser = await launch_browser_resilient(
             headless=self.headless,
             args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
@@ -433,7 +434,7 @@ class AGEXProvider(ProviderBase):
         try:
             if self._page:
                 import os
-                debug_dir = os.path.join(os.environ.get("APPDATA", "."), "FreteBot")
+                debug_dir = os.path.join(os.environ.get("APPDATA", "."), "Fretio")
                 os.makedirs(debug_dir, exist_ok=True)
                 await self._page.screenshot(
                     path=os.path.join(debug_dir, f"agex_{sufixo}.png"), full_page=True
@@ -940,6 +941,7 @@ class AGEXProvider(ProviderBase):
     ) -> Optional[Cotacao]:
         try:
             self.last_error = None
+            self._passo_atual = "init_browser"
             await self._init_browser()
 
             if not self.cnpj_destinatario and not destino:
@@ -947,6 +949,7 @@ class AGEXProvider(ProviderBase):
                 logger.error(f"[{self.nome}] {self.last_error}")
                 return None
 
+            self._passo_atual = "login"
             if not await self._login():
                 if not self.last_error:
                     self.last_error = "Falha no login AGEX"
@@ -955,6 +958,7 @@ class AGEXProvider(ProviderBase):
             # AGEX é SPA — NÃO criar nova página (perde localStorage/auth).
             # Navegar para /dashboard para resetar estado antes da cotação.
             if self._logged_in:
+                self._passo_atual = "navegando_dashboard"
                 try:
                     await self._page.goto(
                         "https://cliente.agex.com.br/dashboard",
@@ -978,9 +982,11 @@ class AGEXProvider(ProviderBase):
                 logger.error(f"[{self.nome}] {self.last_error}")
                 return None
 
+            self._passo_atual = "preenchendo_cotacao"
             logger.info(f"[{self.nome}] Preenchendo cotação...")
             await self._preencher_cotacao(remetente, destinatario, peso, valor, tipo_pagador=tipo_pagador)
 
+            self._passo_atual = "aguardando_resultado"
             logger.info(f"[{self.nome}] Extraindo resultado...")
             resultado = await self._extrair_resultado()
             if not resultado:

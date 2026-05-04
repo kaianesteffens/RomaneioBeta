@@ -174,7 +174,7 @@ async def trazer_janela_frente(page) -> bool:
         return False
     try:
         titulo_original = await page.evaluate("document.title")
-        marcador = f"_FreteBot_{uuid.uuid4().hex[:8]}"
+        marcador = f"_Fretio_{uuid.uuid4().hex[:8]}"
         await page.evaluate(f"document.title = {marcador!r}")
         await page.wait_for_timeout(200)
 
@@ -204,7 +204,7 @@ async def ocultar_taskbar_por_pagina(page) -> bool:
         return False
     try:
         titulo_original = await page.evaluate("document.title")
-        marcador = f"_FreteBot_{uuid.uuid4().hex[:8]}"
+        marcador = f"_Fretio_{uuid.uuid4().hex[:8]}"
         await page.evaluate(f"document.title = {marcador!r}")
         await page.wait_for_timeout(200)
 

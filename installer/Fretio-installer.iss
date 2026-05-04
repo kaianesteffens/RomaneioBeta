@@ -1,9 +1,9 @@
-; FreteBot — Inno Setup Installer Script
-; Gera: FreteBot-Setup.exe
+; Fretio — Inno Setup Installer Script
+; Gera: Fretio-Setup.exe
 ; Requisito: Inno Setup 6+ (https://jrsoftware.org/isdl.php)
 
 #ifndef MyAppName
-  #define MyAppName      "Romaneio Beta"
+  #define MyAppName      "Fretio"
 #endif
 #ifndef MyAppVersion
   #define MyAppVersion   "1.0"
@@ -12,21 +12,21 @@
   #define MyAppPublisher "Darlu"
 #endif
 #ifndef MyAppExeName
-  #define MyAppExeName   "FreteBot.exe"
+  #define MyAppExeName   "Fretio.exe"
 #endif
 #ifndef MyAppURL
   #define MyAppURL       ""
 #endif
 #ifndef MyOutputBaseFilename
-  #define MyOutputBaseFilename "Romaneio-Beta-Setup"
+  #define MyOutputBaseFilename "Fretio-Setup"
 #endif
 #ifndef MySetupIconFile
   #define MySetupIconFile AddBackslash(SourcePath) + "assets\romaneio.ico"
 #endif
 
 ; Caminho relativo a partir deste .iss
-; Após PyInstaller: dist\FreteBot\ contém FreteBot.exe + deps
-#define DistDir        AddBackslash(SourcePath) + "dist\FreteBot"
+; Após PyInstaller: dist\Fretio\ contém Fretio.exe + deps
+#define DistDir        AddBackslash(SourcePath) + "dist\Fretio"
 
 [Setup]
 AppId={{A3F7B2D1-8E4C-4F9A-B5D6-1C2E3F4A5B6D}
@@ -60,15 +60,16 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Criar atalho na Área de Trabalho"; GroupDescription: "Atalhos adicionais:"; Flags: unchecked
 
 [Files]
-; Copia toda a pasta dist\FreteBot\ para {app}
+; Copia toda a pasta dist\Fretio\ para {app}
 Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; CONFIG.toml real (com credenciais) → %APPDATA%\FreteBot\ (sempre sobrescreve)
-Source: "{#DistDir}\_internal\CONFIG.toml"; DestDir: "{userappdata}\FreteBot"; DestName: "CONFIG.toml"; Flags: ignoreversion
+; CONFIG.toml com github_repo, license_url e error creds → %APPDATA%\Fretio\
+; onlyifdoesntexist: não sobrescreve configurações customizadas em reinstalações
+Source: "{#DistDir}\_internal\CONFIG.toml"; DestDir: "{userappdata}\\Fretio"; DestName: "CONFIG.toml"; Flags: onlyifdoesntexist
 
 [Dirs]
-Name: "{userappdata}\FreteBot"; Flags: uninsneveruninstall
-Name: "{userappdata}\FreteBot\cache"
+Name: "{userappdata}\\Fretio"; Flags: uninsneveruninstall
+Name: "{userappdata}\\Fretio\\cache"
 
 [Icons]
 ; Menu Iniciar
@@ -87,7 +88,7 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Executar {#MyAppName}"; Flags: 
 Type: filesandordirs; Name: "{app}"; Check: DeveSubstituirInstalacao
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{userappdata}\FreteBot\cache"
+Type: filesandordirs; Name: "{userappdata}\\Fretio\\cache"
 
 [Code]
 var
@@ -113,7 +114,7 @@ begin
   if _existeInstalacaoAtual() then
   begin
     _msg :=
-      'Já existe uma instalação do Romaneio Beta neste computador.' + #13#10 + #13#10 +
+      'Já existe uma instalação do Fretio neste computador.' + #13#10 + #13#10 +
       'Sim: Atualizar (recomendado).' + #13#10 +
       'Não: Substituir (instalação limpa).' + #13#10 +
       'Cancelar: Sair da instalação.';

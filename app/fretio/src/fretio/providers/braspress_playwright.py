@@ -5,9 +5,9 @@ import re
 
 from playwright.async_api import async_playwright
 
-from fretebot.providers.base import ProviderBase
-from fretebot.models import Cotacao
-from fretebot.logging_conf import get_logger
+from fretio.providers.base import ProviderBase
+from fretio.models import Cotacao
+from fretio.logging_conf import get_logger
 
 logger = get_logger(__name__)
 
@@ -150,7 +150,7 @@ class BraspressPlaywrightProvider(ProviderBase):
                 return
             logger.warning("[Braspress] Browser desconectado, reinicializando...")
             await self.cleanup()
-        from fretebot.providers.base import launch_browser_resilient
+        from fretio.providers.base import launch_browser_resilient
         self._browser = await launch_browser_resilient(
             headless=self.headless,
             args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
