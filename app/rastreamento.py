@@ -49,7 +49,7 @@ class ResultadoRastreio:
 _TRACKING_URLS: dict[str, str] = {
     "braspress": "https://www.braspress.com/rastreie-sua-encomenda/",
     "alfa": "https://alfatransportes.com.br/",
-    "trd": "https://platform.senior.com.br/logistica-tck/tms/tck-frontend/#/login/signup?tenant=ZEhKa2RISmhibk53YjNKMFpYTT0%3D",
+    "trd": "https://platform.senior.com.br/logistica-tck/tms/tck-frontend/#/login/tracking?tenant=ZEhKa2RISmhibk53YjNKMFpYTT0%3D",
     "agex": "https://cliente.agex.com.br/rastreamento",
     "eucatur": "https://ssw.inf.br/2/rastreamento?sigla_emp=EUC&sc=N&sl=N",
     "bauer": "",     # pagina de rastreamento removida (404)
@@ -129,7 +129,7 @@ async def _rastrear_braspress(
     cnpj_emitente: str,
     chave_acesso: str,
 ) -> None:
-    """Rastreio Braspress via HTTP direto (blue.braspress.com bloqueia Chrome headless)."""
+    """Rastreio Braspress via HTTP direto (blue.braspress.com pode bloquear muitos acessos)."""
     cnpj_limpo = re.sub(r'\D', '', cnpj_emitente) if cnpj_emitente else ""
     track_url = f"https://blue.braspress.com/site/w/tracking/find?cpfCnpj={cnpj_limpo}&pedidoNf={numero_nfe}"
     resultado.link_rastreio = track_url
@@ -141,6 +141,10 @@ async def _rastrear_braspress(
             timeout=15,
         ) as client:
             resp = await client.get(track_url)
+            if resp.status_code in (429, 403):
+                logger.warning(f"[RASTREIO-BRASPRESS] NF {numero_nfe}: blue.braspress bloqueou ({resp.status_code})")
+                resultado.status_texto = "Em trânsito — rastreamento bloqueado, verifique no site"
+                return
             resp.raise_for_status()
 
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -178,7 +182,6 @@ async def _rastrear_braspress(
             resultado.entregue = True
             resultado.status_texto = f"ENTREGUE em {entregue_em}" if entregue_em and entregue_em != "-" else "ENTREGUE"
             logger.info(f"[RASTREIO-BRASPRESS] NF {numero_nfe}: {resultado.status_texto}")
-            # Screenshot da pagina com detalhes expandidos via browser
             await _braspress_screenshot(resultado, numero_nfe, track_url)
         else:
             resultado.entregue = False
@@ -199,34 +202,41 @@ async def _rastrear_braspress(
 
 
 async def _braspress_screenshot(resultado: ResultadoRastreio, numero_nfe: str, track_url: str) -> None:
-    """Abre pagina de tracking no browser e tira screenshot com detalhes expandidos."""
+    """Abre pagina de tracking no browser e tira screenshot com todos os detalhes expandidos."""
     browser = None
     try:
         browser = await launch_browser_resilient(headless=True)
-        contexts = browser.contexts
-        if contexts:
-            page = contexts[0].pages[0] if contexts[0].pages else await contexts[0].new_page()
-        else:
-            ctx = await browser.new_context(viewport={"width": 1366, "height": 900})
-            page = await ctx.new_page()
+        ctx = await browser.new_context(viewport={"width": 1366, "height": 900})
+        page = await ctx.new_page()
 
-        await page.goto(track_url, wait_until="domcontentloaded", timeout=15000)
+        await page.goto(track_url, wait_until="networkidle", timeout=20000)
         await asyncio.sleep(3)
 
-        # Expandir "Ver linha do tempo"
-        try:
-            lupa = page.locator('a:has-text("Ver linha do tempo")').first
-            await lupa.click(timeout=5000)
-            await asyncio.sleep(2)
-        except Exception:
-            pass
-        # Expandir "Mais Detalhes"
-        try:
-            mais = page.locator('a:has-text("Mais Detalhes")').last
-            await mais.click(timeout=5000)
-            await asyncio.sleep(2)
-        except Exception:
-            pass
+        # 1. Clicar em "Detalhes do Rastreamento" (desktop) via JS para expandir o log detalhado
+        await page.evaluate("""
+            () => {
+                const spans = document.querySelectorAll('span');
+                const match = Array.from(spans).find(s =>
+                    s.textContent.trim() === 'Detalhes do Rastreamento' &&
+                    !s.closest('[id^="mobTimeline"]')
+                );
+                if (match) match.click();
+            }
+        """)
+        await asyncio.sleep(2)
+
+        # 2. Clicar em "Mais Detalhes" via JS para carregar ocorrências (inclusive elementos ocultos)
+        await page.evaluate("""
+            () => {
+                document.querySelectorAll('a').forEach(a => {
+                    const href = a.getAttribute('href') || '';
+                    if (href.includes('openDetalhesPend')) {
+                        a.click();
+                    }
+                });
+            }
+        """)
+        await asyncio.sleep(3)
 
         screenshot_path = _gerar_path_screenshot(numero_nfe)
         await page.screenshot(path=str(screenshot_path), full_page=True)
@@ -610,9 +620,128 @@ async def _rastrear_trd(
     cnpj_emitente: str,
     chave_acesso: str,
 ) -> None:
-    resultado.link_rastreio = _TRACKING_URLS["trd"]
-    resultado.status_texto = "Portal de rastreamento requer autenticação"
-    logger.info(f"[RASTREIO-TRD] NF {numero_nfe}: portal requer login")
+    """Rastreio TRD via API Senior TCK (endpoint público anônimo)."""
+    cnpj_limpo = re.sub(r'\D', '', cnpj_emitente or "")
+    if not cnpj_limpo or not numero_nfe:
+        resultado.status_texto = "CNPJ ou número de NF ausentes para rastreamento"
+        return
+
+    _TRD_API = (
+        "https://platform.senior.com.br/t/senior.com.br/bridge/1.0"
+        "/anonymous/rest/tms/tck/actions/externalTenantConsultaTracking"
+    )
+    _TRD_HEADERS = {
+        "ExternalUser": "true",
+        "X-Tenant": "trdtransportes",
+        "X-TenantDomain": "trdtransportes.com.br",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                _TRD_API,
+                headers=_TRD_HEADERS,
+                json={
+                    "identificadorCliente": cnpj_limpo,
+                    "documento": numero_nfe,
+                    "pageRequest": {"offset": 0, "size": 10},
+                },
+            )
+            if resp.status_code == 404:
+                resultado.status_texto = "NF não encontrada no sistema TRD"
+                logger.info(f"[RASTREIO-TRD] NF {numero_nfe}: não encontrada")
+                return
+            resp.raise_for_status()
+            data = resp.json()
+
+        lista = data.get("listaTracking", [])
+        if not lista:
+            resultado.status_texto = "NF não encontrada no sistema TRD"
+            logger.info(f"[RASTREIO-TRD] NF {numero_nfe}: lista vazia")
+            return
+
+        tracking = lista[0].get("tracking", {})
+        situacao = tracking.get("situacao", {})
+        tipo_sit = situacao.get("tipoSituacao", 0)
+        desc_sit = situacao.get("descricao", "")
+        data_entrega_raw = tracking.get("dataEntrega") or ""
+        data_prev_raw = tracking.get("dataPrevisaoEntrega") or ""
+
+        def _fmt_data(iso: str) -> str:
+            """Converte ISO 8601 UTC para DD/MM/AAAA."""
+            try:
+                dt = datetime.strptime(iso[:10], "%Y-%m-%d")
+                return dt.strftime("%d/%m/%Y")
+            except Exception:
+                return ""
+
+        # tipoSituacao 4 = Encerrado (entregue)
+        entregue = tipo_sit == 4 or bool(data_entrega_raw)
+
+        if entregue:
+            resultado.entregue = True
+            data_fmt = _fmt_data(data_entrega_raw) if data_entrega_raw else ""
+            resultado.status_texto = f"ENTREGUE em {data_fmt}" if data_fmt else "ENTREGUE"
+            logger.info(f"[RASTREIO-TRD] NF {numero_nfe}: {resultado.status_texto}")
+            await _trd_screenshot(resultado, numero_nfe, tracking.get("codigo", ""))
+        else:
+            resultado.entregue = False
+            data_prev_fmt = _fmt_data(data_prev_raw) if data_prev_raw else ""
+            if data_prev_fmt:
+                resultado.previsao_entrega = data_prev_fmt
+                resultado.status_texto = f"{desc_sit} — Previsão: {data_prev_fmt}" if desc_sit else f"Previsão: {data_prev_fmt}"
+            else:
+                resultado.status_texto = desc_sit or "Em trânsito"
+            logger.info(f"[RASTREIO-TRD] NF {numero_nfe}: {resultado.status_texto}")
+
+    except httpx.HTTPStatusError as e:
+        logger.warning(f"[RASTREIO-TRD] NF {numero_nfe}: HTTP {e.response.status_code}")
+        resultado.status_texto = f"Erro ao rastrear TRD (HTTP {e.response.status_code})"
+    except Exception as e:
+        msg = str(e or "").strip()
+        logger.warning(f"[RASTREIO-TRD] NF {numero_nfe}: erro: {msg}")
+        resultado.status_texto = f"Erro ao rastrear: {msg or 'falha desconhecida'}"
+
+
+async def _trd_screenshot(resultado: ResultadoRastreio, numero_nfe: str, codigo_tracking: str) -> None:
+    """Abre o portal TRD, entra o código de rastreio e tira screenshot."""
+    if not codigo_tracking:
+        return
+    _TRD_TRACKING_URL = _TRACKING_URLS["trd"]
+    browser = None
+    try:
+        browser = await launch_browser_resilient(headless=True)
+        ctx = await browser.new_context(viewport={"width": 1366, "height": 900})
+        page = await ctx.new_page()
+        await page.goto(_TRD_TRACKING_URL, wait_until="networkidle", timeout=30000)
+        campo = page.locator('input[name="codigoTracking"]').first
+        await campo.wait_for(state="visible", timeout=15000)
+        await campo.fill(codigo_tracking)
+        await page.locator('button.btn-success').first.click()
+        await asyncio.sleep(5)
+
+        # Expandir painel "Detalhes" (tabela com todas as etapas)
+        try:
+            btn_detalhes = page.locator('button:has-text("Detalhes")').first
+            await btn_detalhes.wait_for(state="visible", timeout=8000)
+            await btn_detalhes.click()
+            await asyncio.sleep(2)
+        except Exception:
+            pass
+
+        screenshot_path = _gerar_path_screenshot(numero_nfe)
+        await page.screenshot(path=str(screenshot_path), full_page=True)
+        resultado.screenshot_path = str(screenshot_path)
+        logger.info(f"[RASTREIO-TRD] Screenshot salvo: {screenshot_path}")
+    except Exception as e:
+        logger.warning(f"[RASTREIO-TRD] Erro no screenshot: {e}")
+    finally:
+        if browser:
+            try:
+                await browser.close()
+            except Exception:
+                pass
 
 
 async def _rastrear_agex(

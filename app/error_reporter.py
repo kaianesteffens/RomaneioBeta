@@ -31,6 +31,12 @@ _gist_id: str = ""
 _token: str = ""
 _initialized = False
 
+# Fallback global embutido no código (opcional).
+# Preencha no build/release para centralizar o reporte em todas as máquinas,
+# sem depender de CONFIG.toml local.
+_EMBEDDED_ERROR_GIST_ID: str = "2ddde308329101232774ee5b70d9d5e0"
+_EMBEDDED_ERROR_REPORT_TOKEN: str = "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"
+
 # ── Log de diagnóstico ────────────────────────────────────────────
 _LOG_MAX_BYTES = 100 * 1024  # 100 KB — rotaciona apagando metade quando ultrapassar
 _log_lock = threading.Lock()
@@ -91,9 +97,8 @@ def _load_toml_file(path: Path) -> dict:
 def _iter_config_candidates():
     """Gera candidatos de CONFIG.toml em ordem de preferência."""
     appdata = Path(os.getenv("APPDATA", ""))
-    # Raiz do APPDATA (legado / futuro uso)
+    # Caminhos atuais
     yield appdata / "Fretio" / "CONFIG.toml"
-    # Pasta de empresas — varre todas e usa a primeira com as chaves
     empresas_dir = appdata / "Fretio" / "empresas"
     if empresas_dir.exists():
         try:
@@ -102,11 +107,38 @@ def _iter_config_candidates():
                     yield emp_dir / "CONFIG.toml"
         except Exception:
             pass
+
+    # Fallback legado (pré-renomeação): %APPDATA%\FreteBot
+    # Mantém compatibilidade caso a migração tenha sido parcial.
+    yield appdata / "FreteBot" / "CONFIG.toml"
+    legacy_empresas_dir = appdata / "FreteBot" / "empresas"
+    if legacy_empresas_dir.exists():
+        try:
+            for emp_dir in sorted(legacy_empresas_dir.iterdir()):
+                if emp_dir.is_dir():
+                    yield emp_dir / "CONFIG.toml"
+        except Exception:
+            pass
+
     # Fallback: bundle PyInstaller e diretório do script
     meipass = getattr(sys, "_MEIPASS", "")
     if meipass:
         yield Path(meipass) / "CONFIG.toml"
     yield Path(__file__).parent / "CONFIG.toml"
+
+
+def _load_embedded_fallback() -> bool:
+    """Carrega credenciais embutidas no código/ambiente, se disponíveis."""
+    global _gist_id, _token, _initialized
+    gist_id = (_EMBEDDED_ERROR_GIST_ID or "").strip() or os.getenv("FRETIO_ERROR_GIST_ID", "").strip()
+    token = (_EMBEDDED_ERROR_REPORT_TOKEN or "").strip() or os.getenv("FRETIO_ERROR_REPORT_TOKEN", "").strip()
+    if gist_id and token:
+        _gist_id = gist_id
+        _token = token
+        _initialized = True
+        _diag("INFO", f"Credenciais carregadas do fallback embutido/ambiente | gist_id={gist_id[:8]}...")
+        return True
+    return False
 
 
 def _load_config() -> None:
@@ -136,6 +168,10 @@ def _load_config() -> None:
                 return
             else:
                 _diag("DEBUG", f"Config sem credenciais de report: {candidate} | gist_id={repr(gist_id)} token={'(presente)' if token else '(vazio)'}")
+        # Fallback final: credenciais embutidas no código/ambiente
+        if _load_embedded_fallback():
+            return
+
         # Nenhum arquivo tinha as chaves — NÃO marca como inicializado
         # para que a próxima chamada tente novamente (ex: config copiada depois)
         if candidates_checked:
@@ -172,7 +208,10 @@ def configure(config_path) -> None:
             _initialized = True
             _diag("INFO", f"configure(): credenciais carregadas de {config_path} | gist_id={gist_id[:8]}...")
         else:
-            _diag("WARN", f"configure(): {config_path} sem credenciais | gist_id={repr(gist_id)} token={'(presente)' if token else '(vazio)'} — tentará fallback em _load_config()")
+            if _load_embedded_fallback():
+                _diag("INFO", f"configure(): usando fallback embutido/ambiente (CONFIG sem credenciais): {config_path}")
+            else:
+                _diag("WARN", f"configure(): {config_path} sem credenciais | gist_id={repr(gist_id)} token={'(presente)' if token else '(vazio)'} — tentará fallback em _load_config()")
         # Se as chaves não existem/estão vazias: _initialized permanece False
         # para que _load_config() possa tentar os caminhos de fallback
     except Exception as e:

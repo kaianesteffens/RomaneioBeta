@@ -376,18 +376,115 @@ CAMPOS_CREDENCIAIS: dict[str, list[tuple[str, str, bool]]] = {
 
 
 def _migrate_appdata_fretebot_to_fretio() -> None:
-    """Migra %APPDATA%\\FreteBot → %APPDATA%\\Fretio na primeira execução após renomeação."""
+    """Migra %APPDATA%\\FreteBot → %APPDATA%\\Fretio e remove o diretório antigo.
+
+    Suporta dois casos:
+    1. Fretio ainda não existe → move o diretório inteiro.
+    2. Fretio já existe (criado em startup anterior) → faz merge não destrutivo
+       e preserva credenciais de reporte (error_gist_id/error_report_token)
+       quando presentes no legado e ausentes no destino.
+    """
     appdata = os.getenv("APPDATA")
     if not appdata:
         return
     old_dir = Path(appdata) / "FreteBot"
     new_dir = Path(appdata) / "Fretio"
-    if old_dir.exists() and not new_dir.exists():
+    if not old_dir.exists():
+        return
+
+    import shutil
+
+    if not new_dir.exists():
+        # Caso 1: diretório novo não existe → mover tudo de uma vez
         try:
-            import shutil
             shutil.move(str(old_dir), str(new_dir))
         except Exception:
             pass
+        return
+
+    def _load_toml(path: Path) -> dict[str, Any]:
+        try:
+            raw = path.read_text(encoding="utf-8-sig")
+        except Exception:
+            return {}
+        data = None
+        try:
+            import tomllib  # type: ignore[import]
+            data = tomllib.loads(raw)
+        except Exception:
+            pass
+        if data is None:
+            try:
+                import toml  # type: ignore[import-untyped]
+                data = toml.loads(raw)
+            except Exception:
+                pass
+        if data is None:
+            try:
+                import tomli as _tomli  # type: ignore[import-not-found]
+                data = _tomli.loads(raw)
+            except Exception:
+                pass
+        return data if isinstance(data, dict) else {}
+
+    def _backfill_report_credentials(src_cfg: Path, dst_cfg: Path) -> None:
+        """Preenche credenciais de reporte ausentes no destino, sem sobrescrever valores já definidos."""
+        try:
+            src_data = _load_toml(src_cfg)
+            dst_data = _load_toml(dst_cfg)
+
+            src_fb = src_data.get("fretio", {}) if isinstance(src_data.get("fretio", {}), dict) else {}
+            dst_fb = dst_data.get("fretio", {}) if isinstance(dst_data.get("fretio", {}), dict) else {}
+
+            changed = False
+            for key in ("error_gist_id", "error_report_token"):
+                src_val = str(src_fb.get(key, "") or "").strip()
+                dst_val = str(dst_fb.get(key, "") or "").strip()
+                if src_val and not dst_val:
+                    if not isinstance(dst_data.get("fretio"), dict):
+                        dst_data["fretio"] = {}
+                    dst_data["fretio"][key] = src_val
+                    changed = True
+
+            if changed:
+                _escrever_config_toml(dst_data, dst_cfg)
+        except Exception:
+            pass
+
+    def _merge_missing(src: Path, dst: Path) -> None:
+        if src.is_dir():
+            if dst.exists() and not dst.is_dir():
+                return
+            dst.mkdir(parents=True, exist_ok=True)
+            for child in sorted(src.iterdir(), key=lambda p: p.name.lower()):
+                _merge_missing(child, dst / child.name)
+            return
+
+        if not src.is_file():
+            return
+
+        if not dst.exists():
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(src), str(dst))
+            except Exception:
+                pass
+            return
+
+        if src.name.lower() == "config.toml":
+            _backfill_report_credentials(src, dst)
+
+    # Caso 2: Fretio já existe → merge não destrutivo do conteúdo legado.
+    try:
+        _merge_missing(old_dir, new_dir)
+    except Exception:
+        pass
+
+    # Remover diretório FreteBot após migração para evitar conflitos futuros
+    try:
+        shutil.rmtree(str(old_dir), ignore_errors=True)
+    except Exception:
+        pass
 
 
 def _fretio_appdata_dir() -> Path:
@@ -1200,6 +1297,9 @@ class RomaneioWindow(QMainWindow):
         self._notas_rastreio: list = []
         self._rastreio_card_widgets: list = []
         self._resultados_rastreio: list = []
+        self._rastreio_notas_subset = None
+        self._rastreio_card_offset = 0
+        self._rastreio_notas_para_thread = None
 
         content_wrap.addWidget(topbar)
 
@@ -2677,7 +2777,8 @@ class RomaneioWindow(QMainWindow):
             return
 
         erros = []
-        novas = 0
+        novas_notas = []
+        card_offset = len(self._rastreio_card_widgets)
         for arq in arquivos:
             try:
                 notas = extrair_nfe_arquivo(arq)
@@ -2690,7 +2791,7 @@ class RomaneioWindow(QMainWindow):
                     ):
                         continue
                     self._notas_rastreio.append(nf)
-                    novas += 1
+                    novas_notas.append(nf)
             except Exception as e:
                 erros.append(f"{Path(arq).name}: {e}")
 
@@ -2700,9 +2801,11 @@ class RomaneioWindow(QMainWindow):
                 "Alguns arquivos não puderam ser processados:\n\n" + "\n".join(erros)
             )
 
-        self._atualizar_lista_notas_rastreio()
-        if novas > 0:
-            self.label_info.setText(f"{novas} XML(s) carregado(s) — iniciando rastreamento...")
+        if novas_notas:
+            self._inserir_cards_novas_notas(novas_notas)
+            self._rastreio_notas_subset = list(novas_notas)
+            self._rastreio_card_offset = card_offset
+            self.label_info.setText(f"{len(novas_notas)} XML(s) carregado(s) — iniciando rastreamento...")
             self.label_info.setStyleSheet("color: #1f6feb;")
             self._iniciar_rastreamento()
 
@@ -2914,15 +3017,32 @@ class RomaneioWindow(QMainWindow):
             self._rastreio_placeholder = None
         for i, nf in enumerate(self._notas_rastreio, 1):
             card = self._criar_card_nfe(i, nf)
-            self._rastreio_cards_layout.insertWidget(i - 1, card)
+            self._rastreio_cards_layout.insertWidget(0, card)
+            self._rastreio_card_widgets.append(card)
+        self.btn_rastrear.setEnabled(True)
+
+    def _inserir_cards_novas_notas(self, novas_notas):
+        """Insere cards apenas para notas novas sem recriar os existentes."""
+        if not novas_notas:
+            return
+        if hasattr(self, "_rastreio_placeholder") and self._rastreio_placeholder:
+            self._rastreio_placeholder.deleteLater()
+            self._rastreio_placeholder = None
+        existing_count = len(self._notas_rastreio) - len(novas_notas)
+        for j, nf in enumerate(novas_notas):
+            indice = existing_count + j + 1
+            card = self._criar_card_nfe(indice, nf)
+            self._rastreio_cards_layout.insertWidget(0, card)
             self._rastreio_card_widgets.append(card)
         self.btn_rastrear.setEnabled(True)
 
     def _iniciar_rastreamento(self):
         """Inicia o rastreamento das NF-es carregadas."""
-        if not self._notas_rastreio:
+        notas_a_rastrear = self._rastreio_notas_subset if self._rastreio_notas_subset else self._notas_rastreio
+        if not notas_a_rastrear:
             QMessageBox.warning(self, "Aviso", "Nenhuma NF-e carregada para rastrear")
             return
+        self._rastreio_notas_para_thread = list(notas_a_rastrear)
         self.btn_rastrear.setEnabled(False)
         self.btn_select_nfe.setEnabled(False)
         self.rastreio_progress_bar.setVisible(True)
@@ -2945,9 +3065,9 @@ class RomaneioWindow(QMainWindow):
             self._post_event_safe(RastreioFinishedEvent([]))
 
     async def _rastrear_notas_async(self):
-        """Rastreia todas as NF-es carregadas."""
+        """Rastreia as NF-es do subset atual (ou todas se sem subset)."""
         notas_para_rastrear = []
-        for nf in self._notas_rastreio:
+        for nf in (self._rastreio_notas_para_thread or self._notas_rastreio):
             transp = identificar_transportadora(nf)
             notas_para_rastrear.append({
                 "transportadora": transp,
@@ -2964,9 +3084,10 @@ class RomaneioWindow(QMainWindow):
         """Atualiza o card da NF-e com o resultado do rastreamento."""
         self.label_info.setText(f"Rastreando... {indice}/{total}")
         self.label_info.setStyleSheet("color: #1f6feb;")
-        if indice < 1 or indice > len(self._rastreio_card_widgets):
+        idx = self._rastreio_card_offset + indice - 1
+        if idx < 0 or idx >= len(self._rastreio_card_widgets):
             return
-        card = self._rastreio_card_widgets[indice - 1]
+        card = self._rastreio_card_widgets[idx]
         status_label = card._rastreio_status_label
         detail_container = card._rastreio_detail_container
         if resultado.erro:
@@ -3024,6 +3145,9 @@ class RomaneioWindow(QMainWindow):
         self.label_info.setStyleSheet("color: #067647;")
         if com_screenshot:
             self.btn_abrir_screenshots.setVisible(True)
+        self._rastreio_notas_subset = None
+        self._rastreio_card_offset = 0
+        self._rastreio_notas_para_thread = None
 
     def _abrir_pasta_screenshots(self):
         """Abre a pasta de screenshots no explorador de arquivos."""
