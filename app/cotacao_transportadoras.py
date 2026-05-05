@@ -1147,12 +1147,15 @@ class TransportadoraSession:
                         if callback:
                             callback(f"Login: {nome}..." if attempt == 0 else f"Login: {nome} (tentativa {attempt + 1})...")
                         try:
-                            await asyncio.wait_for(asyncio.shield(prov.pre_login()), timeout=timeout_s)
+                            pre_login_result = await asyncio.wait_for(asyncio.shield(prov.pre_login()), timeout=timeout_s)
                         except asyncio.TimeoutError:
                             _log_diag(f"Pre-login {nome} timeout ({timeout_s}s) — login continuará na cotação")
                             if login_status_callback:
                                 login_status_callback(nome, "fail")
                             return nome, False
+                        if pre_login_result is False:
+                            detalhe = str(getattr(prov, "last_error", "") or "").strip()
+                            raise RuntimeError(detalhe or f"Pre-login {nome} retornou False")
                         _log_diag(f"Pre-login {nome} OK")
                         if login_status_callback:
                             login_status_callback(nome, "ok")

@@ -17,7 +17,7 @@ from typing import Optional, Any
 
 from playwright.async_api import async_playwright
 
-from fretio.providers.base import ProviderBase
+from fretio.providers.base import ProviderBase, _kill_proc, _register_owned_proc
 from fretio.models import Cotacao
 from fretio.logging_conf import get_logger
 
@@ -316,6 +316,7 @@ class AlfaProvider(ProviderBase):
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
+        _register_owned_proc(self._chrome_proc, source="alfa")
         for _ in range(30):
             await asyncio.sleep(0.5)
             try:
@@ -820,14 +821,7 @@ class AlfaProvider(ProviderBase):
                 except Exception:
                     pass
             # Garante encerramento
-            try:
-                self._chrome_proc.terminate()
-                self._chrome_proc.wait(timeout=5)
-            except Exception:
-                try:
-                    self._chrome_proc.kill()
-                except Exception:
-                    pass
+            _kill_proc(self._chrome_proc)
             # Marca como encerrado limpo
             try:
                 self._fix_preferences(self._user_data_dir())

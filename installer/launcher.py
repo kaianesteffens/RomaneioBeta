@@ -28,19 +28,41 @@ except ImportError:
     _HAS_TK = False
 
 GITHUB_REPO = "kaianesteffens/RomaneioBeta-releases"
-APP_DIR = Path(os.environ.get("APPDATA", Path.home())) / "Fretio" / "app"
-APP_EXE = APP_DIR / "Fretio.exe"
-VERSION_CANDIDATES = [
-    APP_DIR / "version.txt",
-    APP_DIR / "_internal" / "version.txt",
-]
+_APPDATA_ROOT = Path(os.environ.get("APPDATA", Path.home()))
+APP_DIR_CANDIDATES = (
+    _APPDATA_ROOT / "Fretio" / "app",
+    _APPDATA_ROOT / "FreteBot" / "app",
+)
+APP_EXE_NAMES = ("Fretio.exe", "FreteBot.exe")
 HTTP_TIMEOUT = 20
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-def _local_version() -> str | None:
-    for p in VERSION_CANDIDATES:
+def _resolve_app_dir() -> Path:
+    for app_dir in APP_DIR_CANDIDATES:
+        for exe_name in APP_EXE_NAMES:
+            if (app_dir / exe_name).exists():
+                return app_dir
+        if (app_dir / "version.txt").exists() or (app_dir / "_internal" / "version.txt").exists():
+            return app_dir
+    return APP_DIR_CANDIDATES[0]
+
+
+def _resolve_app_exe(app_dir: Path) -> Path:
+    for exe_name in APP_EXE_NAMES:
+        candidate = app_dir / exe_name
+        if candidate.exists():
+            return candidate
+    return app_dir / APP_EXE_NAMES[0]
+
+
+def _local_version(app_dir: Path) -> str | None:
+    version_candidates = [
+        app_dir / "version.txt",
+        app_dir / "_internal" / "version.txt",
+    ]
+    for p in version_candidates:
         if p.exists():
             return p.read_text(encoding="utf-8").strip()
     return None
@@ -85,8 +107,8 @@ def _download(url: str, dest: Path, total: int, status_cb, progress_cb) -> None:
                 )
 
 
-def _launch_app() -> None:
-    subprocess.Popen([str(APP_EXE)], cwd=str(APP_DIR))
+def _launch_app(app_exe: Path) -> None:
+    subprocess.Popen([str(app_exe)], cwd=str(app_exe.parent))
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -176,7 +198,9 @@ def _worker(win: "_Window | None") -> None:
             win.set_progress(p)
 
     try:
-        local_ver = _local_version()
+        app_dir = _resolve_app_dir()
+        app_exe = _resolve_app_exe(app_dir)
+        local_ver = _local_version(app_dir)
         label("Verificando atualizações...")
         status(f"Versão instalada: {local_ver or 'nenhuma'}")
 
@@ -192,7 +216,7 @@ def _worker(win: "_Window | None") -> None:
         if release:
             tag = release.get("tag_name", "")
             remote_ver = tag.lstrip("vV").strip()
-            if local_ver and APP_EXE.exists():
+            if local_ver and app_exe.exists():
                 if _parse_ver(remote_ver) <= _parse_ver(local_ver):
                     needs_dl = False
             if needs_dl:
@@ -200,7 +224,7 @@ def _worker(win: "_Window | None") -> None:
                 zip_asset = next(
                     (a for a in assets if a["name"].lower().endswith(".zip")), None
                 )
-        elif APP_EXE.exists():
+        elif app_exe.exists():
             needs_dl = False
         else:
             msg = (
@@ -218,7 +242,7 @@ def _worker(win: "_Window | None") -> None:
             label(f"Baixando Fretio v{ver_str}...")
             progress(0)
 
-            tmp = Path(os.environ.get("TEMP", APP_DIR.parent)) / "_romaneio_launcher.zip"
+            tmp = Path(os.environ.get("TEMP", app_dir.parent)) / "_romaneio_launcher.zip"
             _download(
                 zip_asset["browser_download_url"],
                 tmp,
@@ -231,15 +255,16 @@ def _worker(win: "_Window | None") -> None:
             status("Extraindo arquivos...")
             progress(96)
 
-            APP_DIR.mkdir(parents=True, exist_ok=True)
+            app_dir.mkdir(parents=True, exist_ok=True)
             with zipfile.ZipFile(tmp, "r") as zf:
-                zf.extractall(APP_DIR)
+                zf.extractall(app_dir)
 
             try:
                 tmp.unlink()
             except OSError:
                 pass
 
+            app_exe = _resolve_app_exe(app_dir)
             progress(100)
             status(f"v{ver_str} instalado com sucesso!")
         else:
@@ -249,10 +274,10 @@ def _worker(win: "_Window | None") -> None:
         time.sleep(0.7)
         label("Abrindo aplicativo...")
 
-        if not APP_EXE.exists():
-            raise FileNotFoundError(f"Fretio.exe não encontrado em {APP_DIR}")
+        if not app_exe.exists():
+            raise FileNotFoundError(f"Fretio.exe/FreteBot.exe não encontrado em {app_dir}")
 
-        _launch_app()
+        _launch_app(app_exe)
 
         if win:
             win.close()
