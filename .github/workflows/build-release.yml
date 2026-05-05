@@ -30,18 +30,42 @@ jobs:
             '[fretio]'
             "github_repo = `"$githubRepo`""
             "license_url = `"$licenseUrl`""
-            "error_gist_id = `"$gistId`""
-            "error_report_token = `"$token`""
           ) -join "`r`n"
+          if ($gistId -and $token) {
+            $content += "`r`nerror_gist_id = `"$gistId`""
+            $content += "`r`nerror_report_token = `"$token`""
+          } else {
+            $content += "`r`nerror_gist_id = `"`""
+            $content += "`r`nerror_report_token = `"`""
+          }
           [System.IO.File]::WriteAllText(
             (Join-Path $PWD "app\CONFIG.toml"),
             $content,
             [System.Text.Encoding]::UTF8
           )
+
+          # Também injeta fallback direto no código para não depender de CONFIG local.
           if ($gistId -and $token) {
-            Write-Host "[OK] Credenciais injetadas em app\CONFIG.toml (github_repo, license_url, error reporting)"
+            $reporterPath = Join-Path $PWD "app\error_reporter.py"
+            $src = [System.IO.File]::ReadAllText($reporterPath, [System.Text.Encoding]::UTF8)
+            $escapedGist = ($gistId -replace '\\', '\\\\') -replace '"', '\\"'
+            $escapedToken = ($token -replace '\\', '\\\\') -replace '"', '\\"'
+            $src = [System.Text.RegularExpressions.Regex]::Replace(
+              $src,
+              '_EMBEDDED_ERROR_GIST_ID:\s*str\s*=\s*".*?"',
+              "_EMBEDDED_ERROR_GIST_ID: str = `"$escapedGist`"",
+              1
+            )
+            $src = [System.Text.RegularExpressions.Regex]::Replace(
+              $src,
+              '_EMBEDDED_ERROR_REPORT_TOKEN:\s*str\s*=\s*".*?"',
+              "_EMBEDDED_ERROR_REPORT_TOKEN: str = `"$escapedToken`"",
+              1
+            )
+            [System.IO.File]::WriteAllText($reporterPath, $src, [System.Text.Encoding]::UTF8)
+            Write-Host "[OK] Credenciais injetadas em app\CONFIG.toml e app\error_reporter.py"
           } else {
-            Write-Host "::warning::ERROR_GIST_ID ou ERROR_REPORT_TOKEN nao definidos — error reporting desabilitado neste build"
+            Write-Host "::warning::ERROR_GIST_ID ou ERROR_REPORT_TOKEN nao definidos — mantendo fallback já existente no código"
           }
 
       - name: Install Inno Setup 6
