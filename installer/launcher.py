@@ -29,7 +29,11 @@ except ImportError:
 
 GITHUB_REPO = "kaianesteffens/RomaneioBeta-releases"
 _APPDATA_ROOT = Path(os.environ.get("APPDATA", Path.home()))
+_LOCALAPPDATA_ROOT = Path(os.environ.get("LOCALAPPDATA", _APPDATA_ROOT))
 APP_DIR_CANDIDATES = (
+    _LOCALAPPDATA_ROOT / "Programs" / "Fretio",
+    _LOCALAPPDATA_ROOT / "Programs" / "Romaneio Beta",
+    _LOCALAPPDATA_ROOT / "Programs" / "FreteBot",
     _APPDATA_ROOT / "Fretio" / "app",
     _APPDATA_ROOT / "FreteBot" / "app",
 )
