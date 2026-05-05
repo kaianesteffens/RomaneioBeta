@@ -110,6 +110,10 @@ if %ERRORLEVEL% neq 0 (
     %FB_PAUSE_CMD%
     exit /b 1
 )
+if exist "dist\Fretio\Fretio.exe" (
+    copy /Y "dist\Fretio\Fretio.exe" "dist\Fretio\FreteBot.exe" >nul
+    echo [OK] Alias legado gerado: dist\Fretio\FreteBot.exe
+)
 echo [OK] Executavel gerado em dist\Fretio\
 
 REM ── 5. Garantir arquivos de configuracao no dist ─────────────────

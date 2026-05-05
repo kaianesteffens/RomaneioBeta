@@ -1059,6 +1059,7 @@ class RomaneioWindow(QMainWindow):
         self._sessao = TransportadoraSession(config_path=self._config_path)
         self._loop = asyncio.new_event_loop()
         self._loop_lock = threading.Lock()
+        self._shutdown_started = threading.Event()
         self._cotacao_total = 0
         self._cotacao_concluidas = 0
         self._cep_origem_override = ""
@@ -2262,9 +2263,9 @@ class RomaneioWindow(QMainWindow):
         if hasattr(self, '_carrier_status_frame'):
             self._carrier_status_frame.setVisible(index == 2)
         # Pre-login so quando acessar Calcular Frete (2) ou Frete Fornecedores (3)
-        if index in (2, 3) and not self._pre_login_done:
+        if index in (2, 3) and not self._pre_login_done and not self._is_shutting_down():
             self._pre_login_done = True
-            threading.Thread(target=self._run_pre_login, daemon=True).start()
+            self._start_daemon_worker(self._run_pre_login)
 
     def _selecionar_arquivo(self):
         arquivo, _ = QFileDialog.getOpenFileName(
@@ -2345,6 +2346,8 @@ class RomaneioWindow(QMainWindow):
         self.btn_quote_colado.setEnabled(bool(texto))
 
     def _iniciar_cotacao(self, modo: str):
+        if self._is_shutting_down():
+            return
         self._modo_cotacao = modo
         self._cep_origem_override = ""
         self.btn_quote_colado.setEnabled(False)
@@ -2358,7 +2361,7 @@ class RomaneioWindow(QMainWindow):
         self._show_page(2)
         self.label_info.setText("Executando cotações de transportadoras...")
         self.label_info.setStyleSheet("color: #1f6feb;")
-        threading.Thread(target=self._run_async_cotacao, daemon=True).start()
+        self._start_daemon_worker(self._run_async_cotacao)
 
     def _cotar_romaneio_colado(self):
         texto = (self.romaneio_colado_text.toPlainText() or "").strip()
@@ -2460,6 +2463,8 @@ class RomaneioWindow(QMainWindow):
         return "\n".join(lines), cep_forn
 
     def _cotar_frete_fornecedor(self):
+        if self._is_shutting_down():
+            return
         try:
             romaneio_texto, cep_fornecedor = self._montar_romaneio_fornecedor()
         except (ValueError, Exception) as e:
@@ -2477,10 +2482,12 @@ class RomaneioWindow(QMainWindow):
         self.forn_result_text.setPlainText("Iniciando cota\u00e7\u00f5es...\nAguardando primeiras respostas...")
         self.label_info.setText("Cotando frete fornecedor...")
         self.label_info.setStyleSheet("color: #1f6feb;")
-        threading.Thread(target=self._run_async_cotacao, daemon=True).start()
+        self._start_daemon_worker(self._run_async_cotacao)
 
     def _post_event_safe(self, event: QEvent) -> None:
         """Posta evento na fila da UI de forma segura (ignora se app já encerrou)."""
+        if self._is_shutting_down():
+            return
         try:
             inst = QApplication.instance()
             if inst is not None:
@@ -2488,14 +2495,27 @@ class RomaneioWindow(QMainWindow):
         except Exception:
             pass
 
+    def _is_shutting_down(self) -> bool:
+        return self._shutdown_started.is_set()
+
+    def _start_daemon_worker(self, target) -> bool:
+        if self._is_shutting_down():
+            return False
+        threading.Thread(target=target, daemon=True).start()
+        return True
+
     def _run_pre_login(self):
         """Faz pre-login de todas as transportadoras em background."""
+        if self._is_shutting_down():
+            return
         def _status_callback(msg):
             self._post_event_safe(StatusUpdateEvent(msg))
         def _login_status_callback(nome, status):
             self._post_event_safe(LoginStatusEvent(nome, status))
         try:
             with self._loop_lock:
+                if self._is_shutting_down() or self._loop.is_closed():
+                    return
                 asyncio.set_event_loop(self._loop)
                 self._loop.run_until_complete(self._sessao.inicializar(
                     callback=_status_callback,
@@ -2506,15 +2526,20 @@ class RomaneioWindow(QMainWindow):
             print(f"[fretio] Erro no pre-login: {exc}", file=sys.stderr, flush=True)
 
     def _run_async_cotacao(self):
+        if self._is_shutting_down():
+            return
         try:
             with self._loop_lock:
+                if self._is_shutting_down() or self._loop.is_closed():
+                    return
                 asyncio.set_event_loop(self._loop)
                 self._loop.run_until_complete(self._cotar_transportadoras_async())
         except Exception as exc:
             report_error(*sys.exc_info(), context="run_async_cotacao")
             print(f"[fretio] Erro na cotação: {exc}", file=sys.stderr, flush=True)
-            self._post_event_safe(UpdateResultEvent(f"Erro ao cotar: {exc}"))
-            self._post_event_safe(UpdateFinishedEvent())
+            if not self._is_shutting_down():
+                self._post_event_safe(UpdateResultEvent(f"Erro ao cotar: {exc}"))
+                self._post_event_safe(UpdateFinishedEvent())
 
     async def _cotar_transportadoras_async(self):
         try:
@@ -2727,15 +2752,29 @@ class RomaneioWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Limpa browsers ao fechar a janela (com timeout para não travar)."""
+        if self._is_shutting_down():
+            event.accept()
+            return
+        self._shutdown_started.set()
+        try:
+            from fretio.providers.base import request_browser_shutdown
+            request_browser_shutdown()
+        except Exception:
+            pass
         event.accept()  # aceita logo para fechar a janela imediatamente
 
         def _cleanup_background():
-            if self._loop_lock.acquire(timeout=3):
+            if self._loop_lock.acquire(timeout=0.5):
                 try:
+                    if self._loop.is_closed():
+                        return
                     asyncio.set_event_loop(self._loop)
-                    self._loop.run_until_complete(
-                        asyncio.wait_for(self._sessao.cleanup(), timeout=5)
-                    )
+                    try:
+                        self._loop.run_until_complete(
+                            asyncio.wait_for(self._sessao.cleanup(), timeout=2)
+                        )
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 finally:
@@ -2753,12 +2792,6 @@ class RomaneioWindow(QMainWindow):
                     except Exception:
                         pass
                     self._loop_lock.release()
-            # Força encerramento de Chromes órfãos restantes
-            try:
-                from cotacao_transportadoras import _kill_orphan_Fretio_chromes
-                _kill_orphan_Fretio_chromes()
-            except Exception:
-                pass
 
         t = threading.Thread(target=_cleanup_background, daemon=True)
         t.start()
@@ -3038,6 +3071,8 @@ class RomaneioWindow(QMainWindow):
 
     def _iniciar_rastreamento(self):
         """Inicia o rastreamento das NF-es carregadas."""
+        if self._is_shutting_down():
+            return
         notas_a_rastrear = self._rastreio_notas_subset if self._rastreio_notas_subset else self._notas_rastreio
         if not notas_a_rastrear:
             QMessageBox.warning(self, "Aviso", "Nenhuma NF-e carregada para rastrear")
@@ -3050,19 +3085,24 @@ class RomaneioWindow(QMainWindow):
         self.btn_abrir_screenshots.setVisible(False)
         self.label_info.setText("Rastreando entregas...")
         self.label_info.setStyleSheet("color: #1f6feb;")
-        threading.Thread(target=self._run_rastreamento_async, daemon=True).start()
+        self._start_daemon_worker(self._run_rastreamento_async)
 
     def _run_rastreamento_async(self):
         """Executa o rastreamento em thread separada."""
+        if self._is_shutting_down():
+            return
         try:
             with self._loop_lock:
+                if self._is_shutting_down() or self._loop.is_closed():
+                    return
                 asyncio.set_event_loop(self._loop)
                 resultados = self._loop.run_until_complete(self._rastrear_notas_async())
             self._post_event_safe(RastreioFinishedEvent(resultados))
         except Exception as exc:
             report_error(*sys.exc_info(), context="rastreamento")
             print(f"[fretio] Erro no rastreamento: {exc}", file=sys.stderr, flush=True)
-            self._post_event_safe(RastreioFinishedEvent([]))
+            if not self._is_shutting_down():
+                self._post_event_safe(RastreioFinishedEvent([]))
 
     async def _rastrear_notas_async(self):
         """Rastreia as NF-es do subset atual (ou todas se sem subset)."""
@@ -3164,6 +3204,8 @@ class RomaneioWindow(QMainWindow):
 
     def _reiniciar_sessao(self):
         """Limpa sess\u00e3o atual e faz login novamente com a config atualizada."""
+        if self._is_shutting_down():
+            return
         self.label_info.setText("Reiniciando sess\u00f5es...")
         self.label_info.setStyleSheet("color: #1f6feb;")
         for dot in self._login_status_dots.values():
@@ -3177,15 +3219,19 @@ class RomaneioWindow(QMainWindow):
 
         def _do():
             with self._loop_lock:
+                if self._is_shutting_down() or self._loop.is_closed():
+                    return
                 asyncio.set_event_loop(self._loop)
                 try:
                     self._loop.run_until_complete(self._sessao.cleanup())
                 except Exception:
                     pass
+            if self._is_shutting_down():
+                return
             self._sessao = TransportadoraSession(config_path=self._config_path)
             self._run_pre_login()
 
-        threading.Thread(target=_do, daemon=True).start()
+        self._start_daemon_worker(_do)
 
     def _validar_local_entrega(self, pedidos):
         if not pedidos:

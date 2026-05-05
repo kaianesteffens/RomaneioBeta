@@ -55,6 +55,7 @@ class TRDProvider(ProviderBase):
         self._page = None
         self._playwright = None
         self._logged_in = False
+        self._login_frame: Frame | None = None
         self._passo_atual: str = "inicio"
 
     _STEALTH_JS = """
@@ -102,7 +103,118 @@ class TRDProvider(ProviderBase):
             ),
         )
         self._page = await self._context.new_page()
+        self._login_frame = None
         await self._page.add_init_script(self._STEALTH_JS)
+
+    @staticmethod
+    def _is_logged_in_url(url: Optional[str]) -> bool:
+        current_url = str(url or "").lower()
+        if not current_url or "platform.senior.com.br" not in current_url:
+            return False
+        if "/login" in current_url:
+            return False
+        return any(token in current_url for token in ("senior-x/#/", "/senior-x/", "documentos-frontend/#/"))
+
+    @staticmethod
+    def _is_transient_sso_url(url: Optional[str]) -> bool:
+        current_url = str(url or "").lower()
+        if not current_url:
+            return False
+        return any(
+            token in current_url
+            for token in (
+                "login-actions/authenticate",
+                "login-actions/required-action",
+                "sso.senior.com.br/realms/senior-x",
+                "platform.senior.com.br/login",
+            )
+        )
+
+    async def _recreate_page(self) -> None:
+        self._login_frame = None
+        try:
+            if self._page and not self._page.is_closed():
+                await self._page.close()
+        except Exception:
+            pass
+        self._page = await self._context.new_page()
+        await self._page.add_init_script(self._STEALTH_JS)
+
+    async def _coletar_feedback_login(self, login_context) -> str | None:
+        selectors = (
+            "#input-error",
+            ".alert-error",
+            ".alert-danger",
+            ".pf-c-alert__title",
+            ".kc-feedback-text",
+            ".invalid-feedback",
+            '[role="alert"]',
+        )
+        contexts = []
+        if login_context is not None:
+            contexts.append(login_context)
+        if self._page is not None and self._page not in contexts:
+            contexts.append(self._page)
+
+        for ctx in contexts:
+            for sel in selectors:
+                try:
+                    loc = ctx.locator(sel).first
+                    if await loc.count() == 0 or not await loc.is_visible():
+                        continue
+                    txt = re.sub(r"\s+", " ", (await loc.inner_text()).strip())
+                    if txt:
+                        return txt[:220]
+                except Exception:
+                    continue
+
+        for ctx in contexts:
+            try:
+                body_text = re.sub(r"\s+", " ", (await ctx.locator("body").inner_text()).strip())
+            except Exception:
+                continue
+            for marker in (
+                "usuário ou senha",
+                "usuario ou senha",
+                "credenciais inválidas",
+                "credenciais invalidas",
+                "erro ao autenticar",
+                "falha na autenticação",
+                "falha na autenticacao",
+            ):
+                idx = body_text.lower().find(marker)
+                if idx >= 0:
+                    return body_text[idx:idx + 220]
+        return None
+
+    async def _aguardar_conclusao_login(self, login_context, timeout_ms: int = 20000) -> tuple[str, str | None]:
+        deadline = time.monotonic() + (timeout_ms / 1000)
+        while time.monotonic() < deadline:
+            current_url = self._page.url
+            if self._is_logged_in_url(current_url):
+                return "ok", None
+
+            feedback = await self._coletar_feedback_login(login_context)
+            if feedback:
+                return "erro", f"Login falhou: {feedback} (URL: {current_url})"
+
+            try:
+                await self._page.wait_for_load_state('networkidle', timeout=1000)
+            except Exception:
+                pass
+
+            await self._page.wait_for_timeout(500)
+
+        current_url = self._page.url
+        if self._is_logged_in_url(current_url):
+            return "ok", None
+
+        feedback = await self._coletar_feedback_login(login_context)
+        if feedback:
+            return "erro", f"Login falhou: {feedback} (URL: {current_url})"
+        if self._is_transient_sso_url(current_url):
+            return "transient", f"SSO da TRD não concluiu autenticação (URL: {current_url})"
+        return "erro", f"Timeout aguardando conclusão do login TRD (URL: {current_url})"
     
     async def _login(self):
         """Faz login na plataforma Senior X (até 2 tentativas p/ erros de rede)."""
@@ -113,6 +225,7 @@ class TRDProvider(ProviderBase):
         for tentativa in range(1, max_tentativas + 1):
             try:
                 logger.info(f"[{self.nome}] Fazendo login (tentativa {tentativa})...")
+                self._login_frame = None
                 await self._page.goto(self.LOGIN_URL, wait_until='domcontentloaded', timeout=60000)
 
                 # Aguarda SSO (Keycloak) completar a cadeia de redirecionamentos antes de buscar campos
@@ -124,7 +237,7 @@ class TRDProvider(ProviderBase):
                 # Verificar se já estamos logados (redirecionou para o dashboard)
                 await self._page.wait_for_timeout(500)
                 current_url = self._page.url
-                if 'senior-x/#/' in current_url and '/login' not in current_url:
+                if self._is_logged_in_url(current_url):
                     logger.info(f"[{self.nome}] Já logado (redirecionou para dashboard: {current_url})")
                     self._logged_in = True
                     return True
@@ -175,7 +288,7 @@ class TRDProvider(ProviderBase):
                     # Último cheque: talvez a página tenha carregado mas demorou
                     await self._page.wait_for_timeout(5000)
                     # Re-check se redirecionou enquanto esperávamos
-                    if 'senior-x/#/' in self._page.url and '/login' not in self._page.url:
+                    if self._is_logged_in_url(self._page.url):
                         logger.info(f"[{self.nome}] Já logado (detectado após espera)")
                         self._logged_in = True
                         return True
@@ -184,7 +297,7 @@ class TRDProvider(ProviderBase):
                         logger.warning(f"[{self.nome}] Página de login (500 chars): {body_text[:500]}")
                     except Exception:
                         pass
-                    raise Exception(f"Campo de login não encontrado na página (URL: {self._page.url})")
+                    raise TimeoutError(f"Timeout aguardando campo de login TRD (URL: {self._page.url})")
                 await self._page.wait_for_timeout(500)
                 await email_loc.fill(self.email)
                 # Botão "Próximo" - tenta no frame se encontrou lá
@@ -209,29 +322,31 @@ class TRDProvider(ProviderBase):
                 except Exception:
                     await login_context.locator('button[type="submit"], input[type="submit"]').first.click(timeout=5000)
 
-                await self._page.wait_for_timeout(5000)
-                if 'senior-x/#/' in self._page.url:
+                status_login, detalhe_login = await self._aguardar_conclusao_login(login_context)
+                if status_login == "ok":
                     logger.info(f"[{self.nome}] Login realizado com sucesso")
                     self._logged_in = True
                     return True
 
-                self.last_error = f"Login falhou - URL: {self._page.url}"
-                logger.error(f"[{self.nome}] Login falhou - URL: {self._page.url}")
+                if status_login == "transient" and tentativa < max_tentativas:
+                    logger.warning(f"[{self.nome}] Login tentativa {tentativa} presa no SSO, recriando página: {detalhe_login}")
+                    await asyncio.sleep(3 * tentativa)
+                    await self._recreate_page()
+                    continue
+
+                self.last_error = detalhe_login or f"Login falhou - URL: {self._page.url}"
+                logger.error(f"[{self.nome}] {self.last_error}")
                 return False
 
             except Exception as e:
+                current_url = str(getattr(self._page, 'url', '') or '')
                 is_retryable = any(k in str(e) for k in (
                     "ERR_CONNECTION", "ERR_NAME", "ERR_TIMED_OUT", "net::", "Timeout",
-                ))
+                )) or self._is_transient_sso_url(current_url)
                 if is_retryable and tentativa < max_tentativas:
                     logger.warning(f"[{self.nome}] Login tentativa {tentativa} falhou (retry): {e}")
-                    await asyncio.sleep(5)
-                    try:
-                        await self._page.close()
-                    except Exception:
-                        pass
-                    self._page = await self._context.new_page()
-                    await self._page.add_init_script(self._STEALTH_JS)
+                    await asyncio.sleep(3 * tentativa)
+                    await self._recreate_page()
                     continue
                 self.last_error = f"Erro no login: {e}"
                 logger.error(f"[{self.nome}] Erro no login após {tentativa} tentativa(s): {e}")
@@ -241,7 +356,10 @@ class TRDProvider(ProviderBase):
     async def pre_login(self):
         """Inicializa browser e faz login antecipadamente."""
         await self._init_browser()
-        await self._login()
+        ok = await self._login()
+        if not ok:
+            raise RuntimeError(self.last_error or "Falha no login TRD")
+        return True
 
     async def cleanup(self):
         """Fecha o browser."""
@@ -263,6 +381,7 @@ class TRDProvider(ProviderBase):
         self._browser = None
         self._context = None
         self._page = None
+        self._login_frame = None
         self._logged_in = False
 
     @staticmethod

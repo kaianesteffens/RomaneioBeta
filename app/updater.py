@@ -28,6 +28,9 @@ from urllib.request import Request, urlopen
 
 # Timeout para requisições HTTP (segundos)
 _HTTP_TIMEOUT = 30
+_DEFAULT_GITHUB_REPO = "kaianesteffens/RomaneioBeta-releases"
+_GITHUB_REPO_ENV_VARS = ("Fretio_GITHUB_REPO", "FRETEBOT_GITHUB_REPO")
+_GITHUB_REPO_CONFIG_SECTIONS = ("fretio", "fretebot")
 
 
 @dataclass
@@ -81,9 +84,10 @@ def _parse_version(tag: str) -> tuple[int, ...]:
 def get_repo_from_config() -> str:
     """Lê o repositório GitHub do CONFIG ou retorna string vazia."""
     # Tenta ler de variável de ambiente primeiro
-    repo = os.environ.get("Fretio_GITHUB_REPO", "").strip()
-    if repo:
-        return repo
+    for env_name in _GITHUB_REPO_ENV_VARS:
+        repo = os.environ.get(env_name, "").strip()
+        if repo:
+            return repo
 
     # Tenta ler do CONFIG.toml
     try:
@@ -91,19 +95,26 @@ def get_repo_from_config() -> str:
         appdata = os.getenv("APPDATA")
         if appdata:
             config_paths.append(Path(appdata) / "Fretio" / "CONFIG.toml")
+            config_paths.append(Path(appdata) / "FreteBot" / "CONFIG.toml")
         base = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
         config_paths.append(base / "CONFIG.toml")
+        if base != Path(__file__).parent:
+            config_paths.append(Path(__file__).parent / "CONFIG.toml")
 
         for cp in config_paths:
             if not cp.exists():
                 continue
             cfg = _load_toml_file(cp)
-            repo = cfg.get("fretio", {}).get("github_repo", "")
-            if repo:
-                return str(repo).strip()
+            for section_name in _GITHUB_REPO_CONFIG_SECTIONS:
+                section = cfg.get(section_name, {})
+                if not isinstance(section, dict):
+                    continue
+                repo = str(section.get("github_repo", "") or "").strip()
+                if repo:
+                    return repo
     except Exception:
         pass
-    return ""
+    return _DEFAULT_GITHUB_REPO
 
 
 def check_for_update(

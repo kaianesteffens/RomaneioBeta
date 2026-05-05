@@ -7,7 +7,7 @@ import re
 import socket
 import subprocess
 from playwright.async_api import async_playwright
-from fretio.providers.base import ProviderBase, find_chrome, _find_free_port, _kill_proc
+from fretio.providers.base import ProviderBase, find_chrome, _find_free_port, _kill_proc, _register_owned_proc
 from fretio.providers._win_taskbar import ocultar_taskbar_por_pagina, trazer_janela_frente
 from fretio.models import Cotacao
 from fretio.logging_conf import get_logger
@@ -497,6 +497,7 @@ class RodonavesProvider(ProviderBase):
                 stderr=subprocess.DEVNULL,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
+            _register_owned_proc(self._chrome_proc, source="rodonaves")
 
             chrome_ok = False
             for _ in range(50):
