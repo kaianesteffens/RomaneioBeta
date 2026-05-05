@@ -142,6 +142,23 @@ if not exist "dist\Fretio\_internal\CONFIG.toml" (
     echo [OK] CONFIG.toml ja presente em dist\_internal
 )
 
+echo [OK] Normalizando defaults obrigatorios do CONFIG embutido...
+"%PY%" normalize_embedded_config.py "dist\Fretio\_internal\CONFIG.toml"
+if %ERRORLEVEL% neq 0 (
+    echo ERRO: Falha ao normalizar dist\Fretio\_internal\CONFIG.toml
+    %FB_PAUSE_CMD%
+    exit /b 1
+)
+if exist "dist\Fretio\CONFIG.toml" (
+    "%PY%" normalize_embedded_config.py "dist\Fretio\CONFIG.toml"
+    if %ERRORLEVEL% neq 0 (
+        echo ERRO: Falha ao normalizar dist\Fretio\CONFIG.toml
+        %FB_PAUSE_CMD%
+        exit /b 1
+    )
+)
+echo [OK] CONFIG embutido validado
+
 REM ── 6. Compilar instalador com Inno Setup ────────────────────
 echo.
 echo [5/5] Compilando instalador (Inno Setup)...

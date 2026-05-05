@@ -50,6 +50,10 @@ import asyncio
 import shutil
 import threading
 
+
+_DEFAULT_GITHUB_REPO = "kaianesteffens/RomaneioBeta-releases"
+_DEFAULT_LICENSE_URL = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
+
 from extrator_pedidos import ExtratorPedidos
 from cotacao_transportadoras import (
     cotar_transportadoras_romaneio_colado,
@@ -428,16 +432,19 @@ def _migrate_appdata_fretebot_to_fretio() -> None:
         return data if isinstance(data, dict) else {}
 
     def _backfill_report_credentials(src_cfg: Path, dst_cfg: Path) -> None:
-        """Preenche credenciais de reporte ausentes no destino, sem sobrescrever valores já definidos."""
+        """Preenche defaults e credenciais ausentes no destino, sem sobrescrever valores já definidos."""
         try:
             src_data = _load_toml(src_cfg)
             dst_data = _load_toml(dst_cfg)
 
-            src_fb = src_data.get("fretio", {}) if isinstance(src_data.get("fretio", {}), dict) else {}
+            _garantir_defaults_fretio(src_data)
             dst_fb = dst_data.get("fretio", {}) if isinstance(dst_data.get("fretio", {}), dict) else {}
+            if _garantir_defaults_fretio(dst_data):
+                dst_fb = dst_data.get("fretio", {}) if isinstance(dst_data.get("fretio", {}), dict) else {}
 
             changed = False
-            for key in ("error_gist_id", "error_report_token"):
+            src_fb = src_data.get("fretio", {}) if isinstance(src_data.get("fretio", {}), dict) else {}
+            for key in ("github_repo", "license_url", "error_gist_id", "error_report_token"):
                 src_val = str(src_fb.get(key, "") or "").strip()
                 dst_val = str(dst_fb.get(key, "") or "").strip()
                 if src_val and not dst_val:
@@ -587,10 +594,51 @@ def _escrever_config_toml(config: dict[str, Any], path: Path) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _garantir_defaults_fretio(config: dict[str, Any]) -> bool:
+    """Garante defaults mínimos para atualização/licenciamento em configs legados."""
+    changed = False
+    source_sections: list[dict[str, Any]] = []
+    for section_name in ("fretio", "fretebot"):
+        section = config.get(section_name)
+        if isinstance(section, dict):
+            source_sections.append(section)
+
+    fretio_cfg = config.get("fretio")
+    if not isinstance(fretio_cfg, dict):
+        fretio_cfg = {}
+        config["fretio"] = fretio_cfg
+        changed = True
+
+    def _coletar_valor(key: str, fallback: str = "") -> str:
+        for section in source_sections:
+            value = str(section.get(key, "") or "").strip()
+            if value:
+                return value
+        return fallback
+
+    required_defaults = {
+        "github_repo": _DEFAULT_GITHUB_REPO,
+        "license_url": _DEFAULT_LICENSE_URL,
+    }
+    for key, fallback in required_defaults.items():
+        current = str(fretio_cfg.get(key, "") or "").strip()
+        if current:
+            continue
+        fretio_cfg[key] = _coletar_valor(key, fallback)
+        changed = True
+
+    return changed
+
+
 def _criar_config_empresa_vazia(nome: str) -> None:
     """Cria CONFIG.toml com todas as transportadoras desabilitadas."""
     config: dict[str, Any] = {
-        "fretio": {"fator_cubagem": 6000, "cache_dir": "cache", "github_repo": "", "license_url": ""},
+        "fretio": {
+            "fator_cubagem": 6000,
+            "cache_dir": "cache",
+            "github_repo": _DEFAULT_GITHUB_REPO,
+            "license_url": _DEFAULT_LICENSE_URL,
+        },
         "romaneio": {"cep_origem": ""},
         "transportadoras": {
             "braspress": {"habilitado": False, "cnpj": "", "senha": "",
@@ -615,6 +663,7 @@ def _criar_config_empresa_vazia(nome: str) -> None:
                        "ufs_atendidas": []},
         },
     }
+    _garantir_defaults_fretio(config)
     _escrever_config_toml(config, _empresa_config_path(nome))
 
 
@@ -630,11 +679,24 @@ def _migrar_config_se_necessario() -> None:
     appdata = os.getenv("APPDATA")
     if appdata:
         candidatos.append(Path(appdata) / "Fretio" / "CONFIG.toml")
+        candidatos.append(Path(appdata) / "FreteBot" / "CONFIG.toml")
     for c in candidatos:
         if c.exists():
             destino = _empresa_config_path("darlu")
             destino.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(str(c), str(destino))
+            try:
+                raw = destino.read_text(encoding="utf-8-sig")
+                try:
+                    import tomllib  # type: ignore[import]
+                    data = tomllib.loads(raw)
+                except Exception:
+                    import toml  # type: ignore[import-untyped]
+                    data = toml.loads(raw)
+                if isinstance(data, dict) and _garantir_defaults_fretio(data):
+                    _escrever_config_toml(data, destino)
+            except Exception:
+                pass
             _salvar_ultima_empresa("darlu")
             return
     _criar_config_empresa_vazia("default")
@@ -3357,7 +3419,24 @@ def _executavel_instalacao_canonica() -> Path:
     local_appdata = os.getenv("LOCALAPPDATA", "").strip()
     if not local_appdata:
         return Path(sys.executable).resolve()
-    return Path(local_appdata) / "Programs" / "Fretio" / Path(sys.executable).name
+    exe_names = [Path(sys.executable).name, "Fretio.exe", "FreteBot.exe"]
+    vistos: set[str] = set()
+    candidatos_dirs = [
+        Path(local_appdata) / "Programs" / "Fretio",
+        Path(local_appdata) / "Programs" / "Romaneio Beta",
+        Path(local_appdata) / "Programs" / "FreteBot",
+    ]
+    fallback = candidatos_dirs[0] / exe_names[0]
+    for base_dir in candidatos_dirs:
+        for exe_name in exe_names:
+            exe_name_norm = exe_name.lower()
+            if exe_name_norm in vistos:
+                continue
+            vistos.add(exe_name_norm)
+            candidato = base_dir / exe_name
+            if candidato.exists():
+                return candidato
+    return fallback
 
 
 def _avisar_instalacao_paralela(caminho_canonico: Path) -> None:
