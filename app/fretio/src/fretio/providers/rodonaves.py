@@ -8,7 +8,13 @@ import socket
 import subprocess
 from playwright.async_api import async_playwright
 from fretio.providers.base import ProviderBase, find_chrome, _find_free_port, _kill_proc, _register_owned_proc
-from fretio.providers._win_taskbar import ocultar_taskbar_por_pagina, trazer_janela_frente
+from fretio.providers._win_taskbar import (
+    ocultar_taskbar_por_pagina,
+    posicionar_janela_por_pagina,
+    posicionar_janela_por_pid,
+    trazer_janela_frente,
+)
+from fretio.providers.provider_utils import _digits, get_stealth_script
 from fretio.models import Cotacao
 from fretio.logging_conf import get_logger
 
@@ -26,130 +32,16 @@ _CHROME_UA = (
 
 # Script de stealth injetado antes de qualquer página carregar.
 # Remove sinais de automação que o reCAPTCHA usa para escalar dificuldade.
-_STEALTH_JS = """
-// 1. navigator.webdriver = undefined
-Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-
-// 2. Simula plugins reais (Chrome sem plugins = sinal de bot)
-Object.defineProperty(navigator, 'plugins', {
-    get: () => {
-        const arr = [
-            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format',
-              0: { type: 'application/x-google-chrome-pdf', suffixes: 'pdf', description: 'Portable Document Format' }, length: 1 },
-            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '',
-              0: { type: 'application/pdf', suffixes: 'pdf', description: '' }, length: 1 },
-            { name: 'Native Client', filename: 'internal-nacl-plugin', description: '',
-              0: { type: 'application/x-nacl', suffixes: '', description: 'Native Client Executable' },
-              1: { type: 'application/x-pnacl', suffixes: '', description: 'Portable Native Client Executable' }, length: 2 },
-        ];
-        arr.refresh = () => {};
-        return arr;
-    }
-});
-
-// 3. Simula mimeTypes
-Object.defineProperty(navigator, 'mimeTypes', {
-    get: () => {
-        const arr = [
-            { type: 'application/x-google-chrome-pdf', suffixes: 'pdf', description: 'Portable Document Format', enabledPlugin: {} },
-            { type: 'application/pdf', suffixes: 'pdf', description: '', enabledPlugin: {} },
-        ];
-        return arr;
-    }
-});
-
-// 4. languages coerente com locale pt-BR
-Object.defineProperty(navigator, 'languages', { get: () => ['pt-BR', 'pt', 'en-US', 'en'] });
-
-// 5. chrome.runtime (existe em Chrome real, ausente em Playwright)
-if (!window.chrome) window.chrome = {};
-if (!window.chrome.runtime) window.chrome.runtime = { id: undefined };
-// chrome.app / chrome.csi para parecer Chrome real
-if (!window.chrome.app) {
-    window.chrome.app = {
-        isInstalled: false,
-        InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
-        RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
-        getDetails: () => null,
-        getIsInstalled: () => false,
-        installState: () => 'not_installed',
-        runningState: () => 'cannot_run',
-    };
-}
-
-// 6. Permissions.query — evita leak de "denied" para notification
-const origQuery = window.navigator.permissions?.query?.bind(window.navigator.permissions);
-if (origQuery) {
-    window.navigator.permissions.query = (params) => {
-        if (params.name === 'notifications') {
-            return Promise.resolve({ state: Notification.permission });
-        }
-        return origQuery(params);
-    };
-}
-
-// 7. Esconde detecção de CDP (Chrome DevTools Protocol)
-// reCAPTCHA verifica window.cdc_adoQpoasnfa76pfcZLmcfl_* props
-(function() {
-    const props = Object.getOwnPropertyNames(window).filter(p => /^cdc_/.test(p));
-    for (const p of props) { delete window[p]; }
-})();
-
-// 8. Falsifica connection.rtt (IP fingerprint via RTT)
-if (navigator.connection) {
-    Object.defineProperty(navigator.connection, 'rtt', { get: () => 50 });
-}
-
-// 9. Garante que screen dimensions são coerentes
-Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
-Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
-
-// 10. navigator.hardwareConcurrency (automação frequentemente reporta 0 ou 2)
-Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-
-// 11. navigator.deviceMemory (ausente em automação)
-Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-
-// 12. WebGL vendor/renderer (evita fingerprint de "SwiftShader" que denuncia headless)
-(function() {
-    const getParam = WebGLRenderingContext.prototype.getParameter;
-    WebGLRenderingContext.prototype.getParameter = function(param) {
-        if (param === 37445) return 'Google Inc. (NVIDIA)';    // UNMASKED_VENDOR_WEBGL
-        if (param === 37446) return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650, OpenGL 4.5)'; // UNMASKED_RENDERER_WEBGL
-        return getParam.call(this, param);
-    };
-    if (typeof WebGL2RenderingContext !== 'undefined') {
-        const getParam2 = WebGL2RenderingContext.prototype.getParameter;
-        WebGL2RenderingContext.prototype.getParameter = function(param) {
-            if (param === 37445) return 'Google Inc. (NVIDIA)';
-            if (param === 37446) return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1650, OpenGL 4.5)';
-            return getParam2.call(this, param);
-        };
-    }
-})();
-
-// 13. Falsifica Notification.permission (evita sinal de "default" em automação)
-try {
-    Object.defineProperty(Notification, 'permission', { get: () => 'default' });
-} catch(e) {}
-
-// 14. Remove sourceURL/sourceMapping headers que indicam Playwright
-(function() {
-    const origEval = window.eval;
-    window.eval = function() {
-        try { return origEval.apply(this, arguments); }
-        catch(e) { throw e; }
-    };
-    window.eval.toString = () => 'function eval() { [native code] }';
-})();
-"""
+_STEALTH_JS = get_stealth_script()
 
 
 class RodonavesProvider(ProviderBase):
     """Provider Rodonaves via portal cliente.rte.com.br (seletores gravados)."""
 
     PORTAL_URL = "https://cliente.rte.com.br/Quotation"
+    BASE_URL = "https://cliente.rte.com.br"
     CAPTCHA_MAX_WAIT_S = 45
+    _digits = staticmethod(_digits)
 
     def __init__(
         self,
@@ -169,6 +61,7 @@ class RodonavesProvider(ProviderBase):
         self.login_url = str(login_url or "").strip()
         self.cotacao_url = str(cotacao_url or "").strip()
         self.headless = bool(headless)
+        self._effective_headless = bool(headless)
         self.last_error: str | None = None
         self._browser = None
         self._context = None
@@ -178,6 +71,7 @@ class RodonavesProvider(ProviderBase):
         self._cdp_session = None
         self._window_id = None
         self._chrome_proc = None
+        self._active_user_data_dir = ""
         self._passo_atual: str = "inicio"
 
     # ── helpers ────────────────────────────────────────────────────────
@@ -219,10 +113,6 @@ class RodonavesProvider(ProviderBase):
             await page.wait_for_timeout(random.randint(50, 150))
         await page.mouse.wheel(0, -random.randint(20, 50))
         await page.wait_for_timeout(random.randint(200, 500))
-
-    @staticmethod
-    def _digits(value: str) -> str:
-        return re.sub(r"\D", "", str(value or ""))
 
     async def _fill_field(self, page, field_id: str, value: str) -> None:
         """Fill campo por ID via Playwright, com fallback JS se overlay bloquear."""
@@ -369,6 +259,157 @@ class RodonavesProvider(ProviderBase):
         return base
 
     @staticmethod
+    def _launcher_exit_can_still_spawn_browser(exit_code: int | None) -> bool:
+        return exit_code == 0
+
+    @classmethod
+    def _is_internal_browser_url(cls, url: str | None) -> bool:
+        lowered = str(url or "").strip().lower()
+        if not lowered or lowered == "about:blank":
+            return True
+        return lowered.startswith((
+            "about:",
+            "chrome://",
+            "chrome-extension://",
+            "devtools://",
+            "edge://",
+        ))
+
+    def _score_page_url(self, url: str | None) -> tuple[int, str]:
+        lowered = str(url or "").strip().lower()
+        if f"{self.BASE_URL.lower()}/quotation" in lowered:
+            return (0, lowered)
+        if self.BASE_URL.lower() in lowered:
+            return (1, lowered)
+        if lowered.startswith(("http://", "https://")):
+            return (2, lowered)
+        if self._is_internal_browser_url(lowered):
+            return (4, lowered)
+        return (3, lowered)
+
+    async def _select_best_context_page(self) -> tuple[object | None, object | None]:
+        best_context = None
+        best_page = None
+        best_score = None
+        for context in getattr(self._browser, "contexts", []) or []:
+            for page in getattr(context, "pages", []) or []:
+                score = self._score_page_url(getattr(page, "url", ""))
+                if best_score is None or score < best_score:
+                    best_context = context
+                    best_page = page
+                    best_score = score
+        return best_context, best_page
+
+    async def _sync_active_page(self) -> None:
+        if not self._browser:
+            return
+        best_context, best_page = await self._select_best_context_page()
+        if best_context is not None:
+            self._context = best_context
+        elif self._context is None:
+            self._context = self._browser.contexts[0] if self._browser.contexts else None
+        if best_page is not None:
+            self._page = best_page
+        elif self._context is not None and self._page is None:
+            self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+
+    @staticmethod
+    def _captcha_window_bounds(screen_w: int, screen_h: int) -> tuple[int, int, int, int]:
+        w, h = 820, 720
+        left = max(0, (int(screen_w) - w) // 2)
+        top = max(0, (int(screen_h) - h) // 2)
+        return left, top, w, h
+
+    async def _reposicionar_janela_win32(
+        self,
+        *,
+        left: int,
+        top: int,
+        width: int,
+        height: int,
+        bring_to_front: bool,
+    ) -> bool:
+        moved = await posicionar_janela_por_pagina(
+            self._page,
+            left=left,
+            top=top,
+            width=width,
+            height=height,
+            bring_to_front=bring_to_front,
+        )
+        if moved:
+            return True
+        for pid in self._candidate_window_pids():
+            if posicionar_janela_por_pid(
+                pid,
+                left=left,
+                top=top,
+                width=width,
+                height=height,
+                bring_to_front=bring_to_front,
+            ):
+                logger.debug(f"[{self.nome}] Janela reposicionada via PID %d", pid)
+                return True
+        return False
+
+    def _candidate_window_pids(self) -> list[int]:
+        pids: list[int] = []
+        pid_launcher = getattr(self._chrome_proc, "pid", 0) or 0
+        if pid_launcher > 0:
+            pids.append(int(pid_launcher))
+        for pid in self._listar_pids_chrome_por_user_data_dir(self._active_user_data_dir):
+            if pid > 0 and pid not in pids:
+                pids.append(pid)
+        return pids
+
+    @staticmethod
+    def _listar_pids_chrome_por_user_data_dir(user_data_dir: str) -> list[int]:
+        if os.name != "nt":
+            return []
+        norm = str(user_data_dir or "").replace("/", "\\").rstrip("\\").lower()
+        if not norm:
+            return []
+        try:
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+                    "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception as e:
+            logger.debug(f"[{RodonavesProvider.__name__}] Falha ao listar PIDs do Chrome: {e}")
+            return []
+
+        pids: list[int] = []
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if "|" not in line:
+                continue
+            pid_str, cmd = line.split("|", 1)
+            if norm not in cmd.lower():
+                continue
+            try:
+                pid = int(pid_str.strip())
+            except ValueError:
+                continue
+            if pid > 0 and pid not in pids:
+                pids.append(pid)
+        return pids
+
+    def _has_live_browser_session(self) -> bool:
+        try:
+            return bool(self._context and self._browser and self._browser.is_connected())
+        except Exception:
+            return False
+
+    @staticmethod
     def _fix_preferences(user_data_dir: str) -> None:
         """Marca exit_type como Normal e limpa sessão para evitar 'Restaurar páginas'."""
         import shutil as _shutil
@@ -439,6 +480,9 @@ class RodonavesProvider(ProviderBase):
         if self._context:
             # Verifica se o processo Chrome ainda está vivo
             if self._chrome_proc and self._chrome_proc.poll() is not None:
+                if self._has_live_browser_session():
+                    logger.info(f"[{self.nome}] Launcher saiu, mas sessão CDP segue ativa; reutilizando browser")
+                    return
                 logger.warning(f"[{self.nome}] Chrome process morreu (exit={self._chrome_proc.returncode}), reinicializando...")
                 await self.cleanup()
             elif self._browser and not self._browser.is_connected():
@@ -452,11 +496,13 @@ class RodonavesProvider(ProviderBase):
         """Lanca Chrome e conecta via CDP, com retry + limpeza de perfil em caso de crash."""
         import shutil as _shutil
         chrome_path = find_chrome()
+        requested_headless = bool(self.headless)
 
         for launch_attempt in range(2):
+            launch_headless = requested_headless if launch_attempt == 0 else False
             port = _find_free_port()
 
-            if self.headless:
+            if launch_headless:
                 import tempfile
                 self._profile_tmp = tempfile.mkdtemp(prefix="fretio_rodo_")
                 udd = self._profile_tmp
@@ -475,7 +521,7 @@ class RodonavesProvider(ProviderBase):
                 "--no-sandbox",
                 "--disable-blink-features=AutomationControlled",
             ]
-            if self.headless:
+            if launch_headless:
                 launch_args.append("--headless=new")
             else:
                 launch_args.extend([
@@ -502,16 +548,21 @@ class RodonavesProvider(ProviderBase):
             chrome_ok = False
             for _ in range(50):
                 await asyncio.sleep(0.1)
-                if self._chrome_proc.poll() is not None:
-                    break
                 try:
                     with socket.create_connection(("127.0.0.1", port), timeout=0.3):
                         chrome_ok = True
                         break
                 except (ConnectionRefusedError, OSError):
-                    continue
+                    exit_code = self._chrome_proc.poll()
+                    if exit_code is None:
+                        continue
+                    if self._launcher_exit_can_still_spawn_browser(exit_code):
+                        continue
+                    break
 
             if chrome_ok:
+                self._effective_headless = launch_headless
+                self._active_user_data_dir = udd
                 break  # Chrome iniciou OK, sai do loop de retry
 
             # Chrome crashou -- tenta limpar perfil e relancar
@@ -519,7 +570,19 @@ class RodonavesProvider(ProviderBase):
             _kill_proc(self._chrome_proc)
             self._chrome_proc = None
 
-            if launch_attempt == 0 and not self.headless:
+            if launch_attempt == 0 and launch_headless:
+                logger.warning(
+                    f"[{self.nome}] Chrome headless saiu com exit {exit_code}; "
+                    "tentando relançar em modo visível..."
+                )
+                try:
+                    _shutil.rmtree(udd, ignore_errors=True)
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+                continue
+
+            if launch_attempt == 0 and not launch_headless:
                 logger.warning(
                     f"[{self.nome}] Chrome crashou (exit {exit_code}), "
                     f"limpando perfil e tentando novamente..."
@@ -541,7 +604,7 @@ class RodonavesProvider(ProviderBase):
             try:
                 self._playwright = await async_playwright().start()
                 self._browser = await self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}""")
-                logger.info(f"[{self.nome}] Chrome conectado via CDP porta {port} (headless={self.headless})")
+                logger.info(f"[{self.nome}] Chrome conectado via CDP porta {port} (headless={self._effective_headless})")
                 break
             except Exception as e:
                 last_err = e
@@ -563,9 +626,10 @@ class RodonavesProvider(ProviderBase):
             user_agent=_CHROME_UA,
             locale="pt-BR",
         )
-
-        self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
-        if not self.headless:
+        await self._sync_active_page()
+        if self._page is None:
+            self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+        if not self._effective_headless:
             # Forca janela off-screen via CDP (--window-position pode ser ignorado pelo persistent context)
             try:
                 self._cdp_session = await self._context.new_cdp_session(self._page)
@@ -594,6 +658,8 @@ class RodonavesProvider(ProviderBase):
     async def _ocultar_janela(self):
         """Move a janela para coordenadas fora da tela (invisível)."""
         try:
+            await self._sync_active_page()
+            moved = False
             if not self._cdp_session:
                 self._cdp_session = await self._context.new_cdp_session(self._page)
             if not self._window_id:
@@ -611,12 +677,36 @@ class RodonavesProvider(ProviderBase):
                     "bounds": {"left": -3000, "top": -3000, "width": 1920, "height": 1080},
                 })
                 logger.debug(f"[{self.nome}] Janela movida off-screen")
+                moved = True
+            if not moved:
+                moved = await self._reposicionar_janela_win32(
+                    left=-3000,
+                    top=-3000,
+                    width=1920,
+                    height=1080,
+                    bring_to_front=False,
+                )
+                if moved:
+                    logger.debug(f"[{self.nome}] Janela movida off-screen via Win32")
             await ocultar_taskbar_por_pagina(self._page)
         except Exception as e:
+            moved = await self._reposicionar_janela_win32(
+                left=-3000,
+                top=-3000,
+                width=1920,
+                height=1080,
+                bring_to_front=False,
+            )
+            if moved:
+                logger.debug(f"[{self.nome}] Janela movida off-screen via Win32 após falha CDP")
+                await ocultar_taskbar_por_pagina(self._page)
+                return
             logger.warning(f"[{self.nome}] Falha ao ocultar janela: {e}""")
 
     async def _mostrar_janela(self):
         """Mostra janela compacta centralizada na tela, só para o CAPTCHA."""
+        await self._sync_active_page()
+        shown = False
         try:
             if not self._cdp_session:
                 self._cdp_session = await self._context.new_cdp_session(self._page)
@@ -634,10 +724,7 @@ class RodonavesProvider(ProviderBase):
                 except Exception:
                     screen_w, screen_h = 1920, 1080
 
-                # Janela maior para reCAPTCHA (menos suspeita para detecção)
-                w, h = 820, 720
-                left = max(0, (screen_w - w) // 2)
-                top = max(0, (screen_h - h) // 2)
+                left, top, w, h = self._captcha_window_bounds(screen_w, screen_h)
                 await self._cdp_session.send("Browser.setWindowBounds", {
                     "windowId": self._window_id,
                     "bounds": {"windowState": "normal"},
@@ -650,6 +737,7 @@ class RodonavesProvider(ProviderBase):
                 await self._page.bring_to_front()
                 await trazer_janela_frente(self._page)
                 logger.debug(f"[{self.nome}] Janela compacta (CAPTCHA) visível em ({left},{top}) tela {screen_w}x{screen_h}""")
+                shown = True
 
             # Scroll para o captcha/botão Calcular ficar visível
             try:
@@ -663,7 +751,30 @@ class RodonavesProvider(ProviderBase):
             except Exception:
                 pass
         except Exception as e:
-            logger.warning(f"[{self.nome}] Falha ao mostrar janela: {e}""")
+            logger.warning(f"[{self.nome}] Falha ao mostrar janela via CDP: {e}""")
+
+        if shown:
+            return True
+
+        try:
+            screen_info = await self._page.evaluate("() => ({ w: screen.width, h: screen.height })")
+            screen_w = int(screen_info.get("w", 1920))
+            screen_h = int(screen_info.get("h", 1080))
+        except Exception:
+            screen_w, screen_h = 1920, 1080
+
+        left, top, w, h = self._captcha_window_bounds(screen_w, screen_h)
+        shown = await self._reposicionar_janela_win32(
+            left=left,
+            top=top,
+            width=w,
+            height=h,
+            bring_to_front=True,
+        )
+        if shown:
+            logger.debug(f"[{self.nome}] Janela compacta (CAPTCHA) visível via Win32 em ({left},{top}) tela {screen_w}x{screen_h}""")
+            return True
+        return False
 
     async def cleanup(self):
         try:
@@ -705,11 +816,13 @@ class RodonavesProvider(ProviderBase):
         self._cdp_session = None
         self._window_id = None
         self._chrome_proc = None
+        self._active_user_data_dir = ""
 
     # ── login ──────────────────────────────────────────────────────────
 
     async def _navegar_cotacao(self, _from_login: bool = False):
         """Navega para /Quotation e aguarda o formulário ficar visível."""
+        await self._sync_active_page()
         page = self._page
 
         # Verifica se o formulário já está na página atual
@@ -763,6 +876,7 @@ class RodonavesProvider(ProviderBase):
     async def _login(self):
         if self._logged_in:
             return
+        await self._sync_active_page()
         page = self._page
         logger.info(f"[{self.nome}] Iniciando login...")
 
@@ -1047,7 +1161,19 @@ class RodonavesProvider(ProviderBase):
 
         # ─── Linhas adicionais de volume ───
         for idx, linha in enumerate(cubagens[1:], start=2):
-            await page.locator("#addPack").click()
+            add_pack = page.locator("#addPack")
+            try:
+                await add_pack.wait_for(state="visible", timeout=5000)
+                await add_pack.scroll_into_view_if_needed(timeout=3000)
+                await add_pack.click(timeout=5000)
+            except Exception:
+                logger.warning(f"[{self.nome}] Click em #addPack bloqueado, usando JS")
+                await page.evaluate("""() => {
+                    const el = document.getElementById('addPack');
+                    if (!el) return;
+                    el.click();
+                    if (window.jQuery) { window.jQuery(el).trigger('click'); }
+                }""")
             await page.wait_for_timeout(800)
 
             # Novos campos seguem padrão: amountPacks{n}, height{n}, ...
@@ -1099,15 +1225,20 @@ class RodonavesProvider(ProviderBase):
                 logger.warning(f"[{self.nome}] Não conseguiu clicar no checkbox de e-mail")
 
         # ─── reCAPTCHA ───
-        if not self.headless:
-            await self._mostrar_janela()
+        janela_visivel = True
+        if not self._effective_headless:
+            janela_visivel = await self._mostrar_janela()
         await page.wait_for_timeout(300)
         try:
             await page.locator("#calculateQuotationBtn").scroll_into_view_if_needed()
             await page.wait_for_timeout(300)
         except Exception:
             pass
-        logger.info(f"[{self.nome}] Janela compacta visível para CAPTCHA")
+        if not self._effective_headless:
+            if janela_visivel:
+                logger.info(f"[{self.nome}] Janela compacta visível para CAPTCHA")
+            else:
+                logger.warning(f"[{self.nome}] Não foi possível tornar a janela visível para o CAPTCHA")
 
         # Simula interação natural antes de clicar no captcha:
         # mover mouse pela página, scroll suave, pausa aleatória.
@@ -1157,7 +1288,7 @@ class RodonavesProvider(ProviderBase):
 
         self._passo_atual = "aguardando_captcha"
         token = await _captcha_token()
-        if not token.strip() and not self.headless:
+        if not token.strip() and not self._effective_headless:
             logger.warning(
                 f"[{self.nome}] reCAPTCHA: resolva manualmente no navegador; aguardando até {self.CAPTCHA_MAX_WAIT_S}s..."
             )
@@ -1170,7 +1301,7 @@ class RodonavesProvider(ProviderBase):
                 logger.warning(f"[{self.nome}] reCAPTCHA: timeout {self.CAPTCHA_MAX_WAIT_S}s — tentando submeter mesmo assim")
 
         # Oculta a janela novamente (só se não headless)
-        if not self.headless:
+        if not self._effective_headless:
             await self._ocultar_janela()
         if token.strip():
             logger.info(f"[{self.nome}] CAPTCHA resolvido")

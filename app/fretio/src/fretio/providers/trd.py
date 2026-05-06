@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 from playwright.async_api import async_playwright, Frame
 from fretio.providers.base import ProviderBase
+from fretio.providers.provider_utils import _digits, _fmt_peso, get_stealth_script
 from fretio.models import Cotacao
 from fretio.logging_conf import get_logger
 
@@ -20,14 +21,12 @@ class TRDProvider(ProviderBase):
     
     LOGIN_URL = "https://platform.senior.com.br/login/?redirectTo=https%3A%2F%2Fplatform.senior.com.br%2Fsenior-x%2F&tenant=trdtransportes.com"
     COTACAO_URL = "https://platform.senior.com.br/logistica-documentos/tms/documentos-frontend/#/cotacao/adicao"
-
-    @staticmethod
-    def _digits(value: str) -> str:
-        return re.sub(r"\D", "", str(value or ""))
+    _digits = staticmethod(_digits)
 
     @staticmethod
     def _fmt_peso_3casas(value: float) -> str:
-        return f"{float(value):.3f}".replace(".", ",")
+        """Compatibilidade: usa _fmt_peso com 3 casas decimais."""
+        return _fmt_peso(value, decimals=3)
 
     @staticmethod
     def _erro_potencial_headless(msg: Optional[str]) -> bool:
@@ -58,23 +57,131 @@ class TRDProvider(ProviderBase):
         self._login_frame: Frame | None = None
         self._passo_atual: str = "inicio"
 
-    _STEALTH_JS = """
-        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-        Object.defineProperty(navigator, 'plugins', {
-            get: () => [
-                {name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer'},
-                {name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai'},
-                {name: 'Native Client', filename: 'internal-nacl-plugin'},
-            ],
-        });
-        Object.defineProperty(navigator, 'languages', {get: () => ['pt-BR', 'pt', 'en-US', 'en']});
-        if (navigator.connection) {
-            try { Object.defineProperty(navigator.connection, 'rtt', {get: () => 50}); } catch {}
-        }
-        for (const k of Object.keys(window)) {
-            if (/^cdc_/.test(k)) { try { delete window[k]; } catch {} }
-        }
-    """
+    _STEALTH_JS = get_stealth_script(preserve_eval=False)
+
+    @staticmethod
+    def _format_cnpj(value: str) -> str:
+        digits = _digits(value)
+        if len(digits) == 14:
+            return f"{digits[:2]}.{digits[2:5]}.{digits[5:8]}/{digits[8:12]}-{digits[12:]}"
+        return digits
+
+    @classmethod
+    def _document_candidate_values(cls, value: str) -> list[str]:
+        digits = cls._digits(value)
+        formatted = cls._format_cnpj(digits)
+        values: list[str] = []
+        for item in (digits, formatted):
+            if item and item not in values:
+                values.append(item)
+        return values
+
+    @staticmethod
+    def _etapa1_document_selectors(kind: str) -> list[str]:
+        kind = str(kind or "").strip().lower()
+        if kind == "remetente":
+            return [
+                "#remetenteInscricaoFiscalInput",
+                "input[name*='remetente' i][name*='inscricao' i]",
+                "input[id*='remetente' i][id*='inscricao' i]",
+                "input[name*='remetente' i][name*='cnpj' i]",
+                "input[id*='remetente' i][id*='cnpj' i]",
+                "input[ng-model*='remetente' i][ng-model*='inscricao' i]",
+                "input[ng-model*='remetente' i][ng-model*='cnpj' i]",
+                "input[formcontrolname*='remetente' i][formcontrolname*='inscricao' i]",
+                "input[formcontrolname*='remetente' i][formcontrolname*='cnpj' i]",
+                "input[aria-label*='remet' i][aria-label*='cnpj' i]",
+                "input[placeholder*='remet' i][placeholder*='cnpj' i]",
+            ]
+        return [
+            "#destinatarioInscricaoFiscalInput",
+            "input[name*='inscricaofiscal' i]",
+            "input[id*='inscricaofiscal' i]",
+            "input[name*='document' i]",
+            "input[id*='document' i]",
+            "input[name*='cpfoucnpjdestinatario' i]",
+            "input[id*='cpfoucnpjdestinatario' i]",
+            "input[name*='destinatario' i][name*='inscricao' i]",
+            "input[id*='destinatario' i][id*='inscricao' i]",
+            "input[name*='destinatario' i][name*='cnpj' i]",
+            "input[id*='destinatario' i][id*='cnpj' i]",
+            "input[name*='destinat' i][name*='cpf' i]",
+            "input[id*='destinat' i][id*='cpf' i]",
+            "input[ng-model*='inscricaofiscal' i]",
+            "input[ng-model*='document' i]",
+            "input[ng-model*='destinatario' i][ng-model*='inscricao' i]",
+            "input[ng-model*='destinatario' i][ng-model*='cnpj' i]",
+            "input[ng-model*='destinatario' i][ng-model*='cpf' i]",
+            "input[formcontrolname*='inscricaofiscal' i]",
+            "input[formcontrolname*='document' i]",
+            "input[formcontrolname*='destinatario' i][formcontrolname*='inscricao' i]",
+            "input[formcontrolname*='destinatario' i][formcontrolname*='cnpj' i]",
+            "input[formcontrolname*='destinatario' i][formcontrolname*='cpf' i]",
+            "input[aria-label*='destinat' i][aria-label*='cnpj' i]",
+            "input[aria-label*='destinat' i][aria-label*='cpf' i]",
+            "input[placeholder*='destinat' i][placeholder*='cnpj' i]",
+            "input[placeholder*='destinat' i][placeholder*='cpf' i]",
+        ]
+
+    async def _wait_for_any_selector(self, selectors: list[str], timeout_ms: int = 5000) -> bool:
+        if not self._page:
+            return False
+        deadline = time.monotonic() + (max(timeout_ms, 500) / 1000.0)
+        while time.monotonic() < deadline:
+            for sel in selectors:
+                try:
+                    loc = self._page.locator(sel).first
+                    if await loc.count() > 0:
+                        await loc.wait_for(state="visible", timeout=500)
+                        return True
+                except Exception:
+                    continue
+            await self._page.wait_for_timeout(250)
+        return False
+
+    async def _fill_locator_with_values(self, loc, values: list[str], *, min_digits: int = 14) -> bool:
+        for value in values:
+            try:
+                await loc.wait_for(state="visible", timeout=1200)
+                await loc.scroll_into_view_if_needed(timeout=1200)
+            except Exception:
+                pass
+            try:
+                await loc.click(timeout=1200)
+            except Exception:
+                pass
+            try:
+                await loc.press("Control+a")
+            except Exception:
+                pass
+
+            typed = False
+            try:
+                await loc.fill(value, timeout=1800)
+                typed = True
+            except Exception:
+                try:
+                    await loc.type(value, delay=35, timeout=1800)
+                    typed = True
+                except Exception:
+                    typed = False
+
+            if not typed:
+                continue
+
+            try:
+                await loc.press("Tab")
+            except Exception:
+                pass
+
+            try:
+                value_now = await loc.input_value(timeout=800)
+            except Exception:
+                value_now = ""
+
+            if len(self._digits(value_now)) >= min_digits:
+                return True
+        return False
 
     async def _init_browser(self):
         """Inicializa browser Playwright."""
@@ -301,7 +408,7 @@ class TRDProvider(ProviderBase):
                 await self._page.wait_for_timeout(500)
                 await email_loc.fill(self.email)
                 # Botão "Próximo" - tenta no frame se encontrou lá
-                login_context = getattr(self, '_login_frame', self._page)
+                login_context = self._login_frame or self._page
                 next_btn = login_context.locator('#nextBtn')
                 try:
                     await next_btn.click(timeout=5000)
@@ -311,7 +418,7 @@ class TRDProvider(ProviderBase):
                 await self._page.wait_for_timeout(2000)
 
                 # Etapa 2: Senha + clicar "Autenticar"
-                login_context = getattr(self, '_login_frame', self._page)
+                login_context = self._login_frame or self._page
                 pwd = login_context.locator('#password-input-field')
                 await pwd.wait_for(state='visible', timeout=15000)
                 await pwd.fill(self.senha)
@@ -599,14 +706,22 @@ class TRDProvider(ProviderBase):
         candidatos.sort(key=lambda item: (-item[0], abs(item[1] - float(valor_mercadoria or 0.0))))
         return float(candidatos[0][1])
 
-    async def _preencher_cnpj_destinatario_js(self, frame: Frame, cnpj_digits: str) -> bool:
-        """Fallback robusto para localizar/preencher CNPJ do destinatário na Etapa 1."""
+    async def _preencher_documento_fiscal_js(self, frame: Frame, kind: str, doc_digits: str) -> bool:
+        """Fallback robusto para localizar/preencher documento fiscal na Etapa 1."""
         try:
             result = await frame.evaluate(
-                """(cnpj) => {
+                """(payload) => {
                     const clean = (v) => (v || '').replace(/\\s+/g, ' ').trim();
                     const digits = (v) => String(v || '').replace(/\\D/g, '');
                     const toLower = (v) => clean(v).toLowerCase();
+                    const kind = String(payload?.kind || 'destinatario').toLowerCase();
+                    const values = Array.isArray(payload?.values) ? payload.values.filter(Boolean) : [];
+                    const targetTokens = kind === 'remetente'
+                        ? ['remet', 'origem', 'embarque', 'fornecedor']
+                        : ['destinat', 'destino', 'consignat', 'recebed'];
+                    const negativeTokens = kind === 'remetente'
+                        ? ['destinat', 'destino', 'consignat', 'recebed', 'pagador', 'tomador']
+                        : ['remet', 'origem', 'pagador', 'tomador', 'fornecedor'];
                     const isVisible = (el) => {
                         if (!el || !(el instanceof HTMLElement)) return false;
                         const r = el.getBoundingClientRect();
@@ -643,6 +758,7 @@ class TRDProvider(ProviderBase):
                             trigger(el, 'input');
                         }
 
+                        trigger(el, 'keyup');
                         trigger(el, 'change');
                         trigger(el, 'blur');
                         return digits(el.value).length >= 14;
@@ -690,7 +806,9 @@ class TRDProvider(ProviderBase):
                     const scoreInput = (el) => {
                         const attrs = toLower(
                             `${el.id || ''} ${el.name || ''} ${el.placeholder || ''} ` +
-                            `${el.getAttribute('aria-label') || ''} ${el.className || ''} ${el.getAttribute('data-testid') || ''}`
+                            `${el.getAttribute('aria-label') || ''} ${el.className || ''} ${el.getAttribute('data-testid') || ''} ` +
+                            `${el.getAttribute('ng-model') || ''} ${el.getAttribute('formcontrolname') || ''} ` +
+                            `${el.getAttribute('title') || ''} ${el.getAttribute('autocomplete') || ''}`
                         );
                         const wrapper = el.closest('div,section,form,tr,td,mat-form-field') || el.parentElement;
                         const wrapperTxt = toLower((wrapper?.innerText || '').slice(0, 320));
@@ -700,8 +818,9 @@ class TRDProvider(ProviderBase):
                         let score = 0;
                         if (txt.includes('cpfoucnpj')) score += 5;
                         if (txt.includes('cnpj') || txt.includes('cpf')) score += 4;
-                        if (txt.includes('destinat') || txt.includes('destino') || txt.includes('consignat') || txt.includes('recebed')) score += 9;
-                        if (txt.includes('remet') || txt.includes('origem') || txt.includes('pagador') || txt.includes('tomador')) score -= 10;
+                        if (txt.includes('inscricao fiscal') || txt.includes('documento')) score += 4;
+                        if (targetTokens.some((token) => txt.includes(token))) score += 9;
+                        if (negativeTokens.some((token) => txt.includes(token))) score -= 10;
                         if ((el.maxLength || 0) >= 14 && (el.maxLength || 0) <= 18) score += 2;
 
                         return score;
@@ -711,7 +830,20 @@ class TRDProvider(ProviderBase):
                     if (!candidates.length) return { ok: false, reason: 'no_visible_inputs' };
 
                     // Tentativa 1: seletores explícitos conhecidos.
-                    const explicitSelectors = [
+                    const explicitSelectors = kind === 'remetente' ? [
+                        '#remetenteInscricaoFiscalInput',
+                        'input[name*="remetente" i][name*="inscricao" i]',
+                        'input[id*="remetente" i][id*="inscricao" i]',
+                        'input[name*="remetente" i][name*="cnpj" i]',
+                        'input[id*="remetente" i][id*="cnpj" i]',
+                        'input[ng-model*="remetente" i][ng-model*="cnpj" i]',
+                        'input[ng-model*="remetente" i][ng-model*="inscricao" i]',
+                    ] : [
+                        '#destinatarioInscricaoFiscalInput',
+                        'input[name*="inscricaofiscal" i]',
+                        'input[id*="inscricaofiscal" i]',
+                        'input[name*="document" i]',
+                        'input[id*="document" i]',
                         'input[name*="cpfoucnpjdestinatario" i]',
                         'input[id*="cpfoucnpjdestinatario" i]',
                         'input[name*="destinat" i][name*="cnpj" i]',
@@ -722,11 +854,19 @@ class TRDProvider(ProviderBase):
                         'input[placeholder*="destinat" i][placeholder*="cnpj" i]',
                         'input[name*="destinat" i][name*="cpf" i]',
                         'input[id*="destinat" i][id*="cpf" i]',
+                        'input[ng-model*="inscricaofiscal" i]',
+                        'input[ng-model*="document" i]',
+                        'input[ng-model*="destinatario" i][ng-model*="cnpj" i]',
+                        'input[ng-model*="destinatario" i][ng-model*="inscricao" i]',
                     ];
                     for (const sel of explicitSelectors) {
                         const node = document.querySelector(sel);
-                        if (node && isVisible(node) && setValueSafely(node, cnpj)) {
-                            return { ok: true, reason: 'explicit_selector', selector: sel };
+                        if (node && isVisible(node)) {
+                            for (const value of values) {
+                                if (setValueSafely(node, value)) {
+                                    return { ok: true, reason: 'explicit_selector', selector: sel };
+                                }
+                            }
                         }
                     }
 
@@ -738,7 +878,11 @@ class TRDProvider(ProviderBase):
                     if (!top || top.score < 1) {
                         return { ok: false, reason: 'no_candidate', bestScore: top ? top.score : null };
                     }
-                    const ok = setValueSafely(top.el, cnpj);
+                    let ok = false;
+                    for (const value of values) {
+                        ok = setValueSafely(top.el, value);
+                        if (ok) break;
+                    }
                     return {
                         ok,
                         reason: 'ranked',
@@ -746,28 +890,19 @@ class TRDProvider(ProviderBase):
                         valueLen: digits(top.el.value).length,
                     };
                 }""",
-                cnpj_digits,
+                {"kind": kind, "values": self._document_candidate_values(doc_digits)},
             )
             return bool(isinstance(result, dict) and result.get("ok"))
         except Exception:
             return False
 
-    async def _preencher_cnpj_destinatario_etapa1(self, cnpj_digits: str) -> bool:
-        """Preenche o CNPJ destinatário tentando locator + fallback JS em todos os frames."""
+    async def _preencher_documento_fiscal_etapa1(self, kind: str, doc_digits: str) -> bool:
+        """Preenche documento fiscal do remetente/destinatário com seletores e fallback JS."""
         if not self._page:
             return False
 
-        selectors = [
-            "input[name*='cpfoucnpjdestinatario' i]",
-            "input[id*='cpfoucnpjdestinatario' i]",
-            "input[name*='destinat' i][name*='cnpj' i]",
-            "input[id*='destinat' i][id*='cnpj' i]",
-            "input[name*='dest' i][name*='cnpj' i]",
-            "input[id*='dest' i][id*='cnpj' i]",
-            "input[aria-label*='destinat' i][aria-label*='cnpj' i]",
-            "input[placeholder*='destinat' i][placeholder*='cnpj' i]",
-        ]
-
+        values = self._document_candidate_values(doc_digits)
+        selectors = self._etapa1_document_selectors(kind)
         frames: list[Frame] = []
         seen: set[int] = set()
         for frame in [self._page.main_frame, *self._page.frames]:
@@ -778,7 +913,6 @@ class TRDProvider(ProviderBase):
             frames.append(frame)
 
         for frame in frames:
-            # 1) Tenta preencher por seletores explícitos com APIs do Playwright.
             for sel in selectors:
                 loc = frame.locator(sel).first
                 try:
@@ -786,49 +920,17 @@ class TRDProvider(ProviderBase):
                         continue
                 except Exception:
                     continue
-
-                try:
-                    await loc.click(timeout=1200)
-                except Exception:
-                    pass
-
-                try:
-                    await loc.press("Control+a")
-                except Exception:
-                    pass
-
-                typed = False
-                try:
-                    await loc.fill(cnpj_digits, timeout=1800)
-                    typed = True
-                except Exception:
-                    try:
-                        await loc.type(cnpj_digits, delay=35, timeout=1800)
-                        typed = True
-                    except Exception:
-                        typed = False
-
-                if not typed:
-                    continue
-
-                try:
-                    await loc.press("Tab")
-                except Exception:
-                    pass
-
-                try:
-                    value_now = await loc.input_value(timeout=1000)
-                except Exception:
-                    value_now = ""
-
-                if len(self._digits(value_now)) >= 14:
+                if await self._fill_locator_with_values(loc, values):
                     return True
 
-            # 2) Fallback robusto via evaluate (inclui shadow DOM).
-            if await self._preencher_cnpj_destinatario_js(frame, cnpj_digits):
+            if await self._preencher_documento_fiscal_js(frame, kind, doc_digits):
                 return True
 
         return False
+
+    async def _preencher_cnpj_destinatario_etapa1(self, cnpj_digits: str) -> bool:
+        """Preenche o CNPJ destinatário tentando locator + fallback JS em todos os frames."""
+        return await self._preencher_documento_fiscal_etapa1("destinatario", cnpj_digits)
 
     async def _coletar_alertas_ui(self) -> list[str]:
         """Coleta mensagens de alerta/erro visíveis na página atual."""
@@ -1396,7 +1498,12 @@ class TRDProvider(ProviderBase):
             if not session_expired:
                 # Verifica se o formulário da etapa 1 está presente
                 try:
-                    await self._page.locator('#destinatarioInscricaoFiscalInput').wait_for(timeout=5000)
+                    etapa1_ok = await self._wait_for_any_selector(
+                        self._etapa1_document_selectors("destinatario"),
+                        timeout_ms=7000,
+                    )
+                    if not etapa1_ok:
+                        raise TimeoutError("Campos da etapa 1 não renderizaram")
                 except Exception:
                     session_expired = True
             if session_expired:
@@ -1446,13 +1553,7 @@ class TRDProvider(ProviderBase):
                 cnpj_rem_ok = False
                 for tentativa in range(4):
                     try:
-                        loc_rem = self._page.locator('#remetenteInscricaoFiscalInput')
-                        await loc_rem.click(timeout=3000)
-                        await loc_rem.fill(cnpj_rem_digits)
-                        await loc_rem.press("Tab")
-                        await self._page.wait_for_timeout(400)
-                        val = await loc_rem.input_value()
-                        cnpj_rem_ok = len(self._digits(val)) >= 14
+                        cnpj_rem_ok = await self._preencher_documento_fiscal_etapa1("remetente", cnpj_rem_digits)
                     except Exception:
                         cnpj_rem_ok = False
                     if cnpj_rem_ok:
@@ -1550,13 +1651,7 @@ class TRDProvider(ProviderBase):
                 cnpj_ok = False
                 for tentativa in range(4):
                     try:
-                        loc = self._page.locator('#destinatarioInscricaoFiscalInput')
-                        await loc.click(timeout=3000)
-                        await loc.fill(cnpj_dest_digits)
-                        await loc.press("Tab")
-                        await self._page.wait_for_timeout(400)
-                        val = await loc.input_value()
-                        cnpj_ok = len(self._digits(val)) >= 14
+                        cnpj_ok = await self._preencher_documento_fiscal_etapa1("destinatario", cnpj_dest_digits)
                     except Exception:
                         cnpj_ok = False
                     if cnpj_ok:
