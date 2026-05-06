@@ -116,13 +116,40 @@ jobs:
         run: |
           $ver = "${{ steps.meta.outputs.version }}"
           $repoDir = Join-Path $PWD "installer\repository-assets"
+          $releaseDir = Join-Path $PWD "installer\release-assets"
+          $repoMaxBytes = 95MB
           New-Item -ItemType Directory -Force -Path $repoDir | Out-Null
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+          Get-ChildItem $repoDir -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+          Get-ChildItem $releaseDir -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
-          Copy-Item "installer\installer\Fretio-Setup-$ver.exe" (Join-Path $repoDir "Fretio-Setup-latest.exe") -Force
-          Copy-Item "installer\installer\Fretio-Update-$ver.zip" (Join-Path $repoDir "Fretio-Update-latest.zip") -Force
-          Copy-Item "installer\installer\Fretio-Setup-$ver.exe" (Join-Path $repoDir "FreteBot-Setup-latest.exe") -Force
-          Copy-Item "installer\installer\Fretio-Update-$ver.zip" (Join-Path $repoDir "FreteBot-Update-latest.zip") -Force
-          Copy-Item "installer\installer\Romaneio.exe" (Join-Path $repoDir "Romaneio.exe") -Force
+          $assetMap = @(
+            @{ Source = "installer\installer\Fretio-Setup-$ver.exe"; RepoName = "Fretio-Setup-latest.exe"; ReleaseName = "Fretio-Setup-latest.exe" },
+            @{ Source = "installer\installer\Fretio-Update-$ver.zip"; RepoName = "Fretio-Update-latest.zip"; ReleaseName = "Fretio-Update-latest.zip" },
+            @{ Source = "installer\installer\Fretio-Setup-$ver.exe"; RepoName = "FreteBot-Setup-latest.exe"; ReleaseName = "FreteBot-Setup-latest.exe" },
+            @{ Source = "installer\installer\Fretio-Update-$ver.zip"; RepoName = "FreteBot-Update-latest.zip"; ReleaseName = "FreteBot-Update-latest.zip" },
+            @{ Source = "installer\installer\Romaneio.exe"; RepoName = "Romaneio.exe"; ReleaseName = "Romaneio.exe" }
+          )
+          $committedAssets = @()
+          $skippedRepoAssets = @()
+
+          foreach ($asset in $assetMap) {
+            $sourcePath = Join-Path $PWD $asset.Source
+            $releasePath = Join-Path $releaseDir $asset.ReleaseName
+            Copy-Item $sourcePath $releasePath -Force
+
+            $size = (Get-Item $sourcePath).Length
+            if ($size -le $repoMaxBytes) {
+              Copy-Item $sourcePath (Join-Path $repoDir $asset.RepoName) -Force
+              $committedAssets += $asset.RepoName
+            } else {
+              $skippedRepoAssets += @{
+                name = $asset.RepoName
+                size_bytes = $size
+                reason = "github_file_limit"
+              }
+            }
+          }
 
           $releaseAliases = @($env:RELEASE_REPO)
           if ($env:RELEASE_REPO_ALIASES) {
@@ -132,16 +159,20 @@ jobs:
             version = $ver
             release_repo = $env:RELEASE_REPO
             release_repo_aliases = $releaseAliases | Select-Object -Unique
-            generated_assets = @(
+            release_assets = @(
               "Fretio-Setup-latest.exe",
               "Fretio-Update-latest.zip",
               "FreteBot-Setup-latest.exe",
               "FreteBot-Update-latest.zip",
               "Romaneio.exe"
             )
+            committed_repo_assets = $committedAssets
+            skipped_repo_assets = $skippedRepoAssets
+            repo_asset_max_bytes = $repoMaxBytes
           } | ConvertTo-Json -Depth 4
           Set-Content -Path (Join-Path $repoDir "latest.json") -Value $manifest -Encoding UTF8
-          Write-Host "Artefatos estaveis preparados em installer\repository-assets"
+          Write-Host "Artefatos de release preparados em installer\release-assets"
+          Write-Host "Artefatos committaveis preparados em installer\repository-assets"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v6
@@ -153,6 +184,7 @@ jobs:
             installer/installer/Fretio-Setup-${{ steps.meta.outputs.version }}.exe
             installer/installer/Fretio-Update-${{ steps.meta.outputs.version }}.zip
             installer/installer/Romaneio.exe
+            installer/release-assets/**
             installer/repository-assets/**
 
       - name: Commit version bump
@@ -178,10 +210,10 @@ jobs:
           $tag = "v$ver"
           $zip = "installer/installer/Fretio-Update-$ver.zip"
           $setup = "installer/installer/Fretio-Setup-$ver.exe"
-          $zipLatest = "installer/repository-assets/Fretio-Update-latest.zip"
-          $zipLatestLegacy = "installer/repository-assets/FreteBot-Update-latest.zip"
-          $setupLatest = "installer/repository-assets/Fretio-Setup-latest.exe"
-          $setupLatestLegacy = "installer/repository-assets/FreteBot-Setup-latest.exe"
+          $zipLatest = "installer/release-assets/Fretio-Update-latest.zip"
+          $zipLatestLegacy = "installer/release-assets/FreteBot-Update-latest.zip"
+          $setupLatest = "installer/release-assets/Fretio-Setup-latest.exe"
+          $setupLatestLegacy = "installer/release-assets/FreteBot-Setup-latest.exe"
           $releaseRepo = $env:RELEASE_REPO
 
           gh release view $tag --repo $releaseRepo 2>$null
