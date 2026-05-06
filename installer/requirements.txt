@@ -1,7 +1,7 @@
 pdfplumber
 PySide6
 Pillow
-greenlet==3.1.1
+greenlet==3.5.0
 playwright==1.58.0
 toml
 beautifulsoup4
