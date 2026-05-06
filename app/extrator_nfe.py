@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
+import unicodedata
 
 try:
     import pdfplumber
@@ -41,6 +42,7 @@ class NotaFiscal:
     peso_liquido: float = 0.0
     valor_total: float = 0.0
     valor_frete: float = 0.0
+    produtos_resumo: str = ""
     info_complementar: str = ""
     arquivo_origem: str = ""
 
@@ -56,6 +58,32 @@ def _find_text_any(element, xpaths: list, ns: dict = _NS) -> str:
         if result:
             return result
     return ""
+
+
+def _resumir_descricao_produto(descricao: str) -> str:
+    texto = re.sub(r"\s+", " ", str(descricao or "")).strip().upper()
+    if not texto:
+        return ""
+    texto = texto.split(" - ", 1)[0].strip()
+    palavras = texto.split()
+    if len(palavras) > 2:
+        palavras = palavras[:2]
+    return " ".join(palavras)
+
+
+def _resumir_produtos_nfe(descricoes: list[str]) -> str:
+    resumos: list[str] = []
+    vistos: set[str] = set()
+    for descricao in descricoes:
+        resumo = _resumir_descricao_produto(descricao)
+        if not resumo:
+            continue
+        chave = resumo.casefold()
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        resumos.append(resumo)
+    return ", ".join(resumos[:3])
 
 
 def extrair_xml(caminho: str) -> List[NotaFiscal]:
@@ -145,6 +173,17 @@ def _parse_nfe_element(nfe_el, ns: dict, caminho: str) -> NotaFiscal:
     nf.destinatario_uf = _find_text(infNFe, f"{ender_dest_prefix}/{p}UF", ns)
     nf.destinatario_cidade = _find_text(infNFe, f"{ender_dest_prefix}/{p}xMun", ns)
     nf.destinatario_cep = _find_text(infNFe, f"{ender_dest_prefix}/{p}CEP", ns)
+    det_prefix = f"{p}det"
+    det_els = infNFe.findall(det_prefix, ns) if ns else infNFe.findall(det_prefix)
+    descricoes_produtos: list[str] = []
+    for det_el in det_els:
+        prod_el = det_el.find(f"{p}prod", ns) if ns else det_el.find(f"{p}prod")
+        if prod_el is None:
+            continue
+        descricao_prod = _find_text_any(prod_el, [f"{p}xProd"], ns)
+        if descricao_prod:
+            descricoes_produtos.append(descricao_prod)
+    nf.produtos_resumo = _resumir_produtos_nfe(descricoes_produtos)
     transp_prefix = f"{p}transp"
     transporta_prefix = f"{transp_prefix}/{p}transporta"
     nf.transportadora_cnpj = _find_text(infNFe, f"{transporta_prefix}/{p}CNPJ", ns)
@@ -359,6 +398,41 @@ def _limpar_valor_info(valor: str) -> str:
     return valor_limpo.rstrip(" .;,")
 
 
+def _normalizar_texto_busca_info(valor: str) -> str:
+    texto = unicodedata.normalize("NFKD", str(valor or ""))
+    texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", texto).strip().lower()
+
+
+def _deve_ignorar_linha_info(linha: str) -> bool:
+    texto = _normalizar_texto_busca_info(linha)
+    if not texto:
+        return True
+
+    if re.fullmatch(r"-+", texto):
+        return True
+
+    padroes_fixos = (
+        "conta para deposito",
+        "empresa optante pelo simples nacional",
+        "nao sujeita a retencao de tributos federais",
+        "nao gera direito a credito de icms",
+        "total de tributos municipal, estadual e federal",
+        "endereco de entrega",
+    )
+    if any(padrao in texto for padrao in padroes_fixos):
+        return True
+
+    if texto.startswith(("sicredi:", "bb:", "pix:")):
+        return True
+
+    if re.search(r"\b(?:ag|c/c)\b", texto) and re.search(r"\d", texto):
+        if any(banco in texto for banco in ("sicredi", "bb", "banco do brasil", "pix")):
+            return True
+
+    return False
+
+
 def _match_linha_rotulada(linha: str, padrao: str):
     return re.match(
         rf"^(?:{padrao})(?:(?:\s*[:\-]\s*|\s+)(.*)|\s*)$",
@@ -372,6 +446,26 @@ def _formatar_cep_info(valor: str) -> str:
     if len(digitos) == 8:
         return f"{digitos[:5]}-{digitos[5:]}"
     return _limpar_valor_info(valor)
+
+
+def _normalizar_endereco_info(valor: str) -> str:
+    texto = _limpar_valor_info(valor)
+    texto = re.sub(r"\s*,\s*", ", ", texto)
+    return re.sub(r"\s+", " ", texto).strip(" ,")
+
+
+def _parece_endereco_info(valor: str) -> bool:
+    texto = _normalizar_texto_busca_info(valor)
+    if not texto:
+        return False
+    if re.search(r"\d", texto):
+        return True
+    return bool(
+        re.match(
+            r"^(?:rua|r\.?|avenida|av\.?|travessa|tv\.?|alameda|rodovia|estrada|praca|praça|largo|quadra|qd\.?|lote|lt\.?|sitio|sítio|fazenda|chacara|chácara)\b",
+            texto,
+        )
+    )
 
 
 def _normalizar_cidade_uf_info(valor: str) -> str:
@@ -418,7 +512,7 @@ def parsear_info_complementar(info: str) -> dict:
     if not info:
         return result
 
-    linhas = _normalizar_info_linhas(info)
+    linhas = [linha for linha in _normalizar_info_linhas(info) if not _deve_ignorar_linha_info(linha)]
     if not linhas:
         return result
 
@@ -436,6 +530,7 @@ def parsear_info_complementar(info: str) -> dict:
         "crm": (r"CRM",),
         "local_entrega": (r"LOCAL\s+DE\s+ENTREGA",),
         "endereco": (r"ENDERE(?:CO|ÇO)",),
+        "bairro": (r"BAIRRO",),
         "cep": (r"CEP",),
         "cidade_uf": (r"CIDADE\s*/\s*UF", r"CIDADE\s+UF"),
         "agendamento": (r"AGENDAMENTO",),
@@ -499,6 +594,26 @@ def parsear_info_complementar(info: str) -> dict:
     ):
         _extrair_campo(chave)
 
+    if result.get("pedido_venda"):
+        match_pd = re.search(r"\bPD\b\s*([A-Z0-9./-]+)", str(result["pedido_venda"]), re.IGNORECASE)
+        result["pd"] = match_pd.group(1) if match_pd else _limpar_valor_info(result["pedido_venda"])
+
+    for idx, linha in enumerate(linhas):
+        if idx in used_indices:
+            continue
+        if not result.get("processo") and re.match(r"^PROC(?:\s*[:\-]|\s+)", linha, re.IGNORECASE):
+            result["processo"] = _limpar_valor_info(re.sub(r"^PROC(?:\s*[:\-]|\s+)", "", linha, flags=re.IGNORECASE))
+            used_indices.add(idx)
+            continue
+        if not result.get("empenho") and re.match(r"^EMP(?:\s*[:\-]|\s+)", linha, re.IGNORECASE):
+            result["empenho"] = _limpar_valor_info(re.sub(r"^EMP(?:\s*[:\-]|\s+)", "", linha, flags=re.IGNORECASE))
+            used_indices.add(idx)
+            continue
+        if not result.get("of") and re.match(r"^(?:AUT|CONT)(?:\s*[:\-]|\s+)", linha, re.IGNORECASE):
+            result["of"] = _normalizar_endereco_info(linha)
+            used_indices.add(idx)
+            continue
+
     valor_local, idx_local = _extrair_campo("local_entrega", allow_next_line=False)
     idx_agendamento = idx_horario = idx_contato = idx_telefone = -1
     local_extra_lines: list[str] = []
@@ -533,6 +648,7 @@ def parsear_info_complementar(info: str) -> dict:
 
         local_nome = ""
         endereco = ""
+        bairro = ""
         cep = ""
         cidade_uf = ""
 
@@ -541,7 +657,11 @@ def parsear_info_complementar(info: str) -> dict:
                 continue
             valor_endereco = _extrair_valor_linha(linha, rotulos["endereco"])
             if valor_endereco:
-                endereco = valor_endereco
+                endereco = _normalizar_endereco_info(valor_endereco)
+                continue
+            valor_bairro = _extrair_valor_linha(linha, rotulos["bairro"])
+            if valor_bairro:
+                bairro = _normalizar_endereco_info(valor_bairro)
                 continue
             valor_cep = _extrair_valor_linha(linha, rotulos["cep"])
             if valor_cep:
@@ -557,8 +677,8 @@ def parsear_info_complementar(info: str) -> dict:
                 cidade_uf = cidade_guess
                 continue
 
-            if not endereco and re.search(r"\d", linha):
-                endereco = _limpar_valor_info(linha)
+            if not endereco and _parece_endereco_info(linha):
+                endereco = _normalizar_endereco_info(linha)
                 continue
 
             if not local_nome:
@@ -573,10 +693,15 @@ def parsear_info_complementar(info: str) -> dict:
                     cep = cep_guess
                     break
 
+        if endereco and bairro and f"BAIRRO {bairro}".casefold() not in endereco.casefold():
+            endereco = f"{endereco}, BAIRRO {bairro}"
+
         if local_nome:
             result["local_entrega_nome"] = local_nome
         if endereco:
             result["endereco_entrega"] = endereco
+        if bairro:
+            result["bairro_entrega"] = bairro
         if cep:
             result["cep_entrega"] = cep
         if cidade_uf:
@@ -621,11 +746,6 @@ def parsear_info_complementar(info: str) -> dict:
 
     extras_licitacao: list[str] = []
     extras_entrega: list[str] = list(local_extra_lines)
-
-    if result.get("pedido_compra"):
-        extras_licitacao.append(f"Pedido de compra do cliente: {result['pedido_compra']}")
-    if result.get("pedido_venda"):
-        extras_licitacao.append(f"Pedido de Venda: {result['pedido_venda']}")
 
     for idx, linha in enumerate(linhas):
         if idx in used_indices:
