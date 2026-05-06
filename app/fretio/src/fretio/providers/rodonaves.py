@@ -74,6 +74,29 @@ class RodonavesProvider(ProviderBase):
         self._active_user_data_dir = ""
         self._passo_atual: str = "inicio"
 
+    @staticmethod
+    def _is_retryable_navigation_error(error: BaseException | str) -> bool:
+        text = str(error or "")
+        if not text:
+            return False
+        upper = text.upper()
+        if "TIMEOUT" in upper or "TIMED OUT" in upper:
+            return True
+        return any(
+            token in upper
+            for token in (
+                "ERR_ABORTED",
+                "ERR_CONNECTION_RESET",
+                "ERR_CONNECTION_CLOSED",
+                "ERR_CONNECTION_TIMED_OUT",
+                "ERR_NAME_NOT_RESOLVED",
+                "ERR_NETWORK_CHANGED",
+                "ERR_INTERNET_DISCONNECTED",
+                "ERR_ADDRESS_UNREACHABLE",
+                "ERR_HTTP2_PROTOCOL_ERROR",
+            )
+        )
+
     # ── helpers ────────────────────────────────────────────────────────
 
     async def _simular_interacao_humana(self, page) -> None:
@@ -835,7 +858,7 @@ class RodonavesProvider(ProviderBase):
 
         logger.info(f"[{self.nome}] Navegando para /Quotation... URL atual: {page.url}""")
 
-        # Navega direto via goto com retry para ERR_ABORTED
+        # Navega direto via goto com retry para falhas transitórias de rede.
         for _goto_attempt in range(3):
             try:
                 await page.goto(
@@ -845,8 +868,10 @@ class RodonavesProvider(ProviderBase):
                 )
                 break
             except Exception as goto_err:
-                if "ERR_ABORTED" in str(goto_err) and _goto_attempt < 2:
-                    logger.warning(f"[{self.nome}] goto /Quotation ERR_ABORTED, retry {_goto_attempt + 1}/3")
+                if self._is_retryable_navigation_error(goto_err) and _goto_attempt < 2:
+                    logger.warning(
+                        f"[{self.nome}] goto /Quotation transitório, retry {_goto_attempt + 1}/3: {goto_err}"
+                    )
                     await asyncio.sleep(1)
                     continue
                 raise
@@ -890,8 +915,8 @@ class RodonavesProvider(ProviderBase):
                 )
                 break
             except Exception as goto_err:
-                if "ERR_ABORTED" in str(goto_err) and _goto_attempt < 2:
-                    logger.warning(f"[{self.nome}] goto ERR_ABORTED, retry {_goto_attempt + 1}/3")
+                if self._is_retryable_navigation_error(goto_err) and _goto_attempt < 2:
+                    logger.warning(f"[{self.nome}] goto login transitório, retry {_goto_attempt + 1}/3: {goto_err}")
                     await asyncio.sleep(1)
                     continue
                 raise

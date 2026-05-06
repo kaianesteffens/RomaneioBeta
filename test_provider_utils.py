@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT / "app" / "fretio" / "src"))
 from fretio.providers.agex import AGEXProvider
 from fretio.providers.alfa import AlfaProvider
 from fretio.providers.braspress_playwright import BraspressPlaywrightProvider
+from fretio.providers.coopex import CoopexProvider
 from fretio.providers.rodonaves import RodonavesProvider
 from fretio.providers.trd import TRDProvider
 from fretio.providers import provider_utils as pu
@@ -126,6 +127,14 @@ def test_rodonaves_prefers_portal_page_over_new_tab():
     assert provider._score_page_url("https://cliente.rte.com.br/Quotation") < provider._score_page_url("chrome://newtab/")
 
 
+def test_rodonaves_navigation_retry_classifies_connection_resets_as_transient():
+    provider = RodonavesProvider(dominio="RTE", usuario="u", senha="s", cnpj_pagador="40223106000179")
+
+    assert provider._is_retryable_navigation_error("Page.goto: net::ERR_CONNECTION_RESET at https://cliente.rte.com.br/") is True
+    assert provider._is_retryable_navigation_error("Page.goto: net::ERR_ABORTED at https://cliente.rte.com.br/") is True
+    assert provider._is_retryable_navigation_error("RuntimeError: campo obrigatório ausente") is False
+
+
 def test_rodonaves_window_fallback_uses_pid(monkeypatch):
     calls = []
 
@@ -162,6 +171,71 @@ def test_rodonaves_window_fallback_uses_pid(monkeypatch):
     assert calls[0][0] == "page"
     assert calls[1][0] == "pid"
     assert calls[1][1] == 321
+
+
+def test_coopex_coteir_updates_current_step_before_each_phase():
+    provider = CoopexProvider(dominio="dom", usuario="user", senha="secret")
+    observed_steps = []
+
+    class _FakePage:
+        async def close(self):
+            return None
+
+    class _FakeContext:
+        async def new_page(self):
+            return _FakePage()
+
+    async def fake_init_browser():
+        observed_steps.append(provider._passo_atual)
+        provider._context = _FakeContext()
+        provider._page = _FakePage()
+
+    async def fake_login():
+        observed_steps.append(provider._passo_atual)
+        provider._logged_in = True
+
+    async def fake_navegar_cotacao():
+        observed_steps.append(provider._passo_atual)
+
+    async def fake_preencher_cotacao(*args, **kwargs):
+        observed_steps.append(provider._passo_atual)
+
+    async def fake_submeter_e_extrair():
+        observed_steps.append(provider._passo_atual)
+        return None
+
+    provider._init_browser = fake_init_browser
+    provider._login = fake_login
+    provider._navegar_cotacao = fake_navegar_cotacao
+    provider._preencher_cotacao = fake_preencher_cotacao
+    provider._submeter_e_extrair = fake_submeter_e_extrair
+
+    resultado = asyncio.run(
+        provider.coteir(
+            origem="90010-123",
+            destino="89010-020",
+            peso=12.5,
+            valor=350.0,
+            volumes=1,
+            cubagens=[
+                {
+                    "quantidade": 1,
+                    "comprimento_cm": 40,
+                    "largura_cm": 30,
+                    "altura_cm": 20,
+                }
+            ],
+        )
+    )
+
+    assert resultado is None
+    assert observed_steps == [
+        "init_browser",
+        "login",
+        "navegando_cotacao",
+        "preenchendo_formulario",
+        "submetendo_cotacao",
+    ]
 
 
 def test_rodonaves_candidate_window_pids_include_profile_processes(monkeypatch):

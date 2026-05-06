@@ -35,9 +35,11 @@ class CoopexProvider(ProviderBase):
         self._page = None
         self._playwright = None
         self._logged_in = False
+        self._passo_atual: str = "inicio"
 
     async def _init_browser(self):
         """Inicializa browser Playwright."""
+        self._passo_atual = "init_browser"
         if self._browser:
             if self._browser.is_connected():
                 return
@@ -57,6 +59,7 @@ class CoopexProvider(ProviderBase):
 
     async def _login(self):
         """Faz login no portal SSW."""
+        self._passo_atual = "login"
         if self._logged_in:
             return
         try:
@@ -70,6 +73,7 @@ class CoopexProvider(ProviderBase):
             await self._page.locator('a:has-text("►")').click()
 
             # Aguarda redirecionamento pós-login (polling até 10s)
+            self._passo_atual = "aguardando_login"
             login_ok = False
             for _wait in range(20):
                 await self._page.wait_for_timeout(500)
@@ -143,6 +147,7 @@ class CoopexProvider(ProviderBase):
 
     async def _navegar_cotacao(self):
         """Navega para a tela de cotação (ssw1608)."""
+        self._passo_atual = "navegando_cotacao"
         await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=60000)
         await self._page.wait_for_timeout(800)
 
@@ -166,6 +171,7 @@ class CoopexProvider(ProviderBase):
                                 cubagens: Optional[list[dict]] = None,
                                 cnpj_pagador: str = "", tipo_frete: str = "1"):
         """Preenche o formulário de cotação SSW via JavaScript."""
+        self._passo_atual = "preenchendo_formulario"
         page = self._page
         cnpj_pagador = (cnpj_pagador or "40223106000179").replace('.', '').replace('/', '').replace('-', '').strip()
 
@@ -348,6 +354,7 @@ class CoopexProvider(ProviderBase):
 
     async def _submeter_e_extrair(self) -> Optional[Cotacao]:
         """Submete a cotação e extrai o resultado."""
+        self._passo_atual = "submetendo_cotacao"
         page = self._page
 
         # Capturar resposta XML do submit
@@ -373,6 +380,7 @@ class CoopexProvider(ProviderBase):
     async def _submeter_e_extrair_inner(self, page, xml_responses) -> Optional[Cotacao]:
         # Submit via sim()
         await page.evaluate('() => { if (typeof sim === "function") sim(); }')
+        self._passo_atual = "aguardando_resultado"
 
         # Polling: aguardar vlr_frete ser populado no DOM (até 25s)
         results = {}
@@ -648,7 +656,9 @@ class CoopexProvider(ProviderBase):
                 logger.error(f"[{self.nome}] {self.last_error}")
                 return None
 
+            self._passo_atual = "init_browser"
             await self._init_browser()
+            self._passo_atual = "login"
             await self._login()
 
             # Criar nova página para cada cotação (mantém sessão via cookies do contexto)
@@ -659,11 +669,14 @@ class CoopexProvider(ProviderBase):
                     pass
                 self._page = await self._context.new_page()
 
+            self._passo_atual = "navegando_cotacao"
             await self._navegar_cotacao()
+            self._passo_atual = "preenchendo_formulario"
             await self._preencher_cotacao(origem, destino, peso, valor, volumes, cubagem_m3,
                                          comprimento_cm, largura_cm, altura_cm,
                                          cnpj_remetente, cnpj_destinatario,
                                          cubagens_cm, cnpj_pagador, tipo_frete)
+            self._passo_atual = "submetendo_cotacao"
             return await self._submeter_e_extrair()
         except Exception as e:
             self.last_error = f"Erro na cotação: {e}"
