@@ -89,6 +89,10 @@ app/cache/
 app/test_*.py
 _apply_patch.py
 _new_login.py
+_analyze_*.py
+_test_*.py
+_test_output.txt
+TAREFA_CONCLUIDA.txt
 
 # Launchers locais
 /dev.bat

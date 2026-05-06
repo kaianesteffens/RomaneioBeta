@@ -11,6 +11,8 @@ jobs:
     runs-on: windows-latest
     env:
       HAS_RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN != '' }}
+      RELEASE_REPO: ${{ vars.RELEASE_REPO || 'kaianesteffens/RomaneioBeta-releases' }}
+      RELEASE_REPO_ALIASES: ${{ vars.RELEASE_REPO_ALIASES }}
 
     steps:
       - name: Checkout
@@ -24,11 +26,21 @@ jobs:
         run: |
           $gistId    = "${{ secrets.ERROR_GIST_ID }}"
           $token     = "${{ secrets.ERROR_REPORT_TOKEN }}"
-          $githubRepo = "kaianesteffens/RomaneioBeta-releases"
+          $githubRepo = $env:RELEASE_REPO
+          $aliasCandidates = @()
+          if ($env:RELEASE_REPO_ALIASES) {
+            $aliasCandidates += $env:RELEASE_REPO_ALIASES.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          }
+          if (-not ($aliasCandidates -contains $githubRepo)) {
+            $aliasCandidates = @($githubRepo) + $aliasCandidates
+          }
+          $aliasItems = foreach ($alias in $aliasCandidates) { '"' + ($alias -replace '"', '\"') + '"' }
+          $aliasesToml = "[" + ($aliasItems -join ", ") + "]"
           $licenseUrl = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
           $content = @(
             '[fretio]'
             "github_repo = `"$githubRepo`""
+            "github_repo_aliases = $aliasesToml"
             "license_url = `"$licenseUrl`""
           ) -join "`r`n"
           if ($gistId -and $token) {
@@ -43,30 +55,12 @@ jobs:
             $content,
             [System.Text.Encoding]::UTF8
           )
+          Write-Host "[OK] app\CONFIG.toml gerado para o build"
 
-          # Também injeta fallback direto no código para não depender de CONFIG local.
-          if ($gistId -and $token) {
-            $reporterPath = Join-Path $PWD "app\error_reporter.py"
-            $src = [System.IO.File]::ReadAllText($reporterPath, [System.Text.Encoding]::UTF8)
-            $escapedGist = ($gistId -replace '\\', '\\\\') -replace '"', '\\"'
-            $escapedToken = ($token -replace '\\', '\\\\') -replace '"', '\\"'
-            $src = [System.Text.RegularExpressions.Regex]::Replace(
-              $src,
-              '_EMBEDDED_ERROR_GIST_ID:\s*str\s*=\s*".*?"',
-              "_EMBEDDED_ERROR_GIST_ID: str = `"$escapedGist`"",
-              1
-            )
-            $src = [System.Text.RegularExpressions.Regex]::Replace(
-              $src,
-              '_EMBEDDED_ERROR_REPORT_TOKEN:\s*str\s*=\s*".*?"',
-              "_EMBEDDED_ERROR_REPORT_TOKEN: str = `"$escapedToken`"",
-              1
-            )
-            [System.IO.File]::WriteAllText($reporterPath, $src, [System.Text.Encoding]::UTF8)
-            Write-Host "[OK] Credenciais injetadas em app\CONFIG.toml e app\error_reporter.py"
-          } else {
-            Write-Host "::warning::ERROR_GIST_ID ou ERROR_REPORT_TOKEN nao definidos — mantendo fallback já existente no código"
-          }
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Install Inno Setup 6
         shell: pwsh
@@ -90,7 +84,7 @@ jobs:
         working-directory: installer
         shell: pwsh
         run: |
-          python -m pip install pyinstaller --quiet --disable-pip-version-check
+          python -m pip install --upgrade pip pyinstaller --quiet --disable-pip-version-check
           python -m PyInstaller --clean --noconfirm launcher.spec
           if (!(Test-Path "dist\Romaneio.exe")) { throw "Romaneio.exe nao foi gerado" }
           Copy-Item "dist\Romaneio.exe" "installer\Romaneio.exe" -Force
@@ -117,6 +111,38 @@ jobs:
           Write-Host "ZIP:      $zip"
           Write-Host "Launcher: $launcher"
 
+      - name: Prepare stable repository artifacts
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.meta.outputs.version }}"
+          $repoDir = Join-Path $PWD "installer\repository-assets"
+          New-Item -ItemType Directory -Force -Path $repoDir | Out-Null
+
+          Copy-Item "installer\installer\Fretio-Setup-$ver.exe" (Join-Path $repoDir "Fretio-Setup-latest.exe") -Force
+          Copy-Item "installer\installer\Fretio-Update-$ver.zip" (Join-Path $repoDir "Fretio-Update-latest.zip") -Force
+          Copy-Item "installer\installer\Fretio-Setup-$ver.exe" (Join-Path $repoDir "FreteBot-Setup-latest.exe") -Force
+          Copy-Item "installer\installer\Fretio-Update-$ver.zip" (Join-Path $repoDir "FreteBot-Update-latest.zip") -Force
+          Copy-Item "installer\installer\Romaneio.exe" (Join-Path $repoDir "Romaneio.exe") -Force
+
+          $releaseAliases = @($env:RELEASE_REPO)
+          if ($env:RELEASE_REPO_ALIASES) {
+            $releaseAliases += $env:RELEASE_REPO_ALIASES.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          }
+          $manifest = @{
+            version = $ver
+            release_repo = $env:RELEASE_REPO
+            release_repo_aliases = $releaseAliases | Select-Object -Unique
+            generated_assets = @(
+              "Fretio-Setup-latest.exe",
+              "Fretio-Update-latest.zip",
+              "FreteBot-Setup-latest.exe",
+              "FreteBot-Update-latest.zip",
+              "Romaneio.exe"
+            )
+          } | ConvertTo-Json -Depth 4
+          Set-Content -Path (Join-Path $repoDir "latest.json") -Value $manifest -Encoding UTF8
+          Write-Host "Artefatos estaveis preparados em installer\repository-assets"
+
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v6
         with:
@@ -127,13 +153,14 @@ jobs:
             installer/installer/Fretio-Setup-${{ steps.meta.outputs.version }}.exe
             installer/installer/Fretio-Update-${{ steps.meta.outputs.version }}.zip
             installer/installer/Romaneio.exe
+            installer/repository-assets/**
 
       - name: Commit version bump
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add app/version.txt
+          git add app/version.txt installer/repository-assets
           if git diff --cached --quiet; then
             echo "Sem alteracao de versao para commit"
             exit 0
@@ -151,22 +178,27 @@ jobs:
           $tag = "v$ver"
           $zip = "installer/installer/Fretio-Update-$ver.zip"
           $setup = "installer/installer/Fretio-Setup-$ver.exe"
+          $zipLatest = "installer/repository-assets/Fretio-Update-latest.zip"
+          $zipLatestLegacy = "installer/repository-assets/FreteBot-Update-latest.zip"
+          $setupLatest = "installer/repository-assets/Fretio-Setup-latest.exe"
+          $setupLatestLegacy = "installer/repository-assets/FreteBot-Setup-latest.exe"
+          $releaseRepo = $env:RELEASE_REPO
 
-          gh release view $tag --repo "kaianesteffens/RomaneioBeta-releases" 2>$null
+          gh release view $tag --repo $releaseRepo 2>$null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag `
-              --repo "kaianesteffens/RomaneioBeta-releases" `
+              --repo $releaseRepo `
               --title "Fretio v$ver" `
               --latest `
               --notes "Build automatico Windows - v$ver"
           }
 
           $launcher = "installer/installer/Romaneio.exe"
-          gh release upload $tag $zip $setup $launcher `
-            --repo "kaianesteffens/RomaneioBeta-releases" `
+          gh release upload $tag $zip $setup $launcher $zipLatest $zipLatestLegacy $setupLatest $setupLatestLegacy `
+            --repo $releaseRepo `
             --clobber
 
-          Write-Host "Release v$ver publicado/atualizado em RomaneioBeta-releases"
+          Write-Host "Release v$ver publicado/atualizado em $releaseRepo"
 
       - name: Skip external release (no token)
         if: env.HAS_RELEASES_TOKEN != 'true'

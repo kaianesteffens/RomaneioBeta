@@ -27,7 +27,7 @@ try:
 except ImportError:
     _HAS_TK = False
 
-GITHUB_REPO = "kaianesteffens/RomaneioBeta-releases"
+GITHUB_REPOS = ("kaianesteffens/RomaneioBeta-releases",)
 _APPDATA_ROOT = Path(os.environ.get("APPDATA", Path.home()))
 _LOCALAPPDATA_ROOT = Path(os.environ.get("LOCALAPPDATA", _APPDATA_ROOT))
 APP_DIR_CANDIDATES = (
@@ -39,6 +39,11 @@ APP_DIR_CANDIDATES = (
 )
 APP_EXE_NAMES = ("Fretio.exe", "FreteBot.exe")
 HTTP_TIMEOUT = 20
+PREFERRED_UPDATE_ASSET_NAMES = (
+    "fretio-update-latest.zip",
+    "fretebot-update-latest.zip",
+    "romaneiobeta-update-latest.zip",
+)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -83,14 +88,114 @@ def _parse_ver(tag: str) -> tuple[int, ...]:
     return tuple(parts) if parts else (0,)
 
 
-def _fetch_latest() -> dict | None:
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+def _split_repo_candidates(raw) -> list[str]:
+    if isinstance(raw, str):
+        normalized = raw.replace(";", ",").replace("\n", ",")
+        items = [item.strip() for item in normalized.split(",")]
+    elif isinstance(raw, (list, tuple, set)):
+        items = [str(item).strip() for item in raw]
+    else:
+        return []
+    return [item for item in items if item and "/" in item]
+
+
+def _dedupe_repos(repos) -> list[str]:
+    seen = set()
+    ordered = []
+    for repo in repos:
+        lowered = repo.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        ordered.append(repo)
+    return ordered
+
+
+def _load_toml_candidates() -> list[Path]:
+    app_dir = _resolve_app_dir()
+    candidates = [
+        _APPDATA_ROOT / "Fretio" / "CONFIG.toml",
+        _APPDATA_ROOT / "FreteBot" / "CONFIG.toml",
+        app_dir / "_internal" / "CONFIG.toml",
+        app_dir / "CONFIG.toml",
+        Path(sys.executable).resolve().parent / "CONFIG.toml",
+    ]
+    return candidates
+
+
+def _load_repo_candidates() -> list[str]:
+    repos = []
+    for env_name in (
+        "FRETIO_GITHUB_REPO",
+        "FRETIO_GITHUB_REPO_ALIASES",
+        "FRETEBOT_GITHUB_REPO",
+        "FRETEBOT_GITHUB_REPO_ALIASES",
+        "Fretio_GITHUB_REPO",
+        "Fretio_GITHUB_REPO_ALIASES",
+    ):
+        repos.extend(_split_repo_candidates(os.environ.get(env_name, "")))
+
+    for candidate in _load_toml_candidates():
+        if not candidate.exists():
+            continue
+        try:
+            raw = candidate.read_text(encoding="utf-8-sig")
+            try:
+                import tomllib
+                cfg = tomllib.loads(raw)
+            except ImportError:
+                import toml
+                cfg = toml.loads(raw)
+        except Exception:
+            continue
+        for section_name in ("fretio", "fretebot", "romaneio"):
+            section = cfg.get(section_name, {})
+            if not isinstance(section, dict):
+                continue
+            repos.extend(_split_repo_candidates(section.get("github_repo", "")))
+            repos.extend(_split_repo_candidates(section.get("github_repo_aliases", [])))
+
+    repos.extend(GITHUB_REPOS)
+    return _dedupe_repos([repo for repo in repos if "/" in repo])
+
+
+def _fetch_latest(repo: str) -> dict | None:
+    url = f"https://api.github.com/repos/{repo}/releases/latest"
     req = Request(url, headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": "Fretio-Launcher/1.0",
     })
     with urlopen(req, timeout=HTTP_TIMEOUT) as resp:
         return json.loads(resp.read())
+
+
+def _select_zip_asset(assets) -> dict | None:
+    zip_assets = [asset for asset in assets if asset["name"].lower().endswith(".zip")]
+    if not zip_assets:
+        return None
+
+    def _rank(asset):
+        lowered = asset["name"].lower()
+        if lowered in PREFERRED_UPDATE_ASSET_NAMES:
+            return (0, PREFERRED_UPDATE_ASSET_NAMES.index(lowered), lowered)
+        if "update" in lowered:
+            return (1, 0, lowered)
+        if "fretio" in lowered or "fretebot" in lowered or "romaneio" in lowered:
+            return (2, 0, lowered)
+        return (3, 0, lowered)
+
+    return min(zip_assets, key=_rank)
+
+
+def _resolve_latest_release():
+    for repo in _load_repo_candidates():
+        try:
+            release = _fetch_latest(repo)
+        except (URLError, OSError, Exception):
+            continue
+        if release and release.get("tag_name"):
+            return repo, release
+    return None, None
 
 
 def _download(url: str, dest: Path, total: int, status_cb, progress_cb) -> None:
@@ -209,9 +314,9 @@ def _worker(win: "_Window | None") -> None:
         status(f"Versão instalada: {local_ver or 'nenhuma'}")
 
         try:
-            release = _fetch_latest()
-        except (URLError, OSError, Exception):
-            release = None
+            release_repo, release = _resolve_latest_release()
+        except Exception:
+            release_repo, release = None, None
 
         needs_dl = True
         zip_asset = None
@@ -224,10 +329,7 @@ def _worker(win: "_Window | None") -> None:
                 if _parse_ver(remote_ver) <= _parse_ver(local_ver):
                     needs_dl = False
             if needs_dl:
-                assets = release.get("assets", [])
-                zip_asset = next(
-                    (a for a in assets if a["name"].lower().endswith(".zip")), None
-                )
+                zip_asset = _select_zip_asset(release.get("assets", []))
         elif app_exe.exists():
             needs_dl = False
         else:
@@ -243,7 +345,8 @@ def _worker(win: "_Window | None") -> None:
 
         if needs_dl and zip_asset:
             ver_str = remote_ver or "?"
-            label(f"Baixando Fretio v{ver_str}...")
+            source_label = f" ({release_repo})" if release_repo else ""
+            label(f"Baixando Fretio v{ver_str}{source_label}...")
             progress(0)
 
             tmp = Path(os.environ.get("TEMP", app_dir.parent)) / "_romaneio_launcher.zip"

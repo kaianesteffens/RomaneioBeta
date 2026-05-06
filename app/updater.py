@@ -18,19 +18,32 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional, Sequence
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 # Timeout para requisições HTTP (segundos)
 _HTTP_TIMEOUT = 30
-_DEFAULT_GITHUB_REPO = "kaianesteffens/RomaneioBeta-releases"
-_GITHUB_REPO_ENV_VARS = ("Fretio_GITHUB_REPO", "FRETEBOT_GITHUB_REPO")
-_GITHUB_REPO_CONFIG_SECTIONS = ("fretio", "fretebot")
+_DEFAULT_GITHUB_REPOS = ("kaianesteffens/RomaneioBeta-releases",)
+_GITHUB_REPO_ENV_VARS = (
+    "FRETIO_GITHUB_REPO",
+    "FRETEBOT_GITHUB_REPO",
+    "Fretio_GITHUB_REPO",
+)
+_GITHUB_REPO_ALIAS_ENV_VARS = (
+    "FRETIO_GITHUB_REPO_ALIASES",
+    "FRETEBOT_GITHUB_REPO_ALIASES",
+    "Fretio_GITHUB_REPO_ALIASES",
+)
+_GITHUB_REPO_CONFIG_SECTIONS = ("fretio", "fretebot", "romaneio")
+_PREFERRED_UPDATE_ASSET_NAMES = (
+    "fretio-update-latest.zip",
+    "fretebot-update-latest.zip",
+    "romaneiobeta-update-latest.zip",
+)
 
 
 @dataclass
@@ -43,15 +56,25 @@ class UpdateInfo:
     asset_size: int           # Bytes
     release_notes: str        # Corpo da release (Markdown)
     html_url: str             # URL da release no GitHub
+    source_repo: str = ""     # Repositório usado para resolver a release
 
 
 def _load_toml_file(path: Path) -> dict[str, Any]:
     """Carrega TOML aceitando UTF-8 com/sem BOM."""
     raw = path.read_text(encoding="utf-8-sig")
+    data = None
     try:
-        import toml  # type: ignore[import-untyped]
-        data = toml.loads(raw)
+        import tomllib  # type: ignore[import]
+        data = tomllib.loads(raw)
     except ImportError:
+        pass
+    if data is None:
+        try:
+            import toml  # type: ignore[import-untyped]
+            data = toml.loads(raw)
+        except ImportError:
+            pass
+    if data is None:
         import tomli  # type: ignore[import-not-found]
         data = tomli.loads(raw)
     return data if isinstance(data, dict) else {}
@@ -81,22 +104,69 @@ def _parse_version(tag: str) -> tuple[int, ...]:
     return tuple(parts) if parts else (0,)
 
 
-def get_repo_from_config() -> str:
-    """Lê o repositório GitHub do CONFIG ou retorna string vazia."""
-    # Tenta ler de variável de ambiente primeiro
-    for env_name in _GITHUB_REPO_ENV_VARS:
-        repo = os.environ.get(env_name, "").strip()
-        if repo:
-            return repo
+def _split_repo_candidates(raw: Any) -> list[str]:
+    if isinstance(raw, str):
+        normalized = raw.replace(";", ",").replace("\n", ",")
+        items = [item.strip() for item in normalized.split(",")]
+    elif isinstance(raw, (list, tuple, set)):
+        items = [str(item).strip() for item in raw]
+    else:
+        return []
+    return [item for item in items if item and "/" in item]
 
-    # Tenta ler do CONFIG.toml
+
+def _dedupe_repos(repos: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for repo in repos:
+        normalized = repo.strip()
+        if not normalized or "/" not in normalized:
+            continue
+        lowered = normalized.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        ordered.append(normalized)
+    return ordered
+
+
+def _select_update_asset(assets: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
+    zip_assets = [
+        asset for asset in assets
+        if str(asset.get("name", "")).lower().endswith(".zip")
+    ]
+    if not zip_assets:
+        return None
+
+    def _asset_rank(asset: dict[str, Any]) -> tuple[int, int, str]:
+        name = str(asset.get("name", "")).strip()
+        lowered = name.lower()
+        if lowered in _PREFERRED_UPDATE_ASSET_NAMES:
+            return (0, _PREFERRED_UPDATE_ASSET_NAMES.index(lowered), lowered)
+        if "update" in lowered:
+            return (1, 0, lowered)
+        if "fretio" in lowered or "fretebot" in lowered or "romaneio" in lowered:
+            return (2, 0, lowered)
+        return (3, 0, lowered)
+
+    return min(zip_assets, key=_asset_rank)
+
+
+def get_repo_candidates_from_config() -> list[str]:
+    repos: list[str] = []
+
+    for env_name in _GITHUB_REPO_ENV_VARS:
+        repos.extend(_split_repo_candidates(os.environ.get(env_name, "")))
+    for env_name in _GITHUB_REPO_ALIAS_ENV_VARS:
+        repos.extend(_split_repo_candidates(os.environ.get(env_name, "")))
+
     try:
         config_paths: list[Path] = []
         appdata = os.getenv("APPDATA")
         if appdata:
             config_paths.append(Path(appdata) / "Fretio" / "CONFIG.toml")
             config_paths.append(Path(appdata) / "FreteBot" / "CONFIG.toml")
-        base = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
+        base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
         config_paths.append(base / "CONFIG.toml")
         if base != Path(__file__).parent:
             config_paths.append(Path(__file__).parent / "CONFIG.toml")
@@ -109,68 +179,79 @@ def get_repo_from_config() -> str:
                 section = cfg.get(section_name, {})
                 if not isinstance(section, dict):
                     continue
-                repo = str(section.get("github_repo", "") or "").strip()
-                if repo:
-                    return repo
+                repos.extend(_split_repo_candidates(section.get("github_repo", "")))
+                repos.extend(_split_repo_candidates(section.get("github_repo_aliases", [])))
     except Exception:
         pass
-    return _DEFAULT_GITHUB_REPO
+
+    repos.extend(_DEFAULT_GITHUB_REPOS)
+    return _dedupe_repos(repos)
+
+
+def get_repo_from_config() -> str:
+    """Lê o primeiro repositório GitHub configurado para auto-update."""
+    candidates = get_repo_candidates_from_config()
+    return candidates[0] if candidates else _DEFAULT_GITHUB_REPOS[0]
+
+
+def _resolve_repo_candidates(repo: str | Sequence[str] | None) -> list[str]:
+    repos: list[str] = []
+    if repo:
+        repos.extend(_split_repo_candidates(repo))
+    repos.extend(get_repo_candidates_from_config())
+    return _dedupe_repos(repos)
 
 
 def check_for_update(
-    repo: str,
+    repo: str | Sequence[str] | None,
     current_version: str,
 ) -> Optional[UpdateInfo]:
     """
     Verifica se há uma versão mais nova no GitHub.
 
     Args:
-        repo: "owner/repo" (ex: "meu-usuario/Fretio")
+        repo: "owner/repo" ou lista de aliases
         current_version: versão atual (ex: "1.21")
 
     Returns:
         UpdateInfo se houver atualização, None caso contrário.
     """
-    if not repo or "/" not in repo:
+    repo_candidates = _resolve_repo_candidates(repo)
+    if not repo_candidates:
         return None
 
-    try:
-        url = f"https://api.github.com/repos/{repo}/releases/latest"
-        data = _github_api(url)
-    except (URLError, OSError, json.JSONDecodeError):
-        return None
-
-    tag = data.get("tag_name", "")
-    if not tag:
-        return None
-
-    remote_ver = _parse_version(tag)
     local_ver = _parse_version(current_version)
 
-    if remote_ver <= local_ver:
-        return None  # Já está atualizado
+    for repo_name in repo_candidates:
+        try:
+            url = f"https://api.github.com/repos/{repo_name}/releases/latest"
+            data = _github_api(url)
+        except (URLError, OSError, json.JSONDecodeError):
+            continue
 
-    # Procura asset ZIP para download
-    assets = data.get("assets", [])
-    zip_asset = None
-    for asset in assets:
-        name = asset.get("name", "")
-        if name.lower().endswith(".zip"):
-            zip_asset = asset
-            break
+        tag = data.get("tag_name", "")
+        if not tag:
+            continue
 
-    if not zip_asset:
-        return None  # Release sem ZIP
+        remote_ver = _parse_version(tag)
+        if remote_ver <= local_ver:
+            continue
 
-    return UpdateInfo(
-        tag=tag,
-        version=tag.lstrip("vV").strip(),
-        download_url=zip_asset["browser_download_url"],
-        asset_name=zip_asset["name"],
-        asset_size=zip_asset.get("size", 0),
-        release_notes=data.get("body", "") or "",
-        html_url=data.get("html_url", ""),
-    )
+        zip_asset = _select_update_asset(data.get("assets", []))
+        if not zip_asset:
+            continue
+
+        return UpdateInfo(
+            tag=tag,
+            version=tag.lstrip("vV").strip(),
+            download_url=zip_asset["browser_download_url"],
+            asset_name=zip_asset["name"],
+            asset_size=zip_asset.get("size", 0),
+            release_notes=data.get("body", "") or "",
+            html_url=data.get("html_url", ""),
+            source_repo=repo_name,
+        )
+    return None
 
 
 def _get_app_dir() -> Path:
