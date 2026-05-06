@@ -6,6 +6,7 @@ Gera: dist/Fretio/ com Fretio.exe + dependências
 
 from pathlib import Path
 import os
+from PyInstaller.utils.hooks import collect_submodules
 
 project_root = Path(SPECPATH).parent / "app"  # Diretório do app com romaneio_app.py
 
@@ -21,12 +22,15 @@ hiddenimports = [
     "fretio.providers.coopex",
     "fretio.providers._win_taskbar",
     "fretio.providers.base",
+    "fretio.providers.factory",
+    "fretio.providers.provider_utils",
     # Fretio core
     "fretio.models",
     "fretio.logging_conf",
     "fretio.config",
     "fretio.cache",
     "fretio.calc",
+    "fretio.config_manager",
     # Dependências externas
     "bs4",
     "httpx",
@@ -40,6 +44,7 @@ hiddenimports = [
     "playwright.async_api",
     "playwright.sync_api",
     "PySide6",
+    "PySide6.QtSvg",
     "PIL",
     # Módulos locais na raiz
     "extrator_pedidos",
@@ -47,8 +52,13 @@ hiddenimports = [
     "updater",
     "license",
     "error_reporter",
+    "error_handler",
+    "logging_conf",
+    "extrator_nfe",
+    "rastreamento",
     "ui_components",
 ]
+hiddenimports += collect_submodules("ui")
 
 # ── Data files ────────────────────────────────────────────────────────────
 datas = []
