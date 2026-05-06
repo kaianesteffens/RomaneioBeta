@@ -75,7 +75,7 @@ executa o build Windows;
 gera os artefatos do instalador e do pacote de update;
 faz o bump de `app\\version.txt`;
 publica a release no repo configurado em `RELEASE_REPO`, com aliases estaveis de update/instalador;
-mantem uma copia atualizada em `installer\\repository-assets\\` dentro do repositorio privado.
+mantem em `installer\\repository-assets\\` apenas os artefatos `latest` que cabem nos limites do GitHub, junto do manifest `latest.json`.
 Estrutura do repositorio
 Caminho	Responsabilidade
 `app\\romaneio\_app.py`	Janela principal PySide6 e fluxo entre modulos
