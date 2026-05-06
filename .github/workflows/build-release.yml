@@ -175,7 +175,7 @@ jobs:
           Write-Host "Artefatos committaveis preparados em installer\repository-assets"
 
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: fretio-windows-v${{ steps.meta.outputs.version }}
           if-no-files-found: error
