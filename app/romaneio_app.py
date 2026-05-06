@@ -123,6 +123,33 @@ def _carregar_versao_app() -> str:
     return "1.0"
 
 
+def _show_startup_text_input(title: str, label: str, text: str = "") -> tuple[str, bool]:
+    dialog = QInputDialog()
+    dialog.setInputMode(QInputDialog.TextInput)
+    dialog.setWindowTitle(title)
+    dialog.setLabelText(label)
+    dialog.setTextValue(text)
+    dialog.setWindowModality(Qt.ApplicationModal)
+    dialog.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+    dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
+    accepted = dialog.exec() == QDialog.Accepted
+    return dialog.textValue(), accepted
+
+
+def _show_startup_message(icon: QMessageBox.Icon, title: str, text: str) -> int:
+    dialog = QMessageBox(icon, title, text, QMessageBox.Ok)
+    dialog.setWindowModality(Qt.ApplicationModal)
+    dialog.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+    dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
+    return dialog.exec()
+
+
 # ---------------------------------------------------------------------------
 #  Constantes e utilitários — gestão de empresas e configurações
 # ---------------------------------------------------------------------------
@@ -3651,15 +3678,18 @@ def main():
             _machine = get_machine_id()
 
             if not _lic_key:
+                if _startup_logger is not None:
+                    _startup_logger.info("Sem licença local; exibindo diálogo de ativação")
                 # Pedir chave de ativação
                 while True:
-                    _lic_key, _ok = QInputDialog.getText(
-                        None,
+                    _lic_key, _ok = _show_startup_text_input(
                         "Ativação — Fretio",
                         "Digite sua chave de licença:\n\n"
                         "Formato: FBOT-XXXX-XXXX-XXXX-XXXX",
                     )
                     if not _ok:
+                        if _startup_logger is not None:
+                            _startup_logger.warning("Ativação cancelada pelo usuário")
                         sys.exit(0)
                     _lic_key = _lic_key.strip().upper()
                     if not _lic_key:
@@ -3667,23 +3697,30 @@ def main():
                     _lic_status = validate_license(_lic_key, _machine)
                     if _lic_status.valid:
                         save_license(_lic_key)
+                        if _startup_logger is not None:
+                            _startup_logger.info("Licença validada com sucesso")
                         break
                     else:
-                        QMessageBox.warning(
-                            None, "Licença Inválida",
+                        if _startup_logger is not None:
+                            _startup_logger.warning("Licença inválida: %s", _lic_status.message or "chave não reconhecida")
+                        _show_startup_message(
+                            QMessageBox.Warning,
+                            "Licença Inválida",
                             _lic_status.message or "Chave não reconhecida.",
                         )
             else:
                 # Validar licença existente
                 _lic_status = validate_license(_lic_key, _machine)
                 if not _lic_status.valid:
-                    QMessageBox.critical(
-                        None, "Licença Bloqueada",
+                    if _startup_logger is not None:
+                        _startup_logger.warning("Licença salva recusada: %s", _lic_status.message or "licença bloqueada")
+                    _show_startup_message(
+                        QMessageBox.Critical,
+                        "Licença Bloqueada",
                         _lic_status.message or "Sua licença não é mais válida.",
                     )
                     # Dar chance de inserir outra chave
-                    _lic_key2, _ok2 = QInputDialog.getText(
-                        None,
+                    _lic_key2, _ok2 = _show_startup_text_input(
                         "Ativação — Fretio",
                         "Sua licença foi revogada.\n"
                         "Digite uma nova chave de licença:",
@@ -3692,13 +3729,20 @@ def main():
                         _lic_status2 = validate_license(_lic_key2.strip().upper(), _machine)
                         if _lic_status2.valid:
                             save_license(_lic_key2.strip().upper())
+                            if _startup_logger is not None:
+                                _startup_logger.info("Nova licença validada após revogação")
                         else:
-                            QMessageBox.critical(
-                                None, "Licença Inválida",
+                            if _startup_logger is not None:
+                                _startup_logger.warning("Nova licença inválida após revogação: %s", _lic_status2.message or "chave não reconhecida")
+                            _show_startup_message(
+                                QMessageBox.Critical,
+                                "Licença Inválida",
                                 _lic_status2.message or "Chave não reconhecida.",
                             )
                             sys.exit(1)
                     else:
+                        if _startup_logger is not None:
+                            _startup_logger.warning("Reativação cancelada pelo usuário")
                         sys.exit(1)
         except SystemExit:
             raise
@@ -3780,7 +3824,11 @@ def main():
         print(f"[fretio] CRASH FATAL:\n{crash_msg}", file=sys.stderr, flush=True)
         # Tenta mostrar msgbox para o usuário
         try:
-            QMessageBox.critical(None, "Fretio - Erro Fatal", f"O aplicativo encontrou um erro:\n\n{crash_msg[:800]}")
+            _show_startup_message(
+                QMessageBox.Critical,
+                "Fretio - Erro Fatal",
+                f"O aplicativo encontrou um erro:\n\n{crash_msg[:800]}",
+            )
         except Exception:
             pass
         sys.exit(1)
