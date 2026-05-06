@@ -2895,6 +2895,14 @@ class RomaneioWindow(QMainWindow):
         def _texto(valor):
             return str(valor or "").strip()
 
+        def _formatar_data_nf(valor):
+            import re as _re2
+
+            match = _re2.match(r"(\d{4})-(\d{2})-(\d{2})", _texto(valor))
+            if not match:
+                return _texto(valor)
+            return f"{match.group(3)}/{match.group(2)}/{match.group(1)}"
+
         def _formatar_cep(valor):
             digitos = "".join(ch for ch in str(valor or "") if ch.isdigit())
             if len(digitos) == 8:
@@ -2904,10 +2912,20 @@ class RomaneioWindow(QMainWindow):
         def _linha_campos(campos):
             return "  |  ".join(f"{rotulo}: {_texto(valor)}" for rotulo, valor in campos)
 
+        def _transportadora_bloco():
+            if transp:
+                return transp.upper()
+            nome = _texto(nf.transportadora_nome)
+            return (nome.split()[0] if nome else "") .upper()
+
+        pd_display = _texto(info.get("pd"))
+        if not pd_display and info.get("pedido_venda"):
+            import re as _re3
+
+            match_pd = _re3.search(r"\bPD\b\s*([A-Z0-9./-]+)", _texto(info.get("pedido_venda")), _re3.IGNORECASE)
+            pd_display = match_pd.group(1) if match_pd else _texto(info.get("pedido_venda"))
+
         local_nome = _texto(info.get("local_entrega_nome"))
-        local_composto = _texto(info.get("local_entrega"))
-        if not local_nome and local_composto:
-            local_nome = local_composto.splitlines()[0].strip()
 
         endereco_entrega = _texto(info.get("endereco_entrega"))
         cep_entrega = _formatar_cep(info.get("cep_entrega") or nf.destinatario_cep)
@@ -2915,51 +2933,84 @@ class RomaneioWindow(QMainWindow):
         if not cidade_uf_entrega and nf.destinatario_cidade and nf.destinatario_uf:
             cidade_uf_entrega = f"{nf.destinatario_cidade}/{nf.destinatario_uf}"
 
-        bloco_licitacao_txt = "\n".join(
-            [
-                _linha_campos(
-                    [
-                        ("Processo", info.get("processo")),
-                        ("PE", info.get("pe")),
-                        ("Ata", info.get("ata")),
-                        ("Contrato", info.get("contrato")),
-                        ("Empenho", info.get("empenho")),
-                        ("OF", info.get("of")),
-                    ]
-                ),
-                _linha_campos(
-                    [
-                        ("Entrega", info.get("entrega")),
-                        ("Pagamento", info.get("pagamento")),
-                    ]
-                ),
-                "",
-                "Outras informações da licitação:",
-                _texto(info.get("outras_info_licitacao")),
-                f"CRM: {_texto(info.get('crm'))}",
-            ]
-        ).rstrip()
+        destinatario_bloco = _texto(nf.destinatario_nome)
+        if destinatario_bloco and nf.destinatario_uf and not destinatario_bloco.endswith(f"/{nf.destinatario_uf}"):
+            destinatario_bloco = f"{destinatario_bloco}/{nf.destinatario_uf}"
 
-        bloco_entrega_txt = "\n".join(
-            [
-                f"LOCAL DE ENTREGA: {local_nome}",
-                f"ENDEREÇO: {endereco_entrega}",
-                f"CEP: {cep_entrega}",
-                f"CIDADE/UF: {cidade_uf_entrega}",
-                "",
-                f"AGENDAMENTO: {_texto(info.get('agendamento'))}",
-                _linha_campos(
-                    [
-                        ("HORARIO", info.get("horario")),
-                        ("CONTATO", info.get("contato") or info.get("recebedor")),
-                        ("TELEFONE", info.get("telefone")),
-                    ]
-                ),
-                "",
-                "Outras informações da entrega:",
-                _texto(info.get("outras_info_entrega")),
-            ]
-        ).rstrip()
+        bloco_licitacao_linhas = [
+            _linha_campos(
+                [
+                    ("Processo", info.get("processo")),
+                    ("PE", info.get("pe")),
+                    ("Ata", info.get("ata")),
+                    ("Contrato", info.get("contrato")),
+                    ("Empenho", info.get("empenho")),
+                    ("OF", info.get("of")),
+                ]
+            ),
+            _linha_campos(
+                [
+                    ("Entrega", info.get("entrega")),
+                    ("Pagamento", info.get("pagamento")),
+                ]
+            ),
+            destinatario_bloco,
+            _linha_campos(
+                [
+                    ("CRM", info.get("crm")),
+                    ("PD", pd_display),
+                ]
+            ),
+            "",
+            _linha_campos(
+                [
+                    ("NOTA FISCAL", nf.numero),
+                    ("DATA NF", _formatar_data_nf(nf.data_emissao)),
+                ]
+            ),
+            f"PRODUTOS: {_texto(nf.produtos_resumo)}",
+            _linha_campos(
+                [
+                    ("TRANSPORTADORA", _transportadora_bloco()),
+                    ("RASTREIO", "(NAO PREENCHA)"),
+                ]
+            ),
+        ]
+        if info.get("outras_info_licitacao"):
+            bloco_licitacao_linhas.extend(
+                [
+                    "",
+                    "Outras informações da licitação:",
+                    _texto(info.get("outras_info_licitacao")),
+                ]
+            )
+
+        bloco_licitacao_txt = "\n".join(bloco_licitacao_linhas).rstrip()
+
+        bloco_entrega_linhas = [
+            f"LOCAL DE ENTREGA: {local_nome}",
+            f"ENDEREÇO: {endereco_entrega}",
+            f"CEP: {cep_entrega}",
+            cidade_uf_entrega,
+            "",
+            f"AGENDAMENTO: {_texto(info.get('agendamento'))}",
+            _linha_campos(
+                [
+                    ("HORARIO", info.get("horario")),
+                    ("CONTATO", info.get("contato") or info.get("recebedor")),
+                    ("TELEFONE", info.get("telefone")),
+                ]
+            ),
+        ]
+        if info.get("outras_info_entrega"):
+            bloco_entrega_linhas.extend(
+                [
+                    "",
+                    "Outras informações da entrega:",
+                    _texto(info.get("outras_info_entrega")),
+                ]
+            )
+        bloco_entrega_txt = "\n".join(bloco_entrega_linhas).rstrip()
 
         blocos_row = QHBoxLayout()
         blocos_row.setSpacing(10)
@@ -3021,6 +3072,7 @@ class RomaneioWindow(QMainWindow):
         rastreio_layout.addLayout(rastreio_detail_container)
 
         rastreio_layout.addStretch(1)
+        bloco_rastreio.setVisible(False)
         card_layout.addWidget(bloco_rastreio)
 
         card._rastreio_status_label = lbl_status
@@ -3144,6 +3196,7 @@ class RomaneioWindow(QMainWindow):
         if idx < 0 or idx >= len(self._rastreio_card_widgets):
             return
         card = self._rastreio_card_widgets[idx]
+        card._bloco_rastreio.setVisible(True)
         status_label = card._rastreio_status_label
         detail_container = card._rastreio_detail_container
         if resultado.erro:
