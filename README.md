@@ -74,7 +74,8 @@ O workflow `.github\\workflows\\build-release.yml` roda manualmente e:
 executa o build Windows;
 gera os artefatos do instalador e do pacote de update;
 faz o bump de `app\\version.txt`;
-publica a release em `kaianesteffens\\RomaneioBeta-releases` quando `RELEASES\_TOKEN` esta configurado.
+publica a release no repo configurado em `RELEASE_REPO`, com aliases estaveis de update/instalador;
+mantem uma copia atualizada em `installer\\repository-assets\\` dentro do repositorio privado.
 Estrutura do repositorio
 Caminho	Responsabilidade
 `app\\romaneio\_app.py`	Janela principal PySide6 e fluxo entre modulos

@@ -25,6 +25,9 @@ from urllib.request import Request, urlopen
 _RATE_LIMIT_SECONDS = 600
 _recent_errors: dict[str, float] = {}
 _lock = threading.Lock()
+_CONFIG_SECTIONS = ("fretio", "fretebot", "romaneio")
+_ENV_GIST_ID_VARS = ("FRETIO_ERROR_GIST_ID", "FRETEBOT_ERROR_GIST_ID")
+_ENV_TOKEN_VARS = ("FRETIO_ERROR_REPORT_TOKEN", "FRETEBOT_ERROR_REPORT_TOKEN")
 
 # ── Configurações (lidas do CONFIG.toml) ─────────────────────────
 _gist_id: str = ""
@@ -34,8 +37,8 @@ _initialized = False
 # Fallback global embutido no código (opcional).
 # Preencha no build/release para centralizar o reporte em todas as máquinas,
 # sem depender de CONFIG.toml local.
-_EMBEDDED_ERROR_GIST_ID: str = "***REMOVED-GIST-ID***"
-_EMBEDDED_ERROR_REPORT_TOKEN: str = "***REMOVED-TOKEN***"
+_EMBEDDED_ERROR_GIST_ID: str = ""
+_EMBEDDED_ERROR_REPORT_TOKEN: str = ""
 
 # ── Log de diagnóstico ────────────────────────────────────────────
 _LOG_MAX_BYTES = 100 * 1024  # 100 KB — rotaciona apagando metade quando ultrapassar
@@ -127,18 +130,38 @@ def _iter_config_candidates():
     yield Path(__file__).parent / "CONFIG.toml"
 
 
-def _load_embedded_fallback() -> bool:
-    """Carrega credenciais embutidas no código/ambiente, se disponíveis."""
+def _load_env_fallback() -> bool:
+    """Carrega credenciais do ambiente, se disponíveis."""
     global _gist_id, _token, _initialized
-    gist_id = (_EMBEDDED_ERROR_GIST_ID or "").strip() or os.getenv("FRETIO_ERROR_GIST_ID", "").strip()
-    token = (_EMBEDDED_ERROR_REPORT_TOKEN or "").strip() or os.getenv("FRETIO_ERROR_REPORT_TOKEN", "").strip()
+    gist_id = ""
+    token = ""
+    for env_name in _ENV_GIST_ID_VARS:
+        gist_id = os.getenv(env_name, "").strip()
+        if gist_id:
+            break
+    for env_name in _ENV_TOKEN_VARS:
+        token = os.getenv(env_name, "").strip()
+        if token:
+            break
     if gist_id and token:
         _gist_id = gist_id
         _token = token
         _initialized = True
-        _diag("INFO", f"Credenciais carregadas do fallback embutido/ambiente | gist_id={gist_id[:8]}...")
+        _diag("INFO", f"Credenciais carregadas do ambiente | gist_id={gist_id[:8]}...")
         return True
     return False
+
+
+def _read_recent_diag_log(max_bytes: int = 12_000) -> str:
+    try:
+        p = _log_path()
+        if not p.exists():
+            return ""
+        raw = p.read_bytes()
+        tail = raw[-max_bytes:] if len(raw) > max_bytes else raw
+        return tail.decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
 
 
 def _load_config() -> None:
@@ -157,19 +180,20 @@ def _load_config() -> None:
             except Exception as e:
                 _diag("WARN", f"Falha ao ler {candidate}: {e}")
                 continue
-            fb = cfg.get("fretio", {})
-            gist_id = fb.get("error_gist_id", "").strip()
-            token = fb.get("error_report_token", "").strip()
-            if gist_id and token:
-                _gist_id = gist_id
-                _token = token
-                _initialized = True
-                _diag("INFO", f"Config carregada de: {candidate} | gist_id={gist_id[:8]}...")
-                return
-            else:
-                _diag("DEBUG", f"Config sem credenciais de report: {candidate} | gist_id={repr(gist_id)} token={'(presente)' if token else '(vazio)'}")
-        # Fallback final: credenciais embutidas no código/ambiente
-        if _load_embedded_fallback():
+            for section_name in _CONFIG_SECTIONS:
+                fb = cfg.get(section_name, {})
+                if not isinstance(fb, dict):
+                    continue
+                gist_id = str(fb.get("error_gist_id", "")).strip()
+                token = str(fb.get("error_report_token", "")).strip()
+                if gist_id and token:
+                    _gist_id = gist_id
+                    _token = token
+                    _initialized = True
+                    _diag("INFO", f"Config carregada de: {candidate} [{section_name}] | gist_id={gist_id[:8]}...")
+                    return
+            _diag("DEBUG", f"Config sem credenciais de report: {candidate}")
+        if _load_env_fallback():
             return
 
         # Nenhum arquivo tinha as chaves — NÃO marca como inicializado
@@ -199,19 +223,22 @@ def configure(config_path) -> None:
             _diag("WARN", f"configure(): arquivo não existe: {config_path}")
             return
         cfg = _load_toml_file(p)
-        fb = cfg.get("fretio", {})
-        gist_id = fb.get("error_gist_id", "").strip()
-        token = fb.get("error_report_token", "").strip()
-        if gist_id and token:
-            _gist_id = gist_id
-            _token = token
-            _initialized = True
-            _diag("INFO", f"configure(): credenciais carregadas de {config_path} | gist_id={gist_id[:8]}...")
+        for section_name in _CONFIG_SECTIONS:
+            fb = cfg.get(section_name, {})
+            if not isinstance(fb, dict):
+                continue
+            gist_id = str(fb.get("error_gist_id", "")).strip()
+            token = str(fb.get("error_report_token", "")).strip()
+            if gist_id and token:
+                _gist_id = gist_id
+                _token = token
+                _initialized = True
+                _diag("INFO", f"configure(): credenciais carregadas de {config_path} [{section_name}] | gist_id={gist_id[:8]}...")
+                return
+        if _load_env_fallback():
+            _diag("INFO", f"configure(): usando credenciais do ambiente (CONFIG sem credenciais): {config_path}")
         else:
-            if _load_embedded_fallback():
-                _diag("INFO", f"configure(): usando fallback embutido/ambiente (CONFIG sem credenciais): {config_path}")
-            else:
-                _diag("WARN", f"configure(): {config_path} sem credenciais | gist_id={repr(gist_id)} token={'(presente)' if token else '(vazio)'} — tentará fallback em _load_config()")
+            _diag("WARN", f"configure(): {config_path} sem credenciais — tentará fallback em _load_config()")
         # Se as chaves não existem/estão vazias: _initialized permanece False
         # para que _load_config() possa tentar os caminhos de fallback
     except Exception as e:
@@ -402,6 +429,15 @@ def report_error(
             tb_text.strip(),
             "```",
         ]
+        recent_diag = _read_recent_diag_log()
+        if recent_diag:
+            body_parts += [
+                "",
+                "### Diagnostico Local Recente",
+                "```text",
+                recent_diag,
+                "```",
+            ]
         body = "\n".join(body_parts)
 
         # Envia em thread separada para não bloquear o app
@@ -459,6 +495,15 @@ def report_error_message(message: str, context: str = "", wait: bool = False) ->
             caller_stack,
             "```",
         ]
+        recent_diag = _read_recent_diag_log()
+        if recent_diag:
+            body_parts += [
+                "",
+                "### Diagnostico Local Recente",
+                "```text",
+                recent_diag,
+                "```",
+            ]
         body = "\n".join(body_parts)
 
         label = f"msg/{context or 'N/A'}"
