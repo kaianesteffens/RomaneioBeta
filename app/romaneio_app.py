@@ -2870,7 +2870,7 @@ class RomaneioWindow(QMainWindow):
         self.label_info.setStyleSheet("color: #6b7a96;")
 
     def _criar_card_nfe(self, indice, nf):
-        """Cria um card visual para uma NF-e com 3 blocos: dados entrega | dados PE-CRM | rastreamento."""
+        """Cria um card visual para uma NF-e com 2 blocos de informacao e rastreamento."""
         card = QFrame()
         card.setObjectName("RastreioCard")
         card_layout = QVBoxLayout(card)
@@ -2892,96 +2892,116 @@ class RomaneioWindow(QMainWindow):
 
         info = parsear_info_complementar(nf.info_complementar)
 
+        def _texto(valor):
+            return str(valor or "").strip()
+
+        def _formatar_cep(valor):
+            digitos = "".join(ch for ch in str(valor or "") if ch.isdigit())
+            if len(digitos) == 8:
+                return f"{digitos[:5]}-{digitos[5:]}"
+            return _texto(valor)
+
+        def _linha_campos(campos):
+            return "  |  ".join(f"{rotulo}: {_texto(valor)}" for rotulo, valor in campos)
+
+        local_nome = _texto(info.get("local_entrega_nome"))
+        local_composto = _texto(info.get("local_entrega"))
+        if not local_nome and local_composto:
+            local_nome = local_composto.splitlines()[0].strip()
+
+        endereco_entrega = _texto(info.get("endereco_entrega"))
+        cep_entrega = _formatar_cep(info.get("cep_entrega") or nf.destinatario_cep)
+        cidade_uf_entrega = _texto(info.get("cidade_uf_entrega"))
+        if not cidade_uf_entrega and nf.destinatario_cidade and nf.destinatario_uf:
+            cidade_uf_entrega = f"{nf.destinatario_cidade}/{nf.destinatario_uf}"
+
+        bloco_licitacao_txt = "\n".join(
+            [
+                _linha_campos(
+                    [
+                        ("Processo", info.get("processo")),
+                        ("PE", info.get("pe")),
+                        ("Ata", info.get("ata")),
+                        ("Contrato", info.get("contrato")),
+                        ("Empenho", info.get("empenho")),
+                        ("OF", info.get("of")),
+                    ]
+                ),
+                _linha_campos(
+                    [
+                        ("Entrega", info.get("entrega")),
+                        ("Pagamento", info.get("pagamento")),
+                    ]
+                ),
+                "",
+                "Outras informações da licitação:",
+                _texto(info.get("outras_info_licitacao")),
+                f"CRM: {_texto(info.get('crm'))}",
+            ]
+        ).rstrip()
+
+        bloco_entrega_txt = "\n".join(
+            [
+                f"LOCAL DE ENTREGA: {local_nome}",
+                f"ENDEREÇO: {endereco_entrega}",
+                f"CEP: {cep_entrega}",
+                f"CIDADE/UF: {cidade_uf_entrega}",
+                "",
+                f"AGENDAMENTO: {_texto(info.get('agendamento'))}",
+                _linha_campos(
+                    [
+                        ("HORARIO", info.get("horario")),
+                        ("CONTATO", info.get("contato") or info.get("recebedor")),
+                        ("TELEFONE", info.get("telefone")),
+                    ]
+                ),
+                "",
+                "Outras informações da entrega:",
+                _texto(info.get("outras_info_entrega")),
+            ]
+        ).rstrip()
+
         blocos_row = QHBoxLayout()
         blocos_row.setSpacing(10)
 
-        # ── Bloco 1: Dados Adicionais da Nota Fiscal ─────────────────────────
-        bloco_pedido = QFrame()
-        bloco_pedido.setObjectName("RastreioBlueBlock")
-        pedido_layout = QVBoxLayout(bloco_pedido)
-        pedido_layout.setContentsMargins(10, 8, 10, 8)
-        pedido_layout.setSpacing(3)
+        bloco_licitacao = QFrame()
+        bloco_licitacao.setObjectName("RastreioBlueBlock")
+        licitacao_layout = QVBoxLayout(bloco_licitacao)
+        licitacao_layout.setContentsMargins(10, 8, 10, 8)
+        licitacao_layout.setSpacing(3)
 
-        lbl_pedido_title = QLabel("\U0001f4cb DADOS ADICIONAIS")
-        lbl_pedido_title.setObjectName("RastreioBlockTitle")
-        pedido_layout.addWidget(lbl_pedido_title)
+        lbl_licitacao_title = QLabel("\U0001f4cb DADOS DA LICITAÇÃO")
+        lbl_licitacao_title.setObjectName("RastreioBlockTitle")
+        licitacao_layout.addWidget(lbl_licitacao_title)
 
-        _adic_lines = []
-        if nf.destinatario_nome:
-            dest = nf.destinatario_nome
-            if nf.destinatario_cidade and nf.destinatario_uf:
-                dest += f" ({nf.destinatario_cidade}/{nf.destinatario_uf})"
-            _adic_lines.append(("Destinatario", dest))
-        if nf.destinatario_cep:
-            import re as _re2
-            cep_fmt = nf.destinatario_cep
-            if len(cep_fmt) == 8:
-                cep_fmt = f"{cep_fmt[:5]}-{cep_fmt[5:]}"
-            _adic_lines.append(("CEP", cep_fmt))
-        if info.get("local_entrega"):
-            _adic_lines.append(("Local Entrega", info["local_entrega"]))
-        if info.get("agendamento"):
-            _adic_lines.append(("Agendamento", info["agendamento"]))
-        if info.get("horario"):
-            _adic_lines.append(("Horario", info["horario"]))
-        if info.get("recebedor"):
-            _adic_lines.append(("Recebedor", info["recebedor"]))
-        if info.get("observacoes"):
-            _adic_lines.append(("Observacoes", info["observacoes"]))
-        if nf.volumes:
-            _adic_lines.append(("Volumes", str(nf.volumes)))
-        if nf.peso_bruto:
-            _adic_lines.append(("Peso Bruto", f"{nf.peso_bruto:.3f} kg"))
-        if nf.peso_liquido and nf.peso_liquido != nf.peso_bruto:
-            _adic_lines.append(("Peso Liquido", f"{nf.peso_liquido:.3f} kg"))
-        if nf.valor_total:
-            vf = f"R$ {nf.valor_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            _adic_lines.append(("Valor NF", vf))
-        if nf.valor_frete:
-            vfr = f"R$ {nf.valor_frete:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            _adic_lines.append(("Valor Frete", vfr))
-        _adic_txt = "\n".join(f"{lbl:<14} {val}" for lbl, val in _adic_lines) if _adic_lines else "Sem dados adicionais"
-        te_adicionais = QPlainTextEdit(_adic_txt)
-        te_adicionais.setReadOnly(True)
-        te_adicionais.setFrameShape(QFrame.NoFrame)
-        te_adicionais.setObjectName("RastreioBlockText")
-        te_adicionais.setLineWrapMode(QPlainTextEdit.WidgetWidth)
-        pedido_layout.addWidget(te_adicionais, 1)
-        blocos_row.addWidget(bloco_pedido, 1)
+        te_licitacao = QPlainTextEdit(bloco_licitacao_txt)
+        te_licitacao.setReadOnly(True)
+        te_licitacao.setFrameShape(QFrame.NoFrame)
+        te_licitacao.setObjectName("RastreioBlockText")
+        te_licitacao.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        licitacao_layout.addWidget(te_licitacao, 1)
+        blocos_row.addWidget(bloco_licitacao, 1)
 
-        # ── Bloco 2: Dados Complementares PE → CRM ───────────────────────────
-        bloco_complementar = QFrame()
-        bloco_complementar.setObjectName("RastreioGreenBlock")
-        complementar_layout = QVBoxLayout(bloco_complementar)
-        complementar_layout.setContentsMargins(10, 8, 10, 8)
-        complementar_layout.setSpacing(3)
+        bloco_entrega = QFrame()
+        bloco_entrega.setObjectName("RastreioGreenBlock")
+        entrega_layout = QVBoxLayout(bloco_entrega)
+        entrega_layout.setContentsMargins(10, 8, 10, 8)
+        entrega_layout.setSpacing(3)
 
-        lbl_comp_title = QLabel("\U0001f4dd DADOS COMPLEMENTARES")
-        lbl_comp_title.setObjectName("RastreioBlockTitle")
-        complementar_layout.addWidget(lbl_comp_title)
+        lbl_entrega_title = QLabel("\U0001f4cd DADOS DA ENTREGA")
+        lbl_entrega_title.setObjectName("RastreioBlockTitle")
+        entrega_layout.addWidget(lbl_entrega_title)
 
-        _comp_lines = []
-        if info.get("pedido_compra"):
-            _comp_lines.append(("Ped. Compra", info["pedido_compra"]))
-        if info.get("pedido_venda"):
-            _comp_lines.append(("Ped. Venda", info["pedido_venda"]))
-        bloco2 = info.get("bloco2_campos", [])
-        _label_map = {
-            "PE": "PE", "ATA": "ATA", "OC": "OC", "OP": "OP",
-            "NR": "NR", "CRM": "CRM",
-        }
-        for lbl, val in bloco2:
-            _comp_lines.append((_label_map.get(lbl.upper(), lbl), val))
-        _comp_txt = "\n".join(f"{lbl:<14} {val}" for lbl, val in _comp_lines) if _comp_lines else "Sem dados complementares"
-        te_complementar = QPlainTextEdit(_comp_txt)
-        te_complementar.setReadOnly(True)
-        te_complementar.setFrameShape(QFrame.NoFrame)
-        te_complementar.setObjectName("RastreioBlockText")
-        te_complementar.setLineWrapMode(QPlainTextEdit.WidgetWidth)
-        complementar_layout.addWidget(te_complementar, 1)
-        blocos_row.addWidget(bloco_complementar, 1)
+        te_entrega = QPlainTextEdit(bloco_entrega_txt)
+        te_entrega.setReadOnly(True)
+        te_entrega.setFrameShape(QFrame.NoFrame)
+        te_entrega.setObjectName("RastreioBlockText")
+        te_entrega.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        entrega_layout.addWidget(te_entrega, 1)
+        blocos_row.addWidget(bloco_entrega, 1)
 
-        # ── Bloco 3: Rastreamento ─────────────────────────────────────────────
+        card_layout.addLayout(blocos_row)
+
         bloco_rastreio = QFrame()
         bloco_rastreio.setObjectName("RastreioSlateBlock")
         rastreio_layout = QVBoxLayout(bloco_rastreio)
@@ -3001,9 +3021,7 @@ class RomaneioWindow(QMainWindow):
         rastreio_layout.addLayout(rastreio_detail_container)
 
         rastreio_layout.addStretch(1)
-        blocos_row.addWidget(bloco_rastreio, 1)
-
-        card_layout.addLayout(blocos_row)
+        card_layout.addWidget(bloco_rastreio)
 
         card._rastreio_status_label = lbl_status
         card._rastreio_detail_container = rastreio_detail_container

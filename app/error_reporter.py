@@ -28,6 +28,7 @@ _lock = threading.Lock()
 _CONFIG_SECTIONS = ("fretio", "fretebot", "romaneio")
 _ENV_GIST_ID_VARS = ("FRETIO_ERROR_GIST_ID", "FRETEBOT_ERROR_GIST_ID")
 _ENV_TOKEN_VARS = ("FRETIO_ERROR_REPORT_TOKEN", "FRETEBOT_ERROR_REPORT_TOKEN")
+_invalid_token_fingerprints: set[str] = set()
 
 # ── Configurações (lidas do CONFIG.toml) ─────────────────────────
 _gist_id: str = ""
@@ -97,6 +98,46 @@ def _load_toml_file(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _token_fingerprint(token: str) -> str:
+    return sha256(str(token or "").encode("utf-8")).hexdigest()[:16]
+
+
+def _is_token_blocklisted(token: str) -> bool:
+    token = str(token or "").strip()
+    if not token:
+        return False
+    return _token_fingerprint(token) in _invalid_token_fingerprints
+
+
+def _remember_invalid_current_token(reason: str = "") -> str:
+    global _gist_id, _token, _initialized
+    current_token = str(_token or "").strip()
+    if not current_token:
+        return ""
+    fp = _token_fingerprint(current_token)
+    _invalid_token_fingerprints.add(fp)
+    _diag("WARN", f"Token de reporte invalidado{f' ({reason})' if reason else ''} | fp={fp} | gist_id={_gist_id[:8]}...")
+    _gist_id = ""
+    _token = ""
+    _initialized = False
+    return fp
+
+
+def _apply_credentials(gist_id: str, token: str, *, source: str) -> bool:
+    global _gist_id, _token, _initialized
+    gist_id = str(gist_id or "").strip()
+    token = str(token or "").strip()
+    if not gist_id or not token:
+        return False
+    if _is_token_blocklisted(token):
+        _diag("WARN", f"Ignorando credenciais bloqueadas de {source} | gist_id={gist_id[:8]}... | fp={_token_fingerprint(token)}")
+        return False
+    _gist_id = gist_id
+    _token = token
+    _initialized = True
+    return True
+
+
 def _iter_config_candidates():
     """Gera candidatos de CONFIG.toml em ordem de preferência."""
     appdata = Path(os.getenv("APPDATA", ""))
@@ -132,7 +173,6 @@ def _iter_config_candidates():
 
 def _load_env_fallback() -> bool:
     """Carrega credenciais do ambiente, se disponíveis."""
-    global _gist_id, _token, _initialized
     gist_id = ""
     token = ""
     for env_name in _ENV_GIST_ID_VARS:
@@ -143,11 +183,18 @@ def _load_env_fallback() -> bool:
         token = os.getenv(env_name, "").strip()
         if token:
             break
-    if gist_id and token:
-        _gist_id = gist_id
-        _token = token
-        _initialized = True
+    if _apply_credentials(gist_id, token, source="ambiente"):
         _diag("INFO", f"Credenciais carregadas do ambiente | gist_id={gist_id[:8]}...")
+        return True
+    return False
+
+
+def _load_embedded_fallback() -> bool:
+    """Carrega credenciais embutidas no binário, se disponíveis."""
+    gist_id = str(_EMBEDDED_ERROR_GIST_ID or "").strip()
+    token = str(_EMBEDDED_ERROR_REPORT_TOKEN or "").strip()
+    if _apply_credentials(gist_id, token, source="fallback embutido"):
+        _diag("INFO", f"Credenciais carregadas do fallback embutido | gist_id={gist_id[:8]}...")
         return True
     return False
 
@@ -166,10 +213,15 @@ def _read_recent_diag_log(max_bytes: int = 12_000) -> str:
 
 def _load_config() -> None:
     """Carrega error_gist_id e error_report_token do CONFIG.toml."""
-    global _gist_id, _token, _initialized
+    global _initialized
     if _initialized:
         return
     try:
+        if _load_env_fallback():
+            return
+        if _load_embedded_fallback():
+            return
+
         candidates_checked = []
         for candidate in _iter_config_candidates():
             if not candidate.exists():
@@ -186,15 +238,10 @@ def _load_config() -> None:
                     continue
                 gist_id = str(fb.get("error_gist_id", "")).strip()
                 token = str(fb.get("error_report_token", "")).strip()
-                if gist_id and token:
-                    _gist_id = gist_id
-                    _token = token
-                    _initialized = True
+                if _apply_credentials(gist_id, token, source=str(candidate)):
                     _diag("INFO", f"Config carregada de: {candidate} [{section_name}] | gist_id={gist_id[:8]}...")
                     return
             _diag("DEBUG", f"Config sem credenciais de report: {candidate}")
-        if _load_env_fallback():
-            return
 
         # Nenhum arquivo tinha as chaves — NÃO marca como inicializado
         # para que a próxima chamada tente novamente (ex: config copiada depois)
@@ -215,7 +262,7 @@ def reload_config() -> None:
 
 def configure(config_path) -> None:
     """Configura o error reporter com o path explícito do CONFIG.toml da empresa ativa."""
-    global _gist_id, _token, _initialized
+    global _initialized
     _initialized = False
     try:
         p = Path(config_path)
@@ -229,14 +276,12 @@ def configure(config_path) -> None:
                 continue
             gist_id = str(fb.get("error_gist_id", "")).strip()
             token = str(fb.get("error_report_token", "")).strip()
-            if gist_id and token:
-                _gist_id = gist_id
-                _token = token
-                _initialized = True
+            if _apply_credentials(gist_id, token, source=str(config_path)):
                 _diag("INFO", f"configure(): credenciais carregadas de {config_path} [{section_name}] | gist_id={gist_id[:8]}...")
                 return
-        if _load_env_fallback():
-            _diag("INFO", f"configure(): usando credenciais do ambiente (CONFIG sem credenciais): {config_path}")
+        _load_config()
+        if _initialized:
+            _diag("INFO", f"configure(): usando credenciais globais/fallback para {config_path}")
         else:
             _diag("WARN", f"configure(): {config_path} sem credenciais — tentará fallback em _load_config()")
         # Se as chaves não existem/estão vazias: _initialized permanece False
@@ -316,15 +361,16 @@ def _send_to_gist(body: str, label: str = "") -> bool:
     if not _gist_id or not _token:
         _diag("WARN", f"_send_to_gist({label}): abortado — gist_id ou token vazios no momento do envio")
         return False
-    url = f"https://api.github.com/gists/{_gist_id}/comments"
-    payload = json.dumps({"body": body}).encode("utf-8")
-    req = Request(url, data=payload, method="POST")
-    # Bearer funciona para classic PATs e fine-grained PATs; "token" só para classic
-    req.add_header("Authorization", f"Bearer {_token}")
-    req.add_header("Accept", "application/vnd.github+json")
-    req.add_header("Content-Type", "application/json")
-    req.add_header("X-GitHub-Api-Version", "2022-11-28")
-    try:
+
+    def _send_once() -> bool:
+        url = f"https://api.github.com/gists/{_gist_id}/comments"
+        payload = json.dumps({"body": body}).encode("utf-8")
+        req = Request(url, data=payload, method="POST")
+        # Bearer funciona para classic PATs e fine-grained PATs; "token" só para classic
+        req.add_header("Authorization", f"Bearer {_token}")
+        req.add_header("Accept", "application/vnd.github+json")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("X-GitHub-Api-Version", "2022-11-28")
         with urlopen(req, timeout=15) as resp:
             ok = resp.status == 201
             if ok:
@@ -332,6 +378,9 @@ def _send_to_gist(body: str, label: str = "") -> bool:
             else:
                 _diag("WARN", f"_send_to_gist({label}): resposta inesperada HTTP {resp.status}")
             return ok
+
+    try:
+        return _send_once()
     except HTTPError as e:
         body_snippet = ""
         try:
@@ -339,6 +388,24 @@ def _send_to_gist(body: str, label: str = "") -> bool:
         except Exception:
             pass
         _diag("ERROR", f"_send_to_gist({label}): HTTP {e.code} {e.reason} | gist_id={_gist_id[:8]}... | resposta: {body_snippet}")
+        if e.code == 401:
+            previous_fp = _remember_invalid_current_token("http-401")
+            reload_config()
+            if _gist_id and _token and _token_fingerprint(_token) != previous_fp:
+                _diag("INFO", f"_send_to_gist({label}): tentando fallback após 401")
+                try:
+                    return _send_once()
+                except HTTPError as retry_err:
+                    retry_body = ""
+                    try:
+                        retry_body = retry_err.read(200).decode("utf-8", errors="replace")
+                    except Exception:
+                        pass
+                    _diag("ERROR", f"_send_to_gist({label}): fallback HTTP {retry_err.code} {retry_err.reason} | gist_id={_gist_id[:8]}... | resposta: {retry_body}")
+                except URLError as retry_err:
+                    _diag("ERROR", f"_send_to_gist({label}): fallback URLError — {retry_err.reason}")
+                except Exception as retry_err:
+                    _diag("ERROR", f"_send_to_gist({label}): fallback exceção inesperada — {type(retry_err).__name__}: {retry_err}")
         return False
     except URLError as e:
         _diag("ERROR", f"_send_to_gist({label}): URLError — {e.reason}")

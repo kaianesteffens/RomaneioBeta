@@ -342,139 +342,330 @@ def formatar_nota_resumo(nf: NotaFiscal) -> str:
     return "\n".join(linhas)
 
 
+def _normalizar_info_linhas(info: str) -> list[str]:
+    texto = (info or "").replace("\r\n", "\n").replace("\r", "\n").replace("||", "\n")
+    linhas: list[str] = []
+    for trecho in texto.splitlines():
+        for parte in trecho.split("|"):
+            linha = re.sub(r"\s+", " ", parte or "").strip()
+            if linha:
+                linhas.append(linha)
+    return linhas
+
+
+def _limpar_valor_info(valor: str) -> str:
+    valor_limpo = re.sub(r"\s+", " ", str(valor or "")).strip()
+    valor_limpo = re.sub(r"^[\s:;\-]+", "", valor_limpo)
+    return valor_limpo.rstrip(" .;,")
+
+
+def _match_linha_rotulada(linha: str, padrao: str):
+    return re.match(
+        rf"^(?:{padrao})(?:(?:\s*[:\-]\s*|\s+)(.*)|\s*)$",
+        linha,
+        re.IGNORECASE,
+    )
+
+
+def _formatar_cep_info(valor: str) -> str:
+    digitos = re.sub(r"\D", "", str(valor or ""))
+    if len(digitos) == 8:
+        return f"{digitos[:5]}-{digitos[5:]}"
+    return _limpar_valor_info(valor)
+
+
+def _normalizar_cidade_uf_info(valor: str) -> str:
+    texto = _limpar_valor_info(valor)
+    if not texto:
+        return ""
+    match = re.search(r"([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s.'-]+)\s*/\s*([A-Za-z]{2})", texto)
+    if not match:
+        return texto
+    return f"{match.group(1).strip()}/{match.group(2).upper()}"
+
+
+def _juntar_linhas_unicas(valores: list[str]) -> str:
+    unicos: list[str] = []
+    vistos: set[str] = set()
+    for valor in valores:
+        texto = _limpar_valor_info(valor)
+        if not texto:
+            continue
+        chave = texto.casefold()
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        unicos.append(texto)
+    return "\n".join(unicos)
+
+
 def parsear_info_complementar(info: str) -> dict:
     """Parseia informacoes complementares da NF-e em campos estruturados.
 
     Retorna dict com:
-      Bloco 1 (entrega/logistica):
-        pedido_compra, pedido_venda, local_entrega, agendamento,
-        horario, recebedor, observacoes
-      Bloco 2 (PE ate CRM):
-        bloco2_campos -> list of (label, valor) tuples
-        Tambem pe, ata, oc, crm, op como chaves individuais.
+      Bloco 1 (licitacao):
+        processo, pe, ata, contrato, empenho, of, entrega,
+        pagamento, crm, outras_info_licitacao
+      Bloco 2 (entrega):
+        local_entrega_nome, endereco_entrega, cep_entrega,
+        cidade_uf_entrega, agendamento, horario, contato,
+        telefone, outras_info_entrega
+
+      Mantem tambem chaves legadas usadas no app, como pedido_compra,
+      pedido_venda, local_entrega, recebedor e bloco2_campos.
     """
     result = {}
     if not info:
         return result
 
-    # Normaliza separadores: || vira newline, | vira newline
-    texto = info.replace("||", "\n").replace("|", "\n")
+    linhas = _normalizar_info_linhas(info)
+    if not linhas:
+        return result
 
-    # ── Bloco 1: logistica / entrega ─────────────────────────────────────────
+    rotulos = {
+        "pedido_compra": (r"PEDIDO\s+DE\s+COMPRA(?:\s+DO\s+CLIENTE)?",),
+        "pedido_venda": (r"PEDIDO\s+DE\s+VENDA",),
+        "processo": (r"PROCESSO(?:\s+ADMINISTRATIVO)?",),
+        "pe": (r"PE",),
+        "ata": (r"ATA",),
+        "contrato": (r"CONTRATO",),
+        "empenho": (r"EMPENHO",),
+        "of": (r"OF",),
+        "entrega": (r"ENTREGA(?!\s+LOCAL)", r"PRAZO\s+DE\s+ENTREGA"),
+        "pagamento": (r"PAGAMENTO", r"CONDI(?:CAO|ÇÃO)\s+DE\s+PAGAMENTO"),
+        "crm": (r"CRM",),
+        "local_entrega": (r"LOCAL\s+DE\s+ENTREGA",),
+        "endereco": (r"ENDERE(?:CO|ÇO)",),
+        "cep": (r"CEP",),
+        "cidade_uf": (r"CIDADE\s*/\s*UF", r"CIDADE\s+UF"),
+        "agendamento": (r"AGENDAMENTO",),
+        "horario": (r"HOR(?:ARIO|ÁRIO)",),
+        "contato": (r"CONTATO", r"RECEBEDOR", r"RESPONS(?:AVEL|ÁVEL)"),
+        "telefone": (r"TELEFONE", r"TEL(?:EFONE)?", r"FONE"),
+        "obs": (
+            r"OBS(?:ERVACOES?|ERV)?",
+            r"OUTRAS?\s+INFORMA(?:COES|ÇÕES)(?:\s+DA)?\s+LICITA(?:CAO|ÇÃO)",
+            r"OUTRAS?\s+INFORMA(?:COES|ÇÕES)(?:\s+DA)?\s+ENTREGA",
+        ),
+    }
+    todos_rotulos = tuple(padrao for padroes in rotulos.values() for padrao in padroes)
+    used_indices: set[int] = set()
 
-    m = re.search(r'Pedido\s+de\s+compra\s+do\s+cliente[:\s]*(.+)', texto, re.IGNORECASE)
-    if m:
-        result["pedido_compra"] = m.group(1).strip().rstrip(".")
+    def _casa_rotulos(linha: str, padroes: tuple[str, ...]) -> bool:
+        return any(_match_linha_rotulada(linha, padrao) for padrao in padroes)
 
-    m = re.search(r'Pedido\s+de\s+Venda[:\s]*(.+)', texto, re.IGNORECASE)
-    if m:
-        result["pedido_venda"] = m.group(1).strip().rstrip(".")
+    def _extrair_valor_linha(linha: str, padroes: tuple[str, ...]) -> str:
+        for padrao in padroes:
+            match = _match_linha_rotulada(linha, padrao)
+            if match:
+                return _limpar_valor_info(match.group(1) or "")
+        return ""
 
-    local_parts = []
-    m_local = re.search(
-        r'LOCAL\s+DE\s+ENTREGA[:\s]*(.*?)(?=\n\s*(?:AGENDAMENTO|HORARIO|PE\b|CRM\b|-{3,}|$))',
-        texto, re.IGNORECASE | re.DOTALL
-    )
-    if m_local:
-        local_raw = m_local.group(1).strip()
-        if local_raw:
-            local_parts.append(local_raw)
-    m = re.search(r'ENDERECO[:\s]*(.+)', texto, re.IGNORECASE)
-    if m and m.group(1).strip() not in " ".join(local_parts):
-        local_parts.append(m.group(1).strip())
-    m = re.search(r'BAIRRO[:\s]*(.+)', texto, re.IGNORECASE)
-    if m:
-        bairro = m.group(1).strip()
-        if bairro and bairro not in " ".join(local_parts):
-            local_parts.append(bairro)
-    # Linha "CIDADE/UF" sem label (ex: "MARILIA/SP")
-    m_cidade = re.search(r'\n\s*([A-Za-z][A-Za-z\s]+/[A-Z]{2})\s*\n', texto)
-    if m_cidade:
-        cidade_linha = m_cidade.group(1).strip()
-        if cidade_linha not in " ".join(local_parts):
-            local_parts.append(cidade_linha)
-    m_cep = re.search(r'CEP[:\s]*([\d.\-]+)', texto, re.IGNORECASE)
-    if m_cep:
-        cep_str = m_cep.group(1).strip()
-        if cep_str not in " ".join(local_parts):
-            local_parts.append("CEP " + cep_str)
-    if local_parts:
-        result["local_entrega"] = "\n".join(local_parts)
+    def _extrair_campo(chave: str, *, allow_next_line: bool = True) -> tuple[str, int]:
+        padroes = rotulos[chave]
+        for idx, linha in enumerate(linhas):
+            if idx in used_indices:
+                continue
+            valor = _extrair_valor_linha(linha, padroes)
+            if valor or _casa_rotulos(linha, padroes):
+                used_indices.add(idx)
+                if not valor and allow_next_line:
+                    prox_idx = idx + 1
+                    if (
+                        prox_idx < len(linhas)
+                        and prox_idx not in used_indices
+                        and not _casa_rotulos(linhas[prox_idx], todos_rotulos)
+                    ):
+                        valor = _limpar_valor_info(linhas[prox_idx])
+                        if valor:
+                            used_indices.add(prox_idx)
+                if valor:
+                    result[chave] = valor
+                return valor, idx
+        return "", -1
 
-    m = re.search(r'AGENDAMENTO[:\s]*(\S+)', texto, re.IGNORECASE)
-    if m:
-        result["agendamento"] = m.group(1).strip()
+    for chave in (
+        "pedido_compra",
+        "pedido_venda",
+        "processo",
+        "pe",
+        "ata",
+        "contrato",
+        "empenho",
+        "of",
+        "entrega",
+        "pagamento",
+        "crm",
+    ):
+        _extrair_campo(chave)
 
-    m = re.search(r'HORARIO[:\s]*(.+?)(?:\n|$)', texto, re.IGNORECASE)
-    if m:
-        result["horario"] = m.group(1).strip()
+    valor_local, idx_local = _extrair_campo("local_entrega", allow_next_line=False)
+    idx_agendamento = idx_horario = idx_contato = idx_telefone = -1
+    local_extra_lines: list[str] = []
 
-    for _pat in [
-        r'RECEBEDOR[:\s]*(.+?)(?:\n|$)',
-        r'CONTATO[:\s]*(.+?)(?:\n|$)',
-        r'RESPONSAVEL[:\s]*(.+?)(?:\n|$)',
-    ]:
-        m = re.search(_pat, texto, re.IGNORECASE)
-        if m:
-            result["recebedor"] = m.group(1).strip()
-            break
+    if idx_local >= 0:
+        stop_padroes = (
+            rotulos["agendamento"]
+            + rotulos["horario"]
+            + rotulos["contato"]
+            + rotulos["telefone"]
+            + rotulos["processo"]
+            + rotulos["pe"]
+            + rotulos["ata"]
+            + rotulos["contrato"]
+            + rotulos["empenho"]
+            + rotulos["of"]
+            + rotulos["entrega"]
+            + rotulos["pagamento"]
+            + rotulos["crm"]
+        )
+        linhas_local = [valor_local] if valor_local else []
+        prox_idx = idx_local + 1
+        while prox_idx < len(linhas):
+            if prox_idx in used_indices:
+                prox_idx += 1
+                continue
+            if _casa_rotulos(linhas[prox_idx], stop_padroes):
+                break
+            linhas_local.append(linhas[prox_idx])
+            used_indices.add(prox_idx)
+            prox_idx += 1
 
-    m = re.search(
-        r'(?:OBS(?:ERVACOES?)?|OBSERV)[:\s]*(.+?)(?=\n\s*[A-Z]{2,}\s*[:\-]|\Z)',
-        texto, re.IGNORECASE | re.DOTALL
-    )
-    if m:
-        obs = m.group(1).strip()
-        if obs:
-            result["observacoes"] = obs
+        local_nome = ""
+        endereco = ""
+        cep = ""
+        cidade_uf = ""
 
-    # Bloco 2: PE -> CRM (campos com separador espaco ou dois-pontos)
-    # Formato XML real: "PE 900572024", "ATA 334/2024/C", "OC 115575/2026", "CRM 18625"
+        for linha in linhas_local:
+            if not linha:
+                continue
+            valor_endereco = _extrair_valor_linha(linha, rotulos["endereco"])
+            if valor_endereco:
+                endereco = valor_endereco
+                continue
+            valor_cep = _extrair_valor_linha(linha, rotulos["cep"])
+            if valor_cep:
+                cep = _formatar_cep_info(valor_cep)
+                continue
+            valor_cidade = _extrair_valor_linha(linha, rotulos["cidade_uf"])
+            if valor_cidade:
+                cidade_uf = _normalizar_cidade_uf_info(valor_cidade)
+                continue
+
+            cidade_guess = _normalizar_cidade_uf_info(linha)
+            if "/" in cidade_guess and cidade_guess.upper().endswith(("/AC", "/AL", "/AP", "/AM", "/BA", "/CE", "/DF", "/ES", "/GO", "/MA", "/MT", "/MS", "/MG", "/PA", "/PB", "/PR", "/PE", "/PI", "/RJ", "/RN", "/RS", "/RO", "/RR", "/SC", "/SP", "/SE", "/TO")):
+                cidade_uf = cidade_guess
+                continue
+
+            if not endereco and re.search(r"\d", linha):
+                endereco = _limpar_valor_info(linha)
+                continue
+
+            if not local_nome:
+                local_nome = _limpar_valor_info(linha)
+            else:
+                local_extra_lines.append(linha)
+
+        if not cep:
+            for linha in linhas_local:
+                cep_guess = _formatar_cep_info(linha)
+                if cep_guess and re.fullmatch(r"\d{5}-\d{3}", cep_guess):
+                    cep = cep_guess
+                    break
+
+        if local_nome:
+            result["local_entrega_nome"] = local_nome
+        if endereco:
+            result["endereco_entrega"] = endereco
+        if cep:
+            result["cep_entrega"] = cep
+        if cidade_uf:
+            result["cidade_uf_entrega"] = cidade_uf
+
+        local_composto = []
+        if local_nome:
+            local_composto.append(local_nome)
+        if endereco:
+            local_composto.append(endereco)
+        if cep:
+            local_composto.append(f"CEP {cep}")
+        if cidade_uf:
+            local_composto.append(cidade_uf)
+        if local_composto:
+            result["local_entrega"] = "\n".join(local_composto)
+
+    agendamento, idx_agendamento = _extrair_campo("agendamento")
+    if agendamento:
+        if re.search(r"\bN(?:AO|ÃO)?\b", agendamento, re.IGNORECASE):
+            result["agendamento"] = "NÃO"
+        elif re.search(r"\bS(?:IM)?\b", agendamento, re.IGNORECASE):
+            result["agendamento"] = "SIM"
+        else:
+            result["agendamento"] = agendamento
+
+    horario, idx_horario = _extrair_campo("horario")
+    if horario:
+        result["horario"] = horario
+
+    contato, idx_contato = _extrair_campo("contato")
+    if contato:
+        result["contato"] = contato
+        result["recebedor"] = contato
+
+    telefone, idx_telefone = _extrair_campo("telefone")
+    if telefone:
+        result["telefone"] = telefone
+
+    delivery_indices = [idx for idx in (idx_local, idx_agendamento, idx_horario, idx_contato, idx_telefone) if idx >= 0]
+    delivery_boundary_idx = min(delivery_indices) if delivery_indices else len(linhas)
+
+    extras_licitacao: list[str] = []
+    extras_entrega: list[str] = list(local_extra_lines)
+
+    if result.get("pedido_compra"):
+        extras_licitacao.append(f"Pedido de compra do cliente: {result['pedido_compra']}")
+    if result.get("pedido_venda"):
+        extras_licitacao.append(f"Pedido de Venda: {result['pedido_venda']}")
+
+    for idx, linha in enumerate(linhas):
+        if idx in used_indices:
+            continue
+        texto_linha = re.sub(
+            r"^(?:OBS(?:ERVACOES?|ERV)?|OUTRAS?\s+INFORMA(?:COES|ÇÕES)(?:\s+DA)?\s+(?:LICITA(?:CAO|ÇÃO)|ENTREGA))\s*[:\-]?\s*",
+            "",
+            linha,
+            flags=re.IGNORECASE,
+        )
+        texto_linha = _limpar_valor_info(texto_linha)
+        if not texto_linha:
+            continue
+        if idx >= delivery_boundary_idx:
+            extras_entrega.append(texto_linha)
+        else:
+            extras_licitacao.append(texto_linha)
+
+    outras_licitacao = _juntar_linhas_unicas(extras_licitacao)
+    outras_entrega = _juntar_linhas_unicas(extras_entrega)
+    if outras_licitacao:
+        result["outras_info_licitacao"] = outras_licitacao
+    if outras_entrega:
+        result["outras_info_entrega"] = outras_entrega
+
+    if outras_licitacao and not result.get("observacoes"):
+        result["observacoes"] = outras_licitacao
 
     bloco2_campos = []
-    captured_b2 = set()
-
-    _b2_known = [
-        ("PE",  r'(?:^|\n)\s*PE\s+(\S+)',   r'(?:^|\n)\s*PE\s*[:\-]\s*(\S+)'),
-        ("ATA", r'(?:^|\n)\s*ATA\s+(\S+)',  r'(?:^|\n)\s*ATA\s*[:\-]\s*(\S+)'),
-        ("OC",  r'(?:^|\n)\s*OC\s+(\S+)',   r'(?:^|\n)\s*OC\s*[:\-]\s*(\S+)'),
-        ("OP",  r'(?:^|\n)\s*OP\s+(\S+)',   r'(?:^|\n)\s*OP\s*[:\-]\s*(\S+)'),
-        ("NR",  r'(?:^|\n)\s*NR\s+(\S+)',   r'(?:^|\n)\s*NR\s*[:\-]\s*(\S+)'),
-        ("CRM", r'(?:^|\n)\s*CRM\s+(\S+)',  r'(?:^|\n)\s*CRM\s*[:\-]\s*(\S+)'),
-    ]
-    for label, pat_space, pat_colon in _b2_known:
-        val = None
-        for pat in (pat_space, pat_colon):
-            m = re.search(pat, texto)
-            if m:
-                v = m.group(1).strip().rstrip(",;.")
-                if v and not re.match(r'^-{3,}', v):
-                    val = v
-                    break
-        if val:
-            bloco2_campos.append((label, val))
-            captured_b2.add(label)
-            result[label.lower()] = val
-
-    # Varredura generica na secao apos AGENDAMENTO (ate tracejado ou fim)
-    m_sec = re.search(
-        r'AGENDAMENTO[^\n]*\n(.*?)(?=-{3,}|Endereco de Entrega|\Z)',
-        texto, re.IGNORECASE | re.DOTALL
-    )
-    if m_sec:
-        for linha in m_sec.group(1).splitlines():
-            linha = linha.strip()
-            if not linha or re.match(r'^-+$', linha):
-                continue
-            m_lv = re.match(r'^([A-Z]{2,6})\s+(\S.*)$', linha)
-            if m_lv:
-                lbl = m_lv.group(1)
-                val = m_lv.group(2).strip()
-                if lbl not in captured_b2 and not any(l == lbl for l, _ in bloco2_campos):
-                    bloco2_campos.append((lbl, val))
-                    captured_b2.add(lbl)
-                    result["b2_" + lbl.lower()] = val
-
+    for label, chave in (
+        ("PE", "pe"),
+        ("ATA", "ata"),
+        ("CONTRATO", "contrato"),
+        ("EMPENHO", "empenho"),
+        ("OF", "of"),
+        ("CRM", "crm"),
+    ):
+        valor = result.get(chave)
+        if valor:
+            bloco2_campos.append((label, valor))
     if bloco2_campos:
         result["bloco2_campos"] = bloco2_campos
 

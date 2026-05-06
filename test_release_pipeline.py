@@ -1,5 +1,7 @@
 import sys
 from pathlib import Path
+from io import BytesIO
+from urllib.error import HTTPError
 
 
 ROOT = Path(__file__).parent
@@ -93,6 +95,7 @@ def test_error_reporter_uses_env_fallback_without_embedded_secret(monkeypatch):
     er._gist_id = ""
     er._token = ""
     er._initialized = False
+    er._invalid_token_fingerprints.clear()
 
     er._load_config()
 
@@ -100,6 +103,103 @@ def test_error_reporter_uses_env_fallback_without_embedded_secret(monkeypatch):
     assert er._EMBEDDED_ERROR_REPORT_TOKEN == ""
     assert er._gist_id == "gist-123"
     assert er._token == "token-456"
+
+
+def test_error_reporter_configure_falls_back_to_global_config(monkeypatch, tmp_path):
+    appdata = tmp_path / "appdata"
+    root_cfg = appdata / "Fretio" / "CONFIG.toml"
+    root_cfg.parent.mkdir(parents=True)
+    root_cfg.write_text(
+        "[fretio]\n"
+        'error_gist_id = "gist-global"\n'
+        'error_report_token = "token-global"\n',
+        encoding="utf-8",
+    )
+    company_cfg = appdata / "Fretio" / "empresas" / "DARLU" / "CONFIG.toml"
+    company_cfg.parent.mkdir(parents=True)
+    company_cfg.write_text("[fretio]\n", encoding="utf-8")
+    monkeypatch.setenv("APPDATA", str(appdata))
+    er._gist_id = ""
+    er._token = ""
+    er._initialized = False
+    er._invalid_token_fingerprints.clear()
+
+    er.configure(company_cfg)
+
+    assert er._gist_id == "gist-global"
+    assert er._token == "token-global"
+
+
+def test_error_reporter_retries_with_next_token_after_bad_credentials(monkeypatch, tmp_path):
+    appdata = tmp_path / "appdata"
+    root_cfg = appdata / "Fretio" / "CONFIG.toml"
+    root_cfg.parent.mkdir(parents=True)
+    root_cfg.write_text(
+        "[fretio]\n"
+        'error_gist_id = "gist-old"\n'
+        'error_report_token = "token-old"\n',
+        encoding="utf-8",
+    )
+    bundled_cfg = tmp_path / "bundle" / "CONFIG.toml"
+    bundled_cfg.parent.mkdir(parents=True)
+    bundled_cfg.write_text(
+        "[fretio]\n"
+        'error_gist_id = "gist-new"\n'
+        'error_report_token = "token-new"\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("APPDATA", str(appdata))
+    monkeypatch.setattr(er, "_iter_config_candidates", lambda: [root_cfg, bundled_cfg])
+    er._gist_id = ""
+    er._token = ""
+    er._initialized = False
+    er._invalid_token_fingerprints.clear()
+
+    requests = []
+
+    class _ImmediateThread:
+        def __init__(self, target, args=(), daemon=None):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            self._target(*self._args)
+
+        def join(self, timeout=None):
+            return None
+
+    class _Response:
+        status = 201
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(req, timeout=15):
+        auth = req.get_header("Authorization")
+        requests.append(auth)
+        if auth == "Bearer token-old":
+            raise HTTPError(
+                req.full_url,
+                401,
+                "Unauthorized",
+                hdrs=None,
+                fp=BytesIO(b'{"message":"Bad credentials","status":"401"}'),
+            )
+        return _Response()
+
+    monkeypatch.setattr(er, "urlopen", fake_urlopen)
+    monkeypatch.setattr(er.threading, "Thread", _ImmediateThread)
+
+    er.report_error_message("falha operacional", context="cotacao_RODONAVES", wait=True)
+
+    assert requests == ["Bearer token-old", "Bearer token-new"]
+    assert er._gist_id == "gist-new"
+    assert er._token == "token-new"
+    assert er._token_fingerprint("token-old") in er._invalid_token_fingerprints
 
 
 def test_error_reporter_appends_recent_diag_log(monkeypatch, tmp_path):
