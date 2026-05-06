@@ -16,8 +16,11 @@ if sys.platform == "win32":
     _SW_HIDE = 0
     _SW_SHOW = 5
     _SW_SHOWNOACTIVATE = 4
+    _SW_RESTORE = 9
     _SWP_NOMOVE = 0x0002
     _SWP_NOSIZE = 0x0001
+    _SWP_NOZORDER = 0x0004
+    _SWP_SHOWWINDOW = 0x0040
     _HWND_TOPMOST = -1
     _HWND_NOTOPMOST = -2
 
@@ -57,7 +60,6 @@ def _forcar_foreground(hwnd: int) -> None:
     que impede SetForegroundWindow de funcionar quando o chamador não é o
     processo foreground atual.
     """
-    _SW_RESTORE = 9
     _KEYEVENTF_EXTENDEDKEY = 0x0001
     _KEYEVENTF_KEYUP = 0x0002
     _VK_MENU = 0x12  # Alt key
@@ -99,6 +101,30 @@ def _forcar_foreground(hwnd: int) -> None:
 
     # Oculta janelas IME que podem ter ficado visíveis pelo Alt simulado
     _ocultar_ime_interno()
+
+
+def _restaurar_appwindow(hwnd: int) -> None:
+    style = _user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+    style = (style & ~_WS_EX_TOOLWINDOW) | _WS_EX_APPWINDOW
+    _user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, style)
+
+
+def _posicionar_hwnd(hwnd: int, *, left: int, top: int, width: int, height: int, bring_to_front: bool) -> None:
+    if _user32.IsIconic(hwnd):
+        _user32.ShowWindow(hwnd, _SW_RESTORE)
+    else:
+        _user32.ShowWindow(hwnd, _SW_SHOW)
+    _user32.SetWindowPos(
+        hwnd,
+        0,
+        int(left),
+        int(top),
+        int(width),
+        int(height),
+        _SWP_NOZORDER | _SWP_SHOWWINDOW,
+    )
+    if bring_to_front:
+        _forcar_foreground(hwnd)
 
 
 def ocultar_taskbar_por_pid(pid: int) -> bool:
@@ -168,6 +194,51 @@ def trazer_janela_frente_por_pid(pid: int) -> bool:
     return encontrou
 
 
+def posicionar_janela_por_pid(
+    pid: int,
+    *,
+    left: int,
+    top: int,
+    width: int,
+    height: int,
+    bring_to_front: bool = False,
+) -> bool:
+    """Reposiciona janelas top-level de um PID usando Win32 API."""
+    if sys.platform != "win32":
+        return False
+    encontrou = False
+
+    @_WNDENUMPROC
+    def callback(hwnd, _lparam):
+        nonlocal encontrou
+        proc_id = wintypes.DWORD()
+        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(proc_id))
+        if proc_id.value == pid and _user32.IsWindowVisible(hwnd):
+            _restaurar_appwindow(hwnd)
+            _posicionar_hwnd(
+                hwnd,
+                left=left,
+                top=top,
+                width=width,
+                height=height,
+                bring_to_front=bring_to_front,
+            )
+            encontrou = True
+        return True
+
+    _user32.EnumWindows(callback, 0)
+    if encontrou:
+        logger.debug(
+            "Janela(s) do PID %d reposicionada(s) para (%d,%d) %dx%d",
+            pid,
+            left,
+            top,
+            width,
+            height,
+        )
+    return encontrou
+
+
 async def trazer_janela_frente(page) -> bool:
     """Traz a janela do navegador para frente de todas usando Win32 API."""
     if sys.platform != "win32":
@@ -184,10 +255,7 @@ async def trazer_janela_frente(page) -> bool:
         await page.evaluate(f"document.title = {titulo_original!r}")
 
         if hwnd:
-            # Restaura WS_EX_APPWINDOW para a taskbar exibir durante o CAPTCHA
-            style = _user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            style = (style & ~_WS_EX_TOOLWINDOW) | _WS_EX_APPWINDOW
-            _user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, style)
+            _restaurar_appwindow(hwnd)
             _forcar_foreground(hwnd)
             logger.debug("Janela HWND=%d trazida para frente", hwnd)
             return True
@@ -221,6 +289,54 @@ async def ocultar_taskbar_por_pagina(page) -> bool:
         return False
     except Exception as e:
         logger.warning("Falha ao ocultar janela da taskbar: %s", e)
+        return False
+
+
+async def posicionar_janela_por_pagina(
+    page,
+    *,
+    left: int,
+    top: int,
+    width: int,
+    height: int,
+    bring_to_front: bool = False,
+) -> bool:
+    """Reposiciona a janela do navegador via Win32 usando um título temporário."""
+    if sys.platform != "win32":
+        return False
+    try:
+        titulo_original = await page.evaluate("document.title")
+        marcador = f"_Fretio_{uuid.uuid4().hex[:8]}"
+        await page.evaluate(f"document.title = {marcador!r}")
+        await page.wait_for_timeout(200)
+
+        hwnd = _encontrar_hwnd_por_titulo(marcador)
+
+        await page.evaluate(f"document.title = {titulo_original!r}")
+
+        if hwnd:
+            _restaurar_appwindow(hwnd)
+            _posicionar_hwnd(
+                hwnd,
+                left=left,
+                top=top,
+                width=width,
+                height=height,
+                bring_to_front=bring_to_front,
+            )
+            logger.debug(
+                "Janela HWND=%d reposicionada para (%d,%d) %dx%d",
+                hwnd,
+                left,
+                top,
+                width,
+                height,
+            )
+            return True
+        logger.debug("Não foi possível encontrar HWND para reposicionar")
+        return False
+    except Exception as e:
+        logger.warning("Falha ao reposicionar janela: %s", e)
         return False
 
 

@@ -433,6 +433,8 @@ class CoopexProvider(ProviderBase):
         erro_msg = None
         for xml in xml_responses:
             erro_match = re.search(r'<erro>([^<]+)</erro>', xml)
+            if not erro_match:
+                erro_match = re.search(r'<flag>([^<]+)</flag>', xml)
             msg_match = re.search(r'<mensagem>(.*?)</mensagem>', xml, re.DOTALL)
             if erro_match and erro_match.group(1) != '':
                 erro = erro_match.group(1)

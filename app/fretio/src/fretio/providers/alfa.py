@@ -18,6 +18,9 @@ from typing import Optional, Any
 from playwright.async_api import async_playwright
 
 from fretio.providers.base import ProviderBase, _kill_proc, _register_owned_proc
+from fretio.providers.provider_utils import (
+    _digits, _fmt_decimal, _parse_decimal_any, _parse_int_any
+)
 from fretio.models import Cotacao
 from fretio.logging_conf import get_logger
 
@@ -32,6 +35,10 @@ class AlfaProvider(ProviderBase):
     COTACAO_URL = "https://arearestrita.alfatransportes.com.br/cotacao/"
     COTACAO_API_URL = "https://arearestrita.alfatransportes.com.br/cotacao/api/"
     LOGIN_MAX_WAIT_S = 120
+    _digits = staticmethod(_digits)
+    _fmt_decimal = staticmethod(_fmt_decimal)
+    _parse_decimal_any = staticmethod(_parse_decimal_any)
+    _parse_int_any = staticmethod(_parse_int_any)
 
     def __init__(
         self,
@@ -66,37 +73,6 @@ class AlfaProvider(ProviderBase):
         self._debug_port = 0
 
     # ── helpers ───────────────────────────────────────────────────────
-
-    @staticmethod
-    def _digits(value: str) -> str:
-        return re.sub(r"\D", "", str(value or ""))
-
-    @staticmethod
-    def _fmt_decimal(value: float, decimals: int = 2, comma: bool = True) -> str:
-        txt = f"{float(value):.{decimals}f}"
-        return txt.replace(".", ",") if comma else txt
-
-    @staticmethod
-    def _parse_decimal_any(raw: Any) -> float | None:
-        txt = re.sub(r"[^\d,\.\-]", "", str(raw or "").strip())
-        if not txt:
-            return None
-        if "," in txt and "." in txt:
-            if txt.rfind(",") > txt.rfind("."):
-                txt = txt.replace(".", "").replace(",", ".")
-            else:
-                txt = txt.replace(",", "")
-        elif "," in txt:
-            txt = txt.replace(".", "").replace(",", ".")
-        try:
-            return float(txt)
-        except ValueError:
-            return None
-
-    @staticmethod
-    def _parse_int_any(raw: Any) -> int:
-        m = re.search(r"\d+", str(raw or ""))
-        return int(m.group(0)) if m else 0
 
     @staticmethod
     def _format_doc(value: str) -> str:
@@ -193,6 +169,50 @@ class AlfaProvider(ProviderBase):
             s.bind(("127.0.0.1", 0))
             return s.getsockname()[1]
 
+    @classmethod
+    def _is_internal_browser_url(cls, url: str | None) -> bool:
+        lowered = str(url or "").strip().lower()
+        if not lowered or lowered == "about:blank":
+            return True
+        return lowered.startswith((
+            "about:",
+            "chrome://",
+            "chrome-extension://",
+            "devtools://",
+            "edge://",
+        ))
+
+    def _score_browser_url(self, url: str | None) -> tuple[int, str]:
+        lowered = str(url or "").strip().lower()
+        if self.BASE_URL.lower() in lowered:
+            return (0, lowered)
+        if lowered.startswith(("http://", "https://")):
+            return (1, lowered)
+        if self._is_internal_browser_url(lowered):
+            return (3, lowered)
+        return (2, lowered)
+
+    def _select_best_debug_target(self, pages: list[dict[str, Any]]) -> dict[str, Any] | None:
+        best_page = None
+        best_score = None
+        for page in pages:
+            if page.get("type") != "page":
+                continue
+            score = self._score_browser_url(page.get("url"))
+            if best_score is None or score < best_score:
+                best_page = page
+                best_score = score
+        return best_page
+
+    def _is_debug_port_live(self) -> bool:
+        if not self._debug_port:
+            return False
+        try:
+            with socket.create_connection(("127.0.0.1", self._debug_port), timeout=1):
+                return True
+        except OSError:
+            return False
+
     @staticmethod
     def _fix_preferences(user_data_dir: str) -> None:
         """Marca exit_type como Normal e limpa sessão para evitar 'Restaurar páginas'."""
@@ -281,8 +301,10 @@ class AlfaProvider(ProviderBase):
         if self._chrome_proc and self._chrome_proc.poll() is None:
             return  # Chrome já está rodando
 
-        # Chrome morreu ou nunca foi lançado — limpa estado Playwright antigo
         if self._chrome_proc and self._chrome_proc.poll() is not None:
+            if self._is_debug_port_live():
+                logger.info("[ALFA] Launcher do Chrome saiu, mas CDP segue ativo; reutilizando sessão existente")
+                return
             logger.warning("[ALFA] Chrome morreu (exit=%s), reiniciando...", self._chrome_proc.poll())
             await self._disconnect_playwright()
             self._chrome_proc = None
@@ -341,8 +363,18 @@ class AlfaProvider(ProviderBase):
                 self._browser = await self._playwright.chromium.connect_over_cdp(
                     f"http://127.0.0.1:{self._debug_port}"
                 )
-                self._context = self._browser.contexts[0]
-                self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+                best_context = None
+                best_page = None
+                best_score = None
+                for context in self._browser.contexts:
+                    for page in context.pages:
+                        score = self._score_browser_url(getattr(page, "url", ""))
+                        if best_score is None or score < best_score:
+                            best_context = context
+                            best_page = page
+                            best_score = score
+                self._context = best_context or self._browser.contexts[0]
+                self._page = best_page or (self._context.pages[0] if self._context.pages else await self._context.new_page())
                 self._page.set_default_timeout(30000)
                 logger.info("[ALFA] Playwright conectado ao Chrome via CDP")
                 return
@@ -387,11 +419,11 @@ class AlfaProvider(ProviderBase):
             )
             with urllib.request.urlopen(req, timeout=2) as resp:
                 pages = json.loads(resp.read())
-            for page in pages:
-                if page.get("type") == "page":
-                    url = page.get("url", "")
-                    if url and url != "about:blank":
-                        return url
+            best_page = self._select_best_debug_target(pages)
+            if best_page:
+                url = str(best_page.get("url", "") or "")
+                if url and not self._is_internal_browser_url(url):
+                    return url
         except Exception:
             pass
         return ""
@@ -409,11 +441,8 @@ class AlfaProvider(ProviderBase):
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
                 pages = json.loads(resp.read())
-            ws_url = None
-            for page in pages:
-                if page.get("type") == "page":
-                    ws_url = page.get("webSocketDebuggerUrl")
-                    break
+            best_page = self._select_best_debug_target(pages)
+            ws_url = best_page.get("webSocketDebuggerUrl") if best_page else None
             if not ws_url:
                 return
 
@@ -1088,7 +1117,6 @@ class AlfaProvider(ProviderBase):
         return False
 
     async def pre_login(self) -> None:
-        await self._init_browser()
         try:
             await self._login()
         except Exception as e:

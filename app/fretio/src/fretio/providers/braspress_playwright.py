@@ -6,6 +6,9 @@ import re
 from playwright.async_api import async_playwright
 
 from fretio.providers.base import ProviderBase
+from fretio.providers.provider_utils import (
+    _digits, _fmt_decimal, _parse_decimal_any, _parse_int_any
+)
 from fretio.models import Cotacao
 from fretio.logging_conf import get_logger
 
@@ -17,10 +20,14 @@ class BraspressPlaywrightProvider(ProviderBase):
 
     LOGIN_URL = "https://www.braspress.com.br/w/cliente/view"
     COTACAO_URL = "https://www.braspress.com.br/w/cotacao/view"
+    _digits = staticmethod(_digits)
+    _fmt_decimal = staticmethod(_fmt_decimal)
+    _parse_decimal_any = staticmethod(_parse_decimal_any)
+    _parse_int_any = staticmethod(_parse_int_any)
 
     def __init__(self, cnpj: str, senha: str, headless: bool = True):
         super().__init__(nome="Braspress")
-        self.cnpj = self._digits(cnpj)
+        self.cnpj = _digits(cnpj)
         self.senha = senha
         self.headless = headless
         self.last_error: str | None = None
@@ -29,38 +36,6 @@ class BraspressPlaywrightProvider(ProviderBase):
         self._context = None
         self._page = None
         self._logged_in = False
-
-    @staticmethod
-    def _digits(value: str) -> str:
-        return re.sub(r"\D", "", value or "")
-
-    @staticmethod
-    def _fmt_decimal(value: float, decimals: int = 2) -> str:
-        """Formata valor em formato brasileiro (vírgula como separador decimal)."""
-        return f"{value:.{decimals}f}".replace(".", ",")
-
-    @staticmethod
-    def _parse_decimal_any(raw: str) -> float | None:
-        txt = re.sub(r"[^\d,.\-]", "", str(raw or "").strip())
-        if not txt:
-            return None
-        if "," in txt and "." in txt:
-            # O separador decimal é o último símbolo entre vírgula/ponto.
-            if txt.rfind(",") > txt.rfind("."):
-                txt = txt.replace(".", "").replace(",", ".")
-            else:
-                txt = txt.replace(",", "")
-        elif "," in txt:
-            txt = txt.replace(".", "").replace(",", ".")
-        try:
-            return float(txt)
-        except ValueError:
-            return None
-
-    @staticmethod
-    def _parse_int_any(raw: str) -> int:
-        m = re.search(r"\d+", str(raw or ""))
-        return int(m.group(0)) if m else 0
 
     @staticmethod
     def _normalizar_cubagens_cm(cubagens: Optional[list[dict]]) -> list[dict]:

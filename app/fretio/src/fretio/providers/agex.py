@@ -5,6 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import re
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from fretio.providers.base import ProviderBase
+from fretio.providers.provider_utils import _digits, _parse_brl, _format_decimal_br_2
 from fretio.models import Cotacao
 from fretio.logging_conf import get_logger
 
@@ -17,6 +18,10 @@ class AGEXProvider(ProviderBase):
     LOGIN_URL = "https://cliente.agex.com.br/login"
     COTACAO_URL = "https://cliente.agex.com.br/cotacao"
     DEFAULT_TIMEOUT_MS = 30000
+    RESULT_TIMEOUT_MS = 30000
+    _digits = staticmethod(_digits)
+    _parse_brl = staticmethod(_parse_brl)
+    _format_decimal_br_2 = staticmethod(_format_decimal_br_2)
 
     def __init__(
         self,
@@ -128,35 +133,17 @@ class AGEXProvider(ProviderBase):
         return rows
 
     @staticmethod
-    def _format_decimal_br_2(valor: float, *, min_value: float | None = None) -> str:
-        dec = Decimal(str(valor))
-        if min_value is not None:
-            dec = max(dec, Decimal(str(min_value)))
-        dec = dec.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        return f"{dec:.2f}".replace(".", ",")
-
-    @staticmethod
     def _format_currency(valor: float) -> str:
-        dec = Decimal(str(valor)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        inteiro = int(dec)
-        centavos = int((dec - inteiro) * 100)
-        return f"R$ {inteiro:,}".replace(",", ".") + f",{centavos:02d}"
+        from fretio.providers.provider_utils import _format_currency as fmt_currency
+        return fmt_currency(valor)
 
     @staticmethod
     def _format_weight(peso: float) -> str:
-        return AGEXProvider._format_decimal_br_2(peso)
+        return _format_decimal_br_2(peso)
 
     @staticmethod
     def _format_dimension(valor: float) -> str:
-        return AGEXProvider._format_decimal_br_2(valor)
-
-    @staticmethod
-    def _parse_brl(valor: str) -> float:
-        return float(valor.replace(".", "").replace(",", "."))
-
-    @staticmethod
-    def _digits(value: str) -> str:
-        return re.sub(r"\D", "", value or "")
+        return _format_decimal_br_2(valor)
 
     @classmethod
     def _extrair_valor_frete_do_texto(cls, texto: str) -> Optional[float]:
@@ -219,6 +206,21 @@ class AGEXProvider(ProviderBase):
             return None
         candidatos.sort(reverse=True)
         return float(candidatos[0][2])
+
+    @staticmethod
+    def _extrair_previsao_do_texto(texto: str) -> str:
+        match = re.search(r"\b\d{2}/\d{2}/\d{2,4}\b", texto or "")
+        return match.group(0) if match else ""
+
+    @staticmethod
+    def _extrair_numero_cotacao_do_texto(texto: str) -> str:
+        match = re.search(r"(?i)cota(?:ç|c)ão(?:\s*n[ºo°.]*)?\s*#?\s*(\d{4,})", texto or "")
+        return match.group(1) if match else ""
+
+    @staticmethod
+    def _tem_confirmacao_resultado_pendente(texto: str) -> bool:
+        lowered = str(texto or "").lower()
+        return "confirmar e ver resultado" in lowered or "ver resultado" in lowered
 
     async def _init_browser(self) -> None:
         if self._browser:
@@ -843,27 +845,54 @@ class AGEXProvider(ProviderBase):
         page = self._page
         await self._salvar_debug("pos_submit_etapa4")
 
-        # Portal novo redireciona para /cotacao/resultado/{numero} após submeter carga.
-        # Aguardar a URL mudar (timeout generoso — servidor pode demorar).
-        try:
-            await page.wait_for_url("**/cotacao/resultado/**", timeout=60000)
-        except PlaywrightTimeoutError:
-            # Verificar se já estamos na página de resultado
-            if "/cotacao/resultado/" not in (page.url or ""):
-                body_lower = (await page.inner_text("body")).lower()
-                for phrase in [
-                    "não atend", "nao atend", "fora da área", "fora de cobertura",
-                    "cep não atendido", "cep nao atendido", "não atendemos",
-                ]:
-                    if phrase in body_lower:
-                        self.last_error = "Rota não atendida pela AGEX"
-                        logger.info(f"[{self.nome}] {self.last_error}")
-                        await self._salvar_debug("indisponivel")
-                        return None
-                self.last_error = "Página de resultado não apareceu (timeout)"
-                logger.error(f"[{self.nome}] {self.last_error}")
-                await self._salvar_debug("sem_resultado")
-                return None
+        result_body = ""
+        redirect_detected = False
+        confirmacao_disparada = False
+        for _ in range(max(self.RESULT_TIMEOUT_MS // 1000, 1)):
+            current_url = page.url or ""
+            body_text = await page.inner_text("body")
+            body_lower = body_text.lower()
+
+            if not confirmacao_disparada and self._tem_confirmacao_resultado_pendente(body_text):
+                clicou = await self._clicar_botao_fluxo(
+                    page,
+                    ("Confirmar e ver resultado", "Ver resultado", "Confirmar"),
+                )
+                if clicou:
+                    confirmacao_disparada = True
+                    logger.info(f"[{self.nome}] Confirmação final disparada; aguardando resultado...")
+                    await page.wait_for_timeout(1500)
+                    continue
+
+            if "/cotacao/resultado/" in current_url:
+                redirect_detected = True
+                result_body = body_text
+                break
+
+            for phrase in [
+                "não atend", "nao atend", "fora da área", "fora de cobertura",
+                "cep não atendido", "cep nao atendido", "não atendemos",
+            ]:
+                if phrase in body_lower:
+                    self.last_error = "Rota não atendida pela AGEX"
+                    logger.info(f"[{self.nome}] {self.last_error}")
+                    await self._salvar_debug("indisponivel")
+                    return None
+
+            valor_body = self._extrair_valor_frete_do_texto(body_text)
+            previsao_body = self._extrair_previsao_do_texto(body_text)
+            if valor_body is not None or previsao_body:
+                result_body = body_text
+                logger.info(f"[{self.nome}] Resultado detectado no DOM sem redirecionamento")
+                break
+
+            await page.wait_for_timeout(1000)
+
+        if not result_body:
+            self.last_error = "Resultado AGEX não apareceu na URL nem no DOM"
+            logger.error(f"[{self.nome}] {self.last_error}")
+            await self._salvar_debug("sem_resultado")
+            return None
 
         await self._salvar_debug("resultado_page")
         logger.info(f"[{self.nome}] Resultado URL: {page.url}")
@@ -874,26 +903,26 @@ class AGEXProvider(ProviderBase):
         m_url = re.search(r"/cotacao/resultado/(\d+)", url)
         if m_url:
             numero = m_url.group(1)
+        if not numero and result_body:
+            numero = self._extrair_numero_cotacao_do_texto(result_body)
 
         # Extrair valor do frete e data de entrega dos spans
         result_data = await page.evaluate("""() => {
             const out = {frete: null, previsao: null};
             const spans = Array.from(document.querySelectorAll('span'));
 
-            // Frete: span cujo texto é exatamente "R$ X,XX"
             const freteSpan = spans.find(s =>
                 /^R\\$\\s*[\\d.,]+$/.test(s.textContent.trim())
             );
             if (freteSpan) out.frete = freteSpan.textContent.trim();
 
-            // Previsão de entrega: primeiro span com data DD/MM/YY ou DD/MM/YYYY
             const dateSpan = spans.find(s =>
                 /^\\d{2}\\/\\d{2}\\/\\d{2,4}$/.test(s.textContent.trim())
             );
             if (dateSpan) out.previsao = dateSpan.textContent.trim();
 
             return out;
-        }""")
+        }""") if redirect_detected else {"frete": None, "previsao": None}
         logger.info(f"[{self.nome}] Dados extraídos: {result_data}")
 
         # Parsear valor do frete
@@ -907,9 +936,7 @@ class AGEXProvider(ProviderBase):
                 pass
 
         if valor_frete is None:
-            # Fallback: extrair do texto completo da página
-            body_text = await page.inner_text("body")
-            valor_frete = self._extrair_valor_frete_do_texto(body_text)
+            valor_frete = self._extrair_valor_frete_do_texto(result_body or await page.inner_text("body"))
 
         if valor_frete is None:
             self.last_error = "Valor do frete não encontrado na página de resultado"
@@ -918,7 +945,7 @@ class AGEXProvider(ProviderBase):
             return None
 
         # Calcular prazo em dias
-        data_entrega = (result_data or {}).get("previsao") or ""
+        data_entrega = (result_data or {}).get("previsao") or self._extrair_previsao_do_texto(result_body)
         prazo_dias = 0
         if data_entrega:
             try:
