@@ -6,17 +6,15 @@ Romaneio - Interface PySide6
 import os
 import sys
 import re
+import concurrent.futures
+from contextlib import nullcontext
 from pathlib import Path
-from typing import Any
-from time import monotonic
+from typing import Any, Callable
 
-from PySide6.QtCore import Qt, QEvent, QTimer, QRectF
+from PySide6.QtCore import Qt, QEvent
 from PySide6.QtGui import (
     QFont,
     QIcon,
-    QColor,
-    QPainter,
-    QPen,
     QPixmap,
     QShortcut,
     QKeySequence,
@@ -54,6 +52,15 @@ import threading
 _DEFAULT_GITHUB_REPO = "kaianesteffens/RomaneioBeta-releases"
 _DEFAULT_LICENSE_URL = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
 
+
+def _add_fretio_src_to_path() -> None:
+    src = Path(__file__).resolve().parent / "fretio" / "src"
+    if src.exists() and str(src) not in sys.path:
+        sys.path.insert(0, str(src))
+
+
+_add_fretio_src_to_path()
+
 from extrator_pedidos import ExtratorPedidos
 from cotacao_transportadoras import (
     cotar_transportadoras_romaneio_colado,
@@ -75,247 +82,22 @@ from ui_components import (
     load_app_fonts,
     svg_icon,
 )
-
-
-# Eventos customizados para comunicação entre threads
-class UpdateResultEvent(QEvent):
-    """Evento para atualizar o resultado na UI."""
-    EventType = QEvent.Type(QEvent.registerEventType())
-    
-    def __init__(self, result: str):
-        super().__init__(self.EventType)
-        self.result = result
-
-
-class UpdateFinishedEvent(QEvent):
-    """Evento para indicar que a cotação terminou."""
-    EventType = QEvent.Type(QEvent.registerEventType())
-    
-    def __init__(self):
-        super().__init__(self.EventType)
-
-
-class StatusUpdateEvent(QEvent):
-    """Evento para atualizar o status na UI."""
-    EventType = QEvent.Type(QEvent.registerEventType())
-    
-    def __init__(self, msg: str):
-        super().__init__(self.EventType)
-        self.msg = msg
-
-
-class CotacaoProgressEvent(QEvent):
-    """Evento para atualizar progresso de cotações em tempo real."""
-    EventType = QEvent.Type(QEvent.registerEventType())
-
-    def __init__(self, payload: dict[str, Any]):
-        super().__init__(self.EventType)
-        self.payload = payload or {}
-
-
-class LoginStatusEvent(QEvent):
-    """Evento para atualizar status de login individual de transportadora."""
-    EventType = QEvent.Type(QEvent.registerEventType())
-
-    def __init__(self, nome: str, status: str):
-        # status: "pending", "ok", "fail"
-        super().__init__(self.EventType)
-        self.nome = nome
-        self.status = status
-
-
-
-class RastreioResultEvent(QEvent):
-    """Evento para atualizar resultado de rastreamento na UI."""
-    EventType = QEvent.Type(QEvent.registerEventType())
-
-    def __init__(self, indice: int, total: int, resultado: "ResultadoRastreio"):
-        super().__init__(self.EventType)
-        self.indice = indice
-        self.total = total
-        self.resultado = resultado
-
-
-class RastreioFinishedEvent(QEvent):
-    """Evento para indicar que o rastreamento terminou."""
-    EventType = QEvent.Type(QEvent.registerEventType())
-
-    def __init__(self, resultados: list):
-        super().__init__(self.EventType)
-        self.resultados = resultados
-
-# ---------------------------------------------------------------------------
-# Helpers de formatação automática para campos do formulário fornecedor
-# ---------------------------------------------------------------------------
-
-def _apply_cnpj_mask(line_edit: "QLineEdit") -> None:
-    """Conecta textChanged para auto-formatar CNPJ (XX.XXX.XXX/XXXX-XX)."""
-    def _fmt():
-        d = re.sub(r"\D", "", line_edit.text())[:14]
-        if len(d) > 12:
-            t = f"{d[:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:]}"
-        elif len(d) > 8:
-            t = f"{d[:2]}.{d[2:5]}.{d[5:8]}/{d[8:]}"
-        elif len(d) > 5:
-            t = f"{d[:2]}.{d[2:5]}.{d[5:]}"
-        elif len(d) > 2:
-            t = f"{d[:2]}.{d[2:]}"
-        else:
-            t = d
-        if t != line_edit.text():
-            line_edit.blockSignals(True)
-            pos = line_edit.cursorPosition()
-            old_len = len(line_edit.text())
-            line_edit.setText(t)
-            new_len = len(t)
-            line_edit.setCursorPosition(min(pos + (new_len - old_len), new_len))
-            line_edit.blockSignals(False)
-    line_edit.setMaxLength(18)
-    line_edit.textChanged.connect(_fmt)
-
-
-def _apply_cep_mask(line_edit: "QLineEdit") -> None:
-    """Conecta textChanged para auto-formatar CEP (XXXXX-XXX)."""
-    def _fmt():
-        d = re.sub(r"\D", "", line_edit.text())[:8]
-        t = f"{d[:5]}-{d[5:]}" if len(d) > 5 else d
-        if t != line_edit.text():
-            line_edit.blockSignals(True)
-            pos = line_edit.cursorPosition()
-            old_len = len(line_edit.text())
-            line_edit.setText(t)
-            new_len = len(t)
-            line_edit.setCursorPosition(min(pos + (new_len - old_len), new_len))
-            line_edit.blockSignals(False)
-    line_edit.setMaxLength(9)
-    line_edit.textChanged.connect(_fmt)
-
-
-def _apply_decimal_mask(line_edit: "QLineEdit", decimals: int = 2) -> None:
-    """Conecta textChanged para auto-formatar decimal BR (vírgula, N casas)."""
-    def _fmt():
-        raw = line_edit.text().replace(".", "").replace(",", "")
-        d = re.sub(r"\D", "", raw)
-        if not d:
-            if line_edit.text():
-                line_edit.blockSignals(True)
-                line_edit.setText("")
-                line_edit.blockSignals(False)
-            return
-        d = d.lstrip("0") or "0"
-        d = d.zfill(decimals + 1)
-        inteiro = d[: len(d) - decimals]
-        frac = d[len(d) - decimals :]
-        t = f"{inteiro},{frac}"
-        if t != line_edit.text():
-            line_edit.blockSignals(True)
-            line_edit.setText(t)
-            line_edit.setCursorPosition(len(t))
-            line_edit.blockSignals(False)
-    line_edit.textChanged.connect(_fmt)
-
-
-def _apply_currency_mask(line_edit: "QLineEdit") -> None:
-    """Conecta textChanged para auto-formatar moeda BR (R$ X,XX)."""
-    def _fmt():
-        raw = line_edit.text().replace("R$", "").replace(".", "").replace(",", "").replace(" ", "")
-        d = re.sub(r"\D", "", raw)
-        if not d:
-            if line_edit.text():
-                line_edit.blockSignals(True)
-                line_edit.setText("")
-                line_edit.blockSignals(False)
-            return
-        d = d.lstrip("0") or "0"
-        d = d.zfill(3)
-        inteiro = d[: len(d) - 2]
-        centavos = d[len(d) - 2 :]
-        # Adicionar pontos de milhar
-        inteiro_fmt = ""
-        for i, ch in enumerate(reversed(inteiro)):
-            if i > 0 and i % 3 == 0:
-                inteiro_fmt = "." + inteiro_fmt
-            inteiro_fmt = ch + inteiro_fmt
-        t = f"R$ {inteiro_fmt},{centavos}"
-        if t != line_edit.text():
-            line_edit.blockSignals(True)
-            line_edit.setText(t)
-            line_edit.setCursorPosition(len(t))
-            line_edit.blockSignals(False)
-    line_edit.textChanged.connect(_fmt)
-
-
-class IndeterminateBar(QWidget):
-    """Barra de carregamento indeterminada com animação suave (~60 FPS)."""
-
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.setObjectName("ProgressBar")
-        self.setMinimumHeight(18)
-        self.setMaximumHeight(18)
-        self._timer = QTimer(self)
-        self._timer.setInterval(16)  # ~60 FPS
-        self._timer.timeout.connect(self._tick)
-        self._last_t = monotonic()
-        self._offset_px = 0.0
-        self._speed_px_s = 360.0
-
-    def start_anim(self) -> None:
-        self._last_t = monotonic()
-        self._offset_px = 0.0
-        if not self._timer.isActive():
-            self._timer.start()
-        self.update()
-
-    def stop_anim(self) -> None:
-        if self._timer.isActive():
-            self._timer.stop()
-        self._offset_px = 0.0
-        self.update()
-
-    def _chunk_width(self) -> float:
-        return max(42.0, min(96.0, self.width() * 0.2))
-
-    def _tick(self) -> None:
-        now = monotonic()
-        dt = now - self._last_t
-        self._last_t = now
-        if dt <= 0:
-            return
-        # Limita delta para evitar saltos quando a janela fica em background.
-        dt = min(dt, 0.05)
-        self._offset_px += self._speed_px_s * dt
-        self.update()
-
-    def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
-        del event
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-
-        h = float(self.height())
-        w = float(self.width())
-        radius = 5.0
-
-        track_rect = QRectF(0.5, 0.5, max(0.0, w - 1.0), max(0.0, h - 1.0))
-        painter.setPen(QPen(QColor("#cfd8ea"), 1.0))
-        painter.setBrush(QColor("#e9eef7"))
-        painter.drawRoundedRect(track_rect, radius, radius)
-
-        if w <= 2 or h <= 2:
-            return
-
-        chunk_w = self._chunk_width()
-        span = w + chunk_w
-        x = (self._offset_px % span) - chunk_w
-
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor("#1f6feb"))
-        for shift in (0.0, span):
-            xr = x + shift
-            chunk_rect = QRectF(xr, 1.0, chunk_w, max(0.0, h - 2.0))
-            if chunk_rect.right() < 0 or chunk_rect.left() > w:
-                continue
-            painter.drawRoundedRect(chunk_rect, radius, radius)
+from ui.events import (
+    CotacaoProgressEvent,
+    LoginStatusEvent,
+    RastreioFinishedEvent,
+    RastreioResultEvent,
+    StatusUpdateEvent,
+    UpdateFinishedEvent,
+    UpdateResultEvent,
+)
+from ui.formatting import (
+    _apply_cep_mask,
+    _apply_cnpj_mask,
+    _apply_currency_mask,
+    _apply_decimal_mask,
+)
+from ui.widgets import IndeterminateBar
 
 
 def _resource_path(relative_path: str) -> Path:
@@ -1106,6 +888,108 @@ class ConfiguracoesDialog(QDialog):
         """)
 
 
+class _AsyncLoopThread:
+    def __init__(self, *, name: str = "RomaneioAsyncLoop"):
+        self._loop = asyncio.new_event_loop()
+        self._state_lock = threading.Lock()
+        self._started = threading.Event()
+        self._closed = threading.Event()
+        self._closing = False
+        self._thread = threading.Thread(target=self._run, name=name, daemon=True)
+        self._thread.start()
+        self._started.wait(timeout=2)
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._started.set()
+        try:
+            self._loop.run_forever()
+        finally:
+            pending = [task for task in asyncio.all_tasks(self._loop) if not task.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                try:
+                    self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                except Exception:
+                    pass
+            try:
+                self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+            except Exception:
+                pass
+            try:
+                self._loop.run_until_complete(self._loop.shutdown_default_executor())
+            except Exception:
+                pass
+            try:
+                self._loop.close()
+            except Exception:
+                pass
+            self._closed.set()
+
+    def submit(self, coro_factory: Callable[[], Any]) -> concurrent.futures.Future | None:
+        with self._state_lock:
+            if self._closing or self._closed.is_set() or self._loop.is_closed():
+                return None
+            loop = self._loop
+        try:
+            return asyncio.run_coroutine_threadsafe(coro_factory(), loop)
+        except RuntimeError:
+            return None
+
+    async def _cleanup_and_cancel(
+        self,
+        cleanup_coro_factory: Callable[[], Any] | None,
+    ) -> None:
+        if cleanup_coro_factory is not None:
+            try:
+                await cleanup_coro_factory()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+        current = asyncio.current_task()
+        pending = [
+            task for task in asyncio.all_tasks()
+            if task is not current and not task.done()
+        ]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    def shutdown(
+        self,
+        *,
+        cleanup_coro_factory: Callable[[], Any] | None = None,
+        timeout: float = 3.0,
+    ) -> None:
+        with self._state_lock:
+            if self._closing:
+                thread = self._thread
+                loop = self._loop
+            else:
+                self._closing = True
+                thread = self._thread
+                loop = self._loop
+        if self._closed.is_set():
+            return
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self._cleanup_and_cancel(cleanup_coro_factory),
+                loop,
+            )
+            future.result(timeout=timeout)
+        except Exception:
+            pass
+        try:
+            loop.call_soon_threadsafe(loop.stop)
+        except Exception:
+            pass
+        if thread.is_alive():
+            thread.join(timeout)
+
+
 class RomaneioWindow(QMainWindow):
     def __init__(self, empresa_nome: str = "default"):
         super().__init__()
@@ -1119,8 +1003,10 @@ class RomaneioWindow(QMainWindow):
         self._romaneio_colado = ""
         self._modo_cotacao = "pdf"
         self._sessao = TransportadoraSession(config_path=self._config_path)
-        self._loop = asyncio.new_event_loop()
-        self._loop_lock = threading.Lock()
+        self._async_loop = _AsyncLoopThread()
+        self._session_task_lock = threading.Lock()
+        self._async_futures: set[concurrent.futures.Future] = set()
+        self._async_futures_lock = threading.Lock()
         self._shutdown_started = threading.Event()
         self._cotacao_total = 0
         self._cotacao_concluidas = 0
@@ -2326,8 +2212,8 @@ class RomaneioWindow(QMainWindow):
             self._carrier_status_frame.setVisible(index == 2)
         # Pre-login so quando acessar Calcular Frete (2) ou Frete Fornecedores (3)
         if index in (2, 3) and not self._pre_login_done and not self._is_shutting_down():
+            self._run_pre_login()
             self._pre_login_done = True
-            self._start_daemon_worker(self._run_pre_login)
 
     def _selecionar_arquivo(self):
         arquivo, _ = QFileDialog.getOpenFileName(
@@ -2423,7 +2309,7 @@ class RomaneioWindow(QMainWindow):
         self._show_page(2)
         self.label_info.setText("Executando cotações de transportadoras...")
         self.label_info.setStyleSheet("color: #1f6feb;")
-        self._start_daemon_worker(self._run_async_cotacao)
+        self._run_async_cotacao()
 
     def _cotar_romaneio_colado(self):
         texto = (self.romaneio_colado_text.toPlainText() or "").strip()
@@ -2544,7 +2430,7 @@ class RomaneioWindow(QMainWindow):
         self.forn_result_text.setPlainText("Iniciando cota\u00e7\u00f5es...\nAguardando primeiras respostas...")
         self.label_info.setText("Cotando frete fornecedor...")
         self.label_info.setStyleSheet("color: #1f6feb;")
-        self._start_daemon_worker(self._run_async_cotacao)
+        self._run_async_cotacao()
 
     def _post_event_safe(self, event: QEvent) -> None:
         """Posta evento na fila da UI de forma segura (ignora se app já encerrou)."""
@@ -2566,6 +2452,82 @@ class RomaneioWindow(QMainWindow):
         threading.Thread(target=target, daemon=True).start()
         return True
 
+    def _track_async_future(self, future: concurrent.futures.Future) -> concurrent.futures.Future:
+        with self._async_futures_lock:
+            self._async_futures.add(future)
+        future.add_done_callback(self._discard_async_future)
+        return future
+
+    def _discard_async_future(self, future: concurrent.futures.Future) -> None:
+        with self._async_futures_lock:
+            self._async_futures.discard(future)
+
+    def _submit_async_future(
+        self,
+        coro_factory: Callable[[], Any],
+    ) -> concurrent.futures.Future | None:
+        if self._is_shutting_down():
+            return None
+        future = self._async_loop.submit(coro_factory)
+        if future is None:
+            return None
+        return self._track_async_future(future)
+
+    def _cancel_pending_async_futures(self) -> None:
+        with self._async_futures_lock:
+            futures = list(self._async_futures)
+        for future in futures:
+            try:
+                future.cancel()
+            except Exception:
+                pass
+
+    def _handle_async_worker_failure(
+        self,
+        *,
+        exc: BaseException,
+        context: str,
+        log_label: str,
+        ui_error_handler: Callable[[BaseException], None] | None = None,
+    ) -> None:
+        report_error(*sys.exc_info(), context=context)
+        print(f"[fretio] {log_label}: {exc}", file=sys.stderr, flush=True)
+        if ui_error_handler is not None and not self._is_shutting_down():
+            ui_error_handler(exc)
+
+    def _run_async_worker(
+        self,
+        coro_factory: Callable[[], Any],
+        *,
+        context: str,
+        log_label: str,
+        sync_lock: Any | None = None,
+        ui_error_handler: Callable[[BaseException], None] | None = None,
+        on_success: Callable[[Any], None] | None = None,
+    ) -> bool:
+        def _worker():
+            future: concurrent.futures.Future | None = None
+            try:
+                context_manager = sync_lock if sync_lock is not None else nullcontext()
+                with context_manager:
+                    future = self._submit_async_future(coro_factory)
+                    if future is None:
+                        return
+                    result = future.result()
+                if on_success is not None and not self._is_shutting_down():
+                    on_success(result)
+            except concurrent.futures.CancelledError:
+                return
+            except Exception as exc:
+                self._handle_async_worker_failure(
+                    exc=exc,
+                    context=context,
+                    log_label=log_label,
+                    ui_error_handler=ui_error_handler,
+                )
+
+        return self._start_daemon_worker(_worker)
+
     def _run_pre_login(self):
         """Faz pre-login de todas as transportadoras em background."""
         if self._is_shutting_down():
@@ -2574,39 +2536,42 @@ class RomaneioWindow(QMainWindow):
             self._post_event_safe(StatusUpdateEvent(msg))
         def _login_status_callback(nome, status):
             self._post_event_safe(LoginStatusEvent(nome, status))
-        try:
-            with self._loop_lock:
-                if self._is_shutting_down() or self._loop.is_closed():
-                    return
-                asyncio.set_event_loop(self._loop)
-                self._loop.run_until_complete(self._sessao.inicializar(
-                    callback=_status_callback,
-                    login_status_callback=_login_status_callback,
-                ))
-        except Exception as exc:
-            report_error(*sys.exc_info(), context="pre_login")
-            print(f"[fretio] Erro no pre-login: {exc}", file=sys.stderr, flush=True)
+        self._run_async_worker(
+            lambda: self._sessao.inicializar(
+                callback=_status_callback,
+                login_status_callback=_login_status_callback,
+            ),
+            context="pre_login",
+            log_label="Erro no pre-login",
+            sync_lock=self._session_task_lock,
+        )
 
     def _run_async_cotacao(self):
         if self._is_shutting_down():
             return
-        try:
-            with self._loop_lock:
-                if self._is_shutting_down() or self._loop.is_closed():
-                    return
-                asyncio.set_event_loop(self._loop)
-                self._loop.run_until_complete(self._cotar_transportadoras_async())
-        except Exception as exc:
-            report_error(*sys.exc_info(), context="run_async_cotacao")
-            print(f"[fretio] Erro na cotação: {exc}", file=sys.stderr, flush=True)
-            if not self._is_shutting_down():
-                self._post_event_safe(UpdateResultEvent(f"Erro ao cotar: {exc}"))
-                self._post_event_safe(UpdateFinishedEvent())
+        self._run_async_worker(
+            self._cotar_transportadoras_async,
+            context="run_async_cotacao",
+            log_label="Erro na cotação",
+            sync_lock=self._session_task_lock,
+            ui_error_handler=lambda exc: (
+                self._post_event_safe(UpdateResultEvent(f"Erro ao cotar: {exc}")),
+                self._post_event_safe(UpdateFinishedEvent()),
+            ),
+        )
 
     async def _cotar_transportadoras_async(self):
         try:
             def _progresso_callback(payload: dict[str, Any]) -> None:
                 self._post_event_safe(CotacaoProgressEvent(payload))
+
+            if not self._sessao.pronto:
+                self._post_event_safe(StatusUpdateEvent("Executando pre-login antes da cotação..."))
+                await self._sessao.inicializar(
+                    callback=lambda msg: self._post_event_safe(StatusUpdateEvent(msg)),
+                    login_status_callback=lambda nome, status: self._post_event_safe(LoginStatusEvent(nome, status)),
+                )
+                self._pre_login_done = True
 
             _cotar_kwargs = dict(
                 romaneio_colado=self._romaneio_colado,
@@ -2824,38 +2789,14 @@ class RomaneioWindow(QMainWindow):
         except Exception:
             pass
         event.accept()  # aceita logo para fechar a janela imediatamente
+        self._cancel_pending_async_futures()
 
         def _cleanup_background():
-            if self._loop_lock.acquire(timeout=0.5):
-                try:
-                    if self._loop.is_closed():
-                        return
-                    asyncio.set_event_loop(self._loop)
-                    try:
-                        self._loop.run_until_complete(
-                            asyncio.wait_for(self._sessao.cleanup(), timeout=2)
-                        )
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-                finally:
-                    # Fecha o event loop corretamente para evitar RuntimeError: Event loop is closed
-                    try:
-                        self._loop.run_until_complete(self._loop.shutdown_asyncgens())
-                    except Exception:
-                        pass
-                    try:
-                        self._loop.run_until_complete(self._loop.shutdown_default_executor())
-                    except Exception:
-                        pass
-                    try:
-                        self._loop.close()
-                    except Exception:
-                        pass
-                    self._loop_lock.release()
+            self._async_loop.shutdown(
+                cleanup_coro_factory=lambda: asyncio.wait_for(self._sessao.cleanup(), timeout=2)
+            )
 
-        t = threading.Thread(target=_cleanup_background, daemon=True)
+        t = threading.Thread(target=_cleanup_background, name="RomaneioShutdownCleanup")
         t.start()
         # Não bloqueia o fechamento — cleanup roda em background e o processo encerra logo
 
@@ -3147,24 +3088,19 @@ class RomaneioWindow(QMainWindow):
         self.btn_abrir_screenshots.setVisible(False)
         self.label_info.setText("Rastreando entregas...")
         self.label_info.setStyleSheet("color: #1f6feb;")
-        self._start_daemon_worker(self._run_rastreamento_async)
+        self._run_rastreamento_async()
 
     def _run_rastreamento_async(self):
         """Executa o rastreamento em thread separada."""
         if self._is_shutting_down():
             return
-        try:
-            with self._loop_lock:
-                if self._is_shutting_down() or self._loop.is_closed():
-                    return
-                asyncio.set_event_loop(self._loop)
-                resultados = self._loop.run_until_complete(self._rastrear_notas_async())
-            self._post_event_safe(RastreioFinishedEvent(resultados))
-        except Exception as exc:
-            report_error(*sys.exc_info(), context="rastreamento")
-            print(f"[fretio] Erro no rastreamento: {exc}", file=sys.stderr, flush=True)
-            if not self._is_shutting_down():
-                self._post_event_safe(RastreioFinishedEvent([]))
+        self._run_async_worker(
+            self._rastrear_notas_async,
+            context="rastreamento",
+            log_label="Erro no rastreamento",
+            on_success=lambda resultados: self._post_event_safe(RastreioFinishedEvent(resultados)),
+            ui_error_handler=lambda _exc: self._post_event_safe(RastreioFinishedEvent([])),
+        )
 
     async def _rastrear_notas_async(self):
         """Rastreia as NF-es do subset atual (ou todas se sem subset)."""
@@ -3280,17 +3216,21 @@ class RomaneioWindow(QMainWindow):
             cr_tag.style().polish(cr_tag)
 
         def _do():
-            with self._loop_lock:
-                if self._is_shutting_down() or self._loop.is_closed():
-                    return
-                asyncio.set_event_loop(self._loop)
-                try:
-                    self._loop.run_until_complete(self._sessao.cleanup())
-                except Exception:
-                    pass
+            future = None
+            try:
+                with self._session_task_lock:
+                    future = self._submit_async_future(self._sessao.cleanup)
+                    if future is None:
+                        return
+                    future.result()
+            except concurrent.futures.CancelledError:
+                return
+            except Exception:
+                pass
             if self._is_shutting_down():
                 return
             self._sessao = TransportadoraSession(config_path=self._config_path)
+            self._pre_login_done = False
             self._run_pre_login()
 
         self._start_daemon_worker(_do)

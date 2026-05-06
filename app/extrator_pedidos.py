@@ -13,6 +13,74 @@ from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
 
+PEDIDO_INTERNO_RE = re.compile(r'PEDIDO INTERNO:\s*PD\s*(\d+)')
+CNPJ_CLIENTE_RE = re.compile(r'CNPJ/CPF:\s*([0-9./-]{11,18})')
+VALOR_TOTAL_RE = re.compile(r'Total:\s*R\$\s*([\d.,]+)')
+AGENDAMENTO_NAO_RE = re.compile(r'\bN\W*(?:A\W*)?O\b')
+AGENDAR_ENTREGA_RE = re.compile(r'AGENDAR\s+ENTREGA\?\s*(SIM|S|NAO|N)\b')
+LOCAL_ENTREGA_RE = re.compile(
+    r'LOCAL\s+(?:DE|DDE|PARA)?\s*ENTREGA\s*:\s*([^\n]+(?:\n[^\n]+)*?)(?:\n(?:HOR[ÃA]RIO|CONTATO|PE\s+|NAF\s+|EMP\s+|CRM\s+|[A-Z].*?-\s*\w+@|$))',
+    re.MULTILINE | re.IGNORECASE,
+)
+LOCAL_ENTREGA_FALLBACK_RE = re.compile(
+    r'LOCAL\s+(?:DE|DDE|PARA)?\s*ENTREGA\s*:\s*(.+?)(?:\n[A-Z]+|$)',
+    re.MULTILINE | re.DOTALL | re.IGNORECASE,
+)
+TOKENS_MAIUSCULOS_RE = re.compile(r'[A-Z]+')
+ITENS_PEDIDO_RE = re.compile(r'Itens do pedido', re.IGNORECASE)
+OBSERVACOES_RE = re.compile(r'Observa\w*\s*:', re.IGNORECASE)
+SPEC_RE = re.compile(r'([\d.,]+\s*kg\s*\|\s*[\d.,]+\s*m3(?:\s*\|\s*[\d\-xX]+)?)', re.IGNORECASE)
+CODE_RE = re.compile(r'^[A-Z0-9]+(?:[-/][A-Z0-9./]+)+', re.IGNORECASE)
+CODIGO_INICIO_RE = re.compile(r'^([A-Z0-9]+(?:-[A-Z0-9./]+)+)\.?', re.IGNORECASE)
+CODIGO_TOKEN_RE = re.compile(r'^[A-Z0-9ÃÃ‰ÃÃ“ÃšÃƒÃ•Ã‚ÃŠÃŽÃ”Ã›Ã‡./-]+-?[A-Z0-9ÃÃ‰ÃÃ“ÃšÃƒÃ•Ã‚ÃŠÃŽÃ”Ã›Ã‡./-]*-?$', re.IGNORECASE)
+CODIGO_CONTINUACAO_RE = re.compile(r'^[A-Z0-9ÃÃ‰ÃÃ“ÃšÃƒÃ•Ã‚ÃŠÃŽÃ”Ã›Ã‡./-]+-?$', re.IGNORECASE)
+EMBALAGEM_RE = re.compile(r'\b(CX\s*/\s*\d+|FD\s*/\s*\d+|C\s*/\s*\d+)\b', re.IGNORECASE)
+PESO_RE = re.compile(r'([\d.,]+)\s*kg', re.IGNORECASE)
+VOLUME_RE = re.compile(r'([\d.,]+)\s*m[³3]', re.IGNORECASE)
+TRAILING_NUM_RE = re.compile(r'\|\s*([\d.,]+)\s*$')
+APOS_KG_RE = re.compile(r'kg\s*\|\s*([\d.,]+)', re.IGNORECASE)
+DIMENSAO_RE = re.compile(r'(\d+[xX]\d+[xX]\d+(?:\s*cm)?)')
+DIMENSAO_SIMPLES_RE = re.compile(r'(\d+[xX]\d+[xX]\d+)')
+NORMALIZAR_ESPACOS_RE = re.compile(r'[^A-Z0-9]+')
+UNIDADE_SPLIT_RE = re.compile(r'\bUNIDADE\b', re.IGNORECASE)
+COMPONENTE_KIT_RE = re.compile(r'\b(MOP|CABO|MOUSE|TECLADO)\b', re.IGNORECASE)
+EMBALAGEM_OU_DIMENSAO_RE = re.compile(r'\b(?:CX|FD|C)\s*/\s*\d+|\d+[xX]\d+[xX]\d+', re.IGNORECASE)
+INFO_TECNICA_RE = re.compile(r'\b(?:CX|FD|C)\s*/\s*\d+|\d+[xX]\d+[xX]\d+|[\d.,]+\s*(?:kg|m[³3])', re.IGNORECASE)
+NUMERO_MEDIDA_RE = re.compile(r'^[\d.,]+\s*(kg|m[³3]|cm)?$', re.IGNORECASE)
+LINHA_HEADER_RE = re.compile(r'produto descri', re.IGNORECASE)
+CODIGO_PRINCIPAL_RE = re.compile(r'^[A-Z]+-[A-Z]+-')
+ITEM_SAME_LINE_RE = re.compile(
+    r'^([A-Z0-9]+(?:-[A-Z0-9]+)+)\s*\|\s*(.+?)\s*UNIDADE\s+(\d+)\s+R\$\s+([\d.,]+)',
+    re.IGNORECASE,
+)
+ITEM_CX_PONTUADO_RE = re.compile(r'^([A-Z]+-[A-Z]+-[\d\w.]+)\.\s*(.+?)\s*\|\s*CX/(.+?)$')
+ITEM_CX_RE = re.compile(r'^([A-Z0-9]+(?:-[A-Z0-9]+)+)\s*\|\s*CX\s*/?\s*(.+)$', re.IGNORECASE)
+UNIDADE_QTD_VALOR_RE = re.compile(r'UNIDADE\s+(\d+)\s+R\$\s+([\d.,]+)', re.IGNORECASE)
+ITEM_SUBTOTAL_RE = re.compile(r'^([A-Z0-9./-]+)\s+(.*?)\s+(\d+)\s+R\$\s*([\d.,]+)', re.IGNORECASE)
+SKU_NUMERO_RE = re.compile(r'^(\d{3,}[A-Z0-9./-]*)\b')
+SUFIXO_NUMERICO_RE = re.compile(r'(\d+)$')
+CX_FD_NUMERO_RE_TEMPLATE = r'\b(?:CX|FD)\s*/\s*{numero}\b'
+CEP_RE = re.compile(r'\b(\d{2}\.?\d{3}-?\d{3}|\d{5}-?\d{3})\b')
+SO_DIGITOS_RE = re.compile(r'\D')
+CIDADE_UF_RE = re.compile(r'^\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ .\'-]{1,})\s*/\s*([A-Za-z]{2})\s*$', re.IGNORECASE)
+PREFIXO_ENDERECO_RE = re.compile(r'^(ENDERECO|ENDEREÃ‡O|ENDERECO DE ENTREGA|ENDEREÃ‡O DE ENTREGA)\s*:\s*', re.IGNORECASE)
+PREFIXO_ENDERECO_FLEX_RE = re.compile(r'^\s*ENDERE[^:]*:\s*', re.IGNORECASE)
+UF_FINAL_RE = re.compile(r'/\s*([A-Za-z]{2})\s*$')
+FD_CONTAINER_RE = re.compile(r'\bFD\b', re.IGNORECASE)
+UNIDADES_EMBALAGEM_RE = re.compile(r'(?:CX|FD|C)\s*[/]?\s*(\d+)|c/?\s*(\d+)\s*und|\b(\d+)\s*und\b', re.IGNORECASE)
+PESO_ALTERNATIVO_RE = re.compile(r'(?:CX|FD|C)\s*/\s*\d+\s*\|\s*([\d.,]+)', re.IGNORECASE)
+M3_NORMALIZADO_RE = re.compile(r'([\d.,]+)\s*m3', re.IGNORECASE)
+
+
+def _normalizar_sem_acentos(texto: str) -> str:
+    texto = unicodedata.normalize('NFKD', texto or '')
+    texto = ''.join(ch for ch in texto if not unicodedata.combining(ch))
+    return texto.upper()
+
+
+def _linhas_nao_vazias(texto: str) -> list[str]:
+    return [linha.strip() for linha in (texto or '').split('\n') if linha and linha.strip()]
+
 
 @dataclass
 class Item:
@@ -66,7 +134,6 @@ class ExtratorPedidos:
         self.pedidos = []
         
         try:
-            import pdfplumber
             with pdfplumber.open(caminho_pdf) as pdf:
                 logger.debug("PDF aberto com %d pagina(s)", len(pdf.pages))
                 for page_num, page in enumerate(pdf.pages, 1):
@@ -90,15 +157,12 @@ class ExtratorPedidos:
         """Extrai um pedido de uma pÃ¡gina"""
         
         # Extrair nÃºmero do pedido
-        match = re.search(r'PEDIDO INTERNO:\s*PD\s*(\d+)', texto)
+        match = PEDIDO_INTERNO_RE.search(texto)
         numero = match.group(1) if match else "N/A"
         logger.debug("_extrair_pedido_pagina: numero=%s", numero)
 
         # Extrair CNPJ do cliente
-        match = re.search(
-            r'CNPJ/CPF:\s*([0-9./-]{11,18})',
-            texto
-        )
+        match = CNPJ_CLIENTE_RE.search(texto)
         cnpj = match.group(1) if match else "N/A"
         logger.debug("_extrair_pedido_pagina: cnpj=%s", cnpj)
 
@@ -114,7 +178,7 @@ class ExtratorPedidos:
         logger.debug("_extrair_pedido_pagina: agendar_entrega=%s", agendar_entrega)
 
         # Extrair valor total
-        match = re.search(r'Total:\s*R\$\s*([\d.,]+)', texto)
+        match = VALOR_TOTAL_RE.search(texto)
         valor_total_str = match.group(1) if match else "0"
         valor_total = self._converter_valor(valor_total_str)
         logger.debug("_extrair_pedido_pagina: valor=%s", valor_total)
@@ -138,29 +202,24 @@ class ExtratorPedidos:
         if not texto:
             return "NAO"
 
-        def _normalizar(s: str) -> str:
-            s = unicodedata.normalize('NFKD', s or '')
-            s = ''.join(ch for ch in s if not unicodedata.combining(ch))
-            return s.upper()
-
-        linhas = [ln.strip() for ln in (texto or '').split('\n') if ln and ln.strip()]
+        linhas = _linhas_nao_vazias(texto)
 
         # Regra principal:
         # AGENDAMENTO: NAO => NAO
         # qualquer outro conteudo apos AGENDAMENTO: => SIM
         for linha in linhas:
-            linha_norm = _normalizar(linha)
+            linha_norm = _normalizar_sem_acentos(linha)
             if 'AGENDAMENTO' not in linha_norm:
                 continue
 
             conteudo = linha.split(':', 1)[1].strip() if ':' in linha else ''
-            conteudo_norm = _normalizar(conteudo)
-            if re.search(r'\bN\W*(?:A\W*)?O\b', conteudo_norm):
+            conteudo_norm = _normalizar_sem_acentos(conteudo)
+            if AGENDAMENTO_NAO_RE.search(conteudo_norm):
                 return "NAO"
             return "SIM"
 
         # Fallback para formatos antigos: "Agendar Entrega? SIM/NAO"
-        m_flag = re.search(r'AGENDAR\s+ENTREGA\?\s*(SIM|S|NAO|N)\b', _normalizar(texto))
+        m_flag = AGENDAR_ENTREGA_RE.search(_normalizar_sem_acentos(texto))
         if m_flag:
             return "SIM" if m_flag.group(1).startswith('S') else "NAO"
 
@@ -171,35 +230,26 @@ class ExtratorPedidos:
         
         # Procurar pela seÃ§Ã£o "LOCAL DE ENTREGA:" ou variantes
         # Alguns PDFs vÃªm com typo: "LOCAL DDE ENTREGA"
-        match = re.search(
-            r'LOCAL\s+(?:DE|DDE|PARA)?\s*ENTREGA\s*:\s*([^\n]+(?:\n[^\n]+)*?)(?:\n(?:HOR[ÃA]RIO|CONTATO|PE\s+|NAF\s+|EMP\s+|CRM\s+|[A-Z].*?-\s*\w+@|$))',
-            texto,
-            re.MULTILINE | re.IGNORECASE
-        )
+        match = LOCAL_ENTREGA_RE.search(texto)
         
         if match:
             local_raw = match.group(1).strip()
             # Limpar linhas vazias e extras
-            linhas = [linha.strip() for linha in local_raw.split('\n') if linha.strip()]
+            linhas = _linhas_nao_vazias(local_raw)
             result = '\n'.join(linhas)
             logger.debug("_extrair_local_entrega: encontrado = %s...", result[:50])
             return result
         else:
             # Se nÃ£o encontrar com o padrÃ£o original, tentar busca simples
-            match2 = re.search(r'LOCAL\s+(?:DE|DDE|PARA)?\s*ENTREGA\s*:\s*(.+?)(?:\n[A-Z]+|$)', texto, re.MULTILINE | re.DOTALL | re.IGNORECASE)
+            match2 = LOCAL_ENTREGA_FALLBACK_RE.search(texto)
             if match2:
                 local_raw = match2.group(1).strip()
-                linhas = [linha.strip() for linha in local_raw.split('\n') if linha.strip()]
+                linhas = _linhas_nao_vazias(local_raw)
                 result = '\n'.join(linhas[:3])  # Pegar apenas primeiras 3 linhas
                 logger.debug("_extrair_local_entrega: encontrado (fallback) = %s...", result[:50])
                 return result
 
             # Fallback tolerante a erro de digitacao no rotulo do local de entrega
-            def _normalizar(s: str) -> str:
-                s = unicodedata.normalize('NFKD', s or '')
-                s = ''.join(ch for ch in s if not unicodedata.combining(ch))
-                return s.upper()
-
             def _similar(a: str, b: str) -> float:
                 return SequenceMatcher(None, a, b).ratio()
 
@@ -210,8 +260,8 @@ class ExtratorPedidos:
             for idx, linha in enumerate(linhas_txt):
                 if ':' not in linha:
                     continue
-                norm = _normalizar(linha)
-                tokens = re.findall(r'[A-Z]+', norm)
+                norm = _normalizar_sem_acentos(linha)
+                tokens = TOKENS_MAIUSCULOS_RE.findall(norm)
                 if not tokens:
                     continue
                 has_local = any(_similar(tok, 'LOCAL') >= 0.7 for tok in tokens)
@@ -238,8 +288,8 @@ class ExtratorPedidos:
                         if coletadas:
                             break
                         continue
-                    l_norm = _normalizar(l)
-                    if any(l_norm.startswith(_normalizar(p)) for p in stop_prefixes):
+                    l_norm = _normalizar_sem_acentos(l)
+                    if any(l_norm.startswith(_normalizar_sem_acentos(p)) for p in stop_prefixes):
                         break
                     coletadas.append(l)
                     if len(coletadas) >= 8:
@@ -258,8 +308,8 @@ class ExtratorPedidos:
         itens = []
         
         # Encontrar seÃ§Ã£o de itens
-        match_inicio = re.search(r'Itens do pedido', texto, re.IGNORECASE)
-        match_fim = re.search(r'Observa\w*\s*:', texto, re.IGNORECASE)
+        match_inicio = ITENS_PEDIDO_RE.search(texto)
+        match_fim = OBSERVACOES_RE.search(texto)
         
         if not match_inicio:
             return itens
@@ -269,8 +319,6 @@ class ExtratorPedidos:
         else:
             secao_itens = texto[match_inicio.end():]
         linhas = secao_itens.split('\n')
-        spec_re = re.compile(r'([\d.,]+\s*kg\s*\|\s*[\d.,]+\s*m3(?:\s*\|\s*[\d\-xX]+)?)', re.IGNORECASE)
-        code_re = re.compile(r'^[A-Z0-9]+(?:[-/][A-Z0-9./]+)+', re.IGNORECASE)
         pending_desc = None
         last_header_line = None
         last_header_desc = None
@@ -283,7 +331,7 @@ class ExtratorPedidos:
                 return ""
             texto_limpo = texto.strip()
             # SKU no início da linha (ex.: "FLM-OURO-20x30. Flanela ...")
-            m_inicio = re.match(r'^([A-Z0-9]+(?:-[A-Z0-9./]+)+)\.?', texto_limpo, re.IGNORECASE)
+            m_inicio = CODIGO_INICIO_RE.match(texto_limpo)
             if m_inicio:
                 return m_inicio.group(1).strip().rstrip('.')
             tokens = texto.strip().split()
@@ -291,12 +339,12 @@ class ExtratorPedidos:
                 return ""
             code_tokens = []
             for idx, tok in enumerate(tokens[:3]):
-                if re.match(r'^[A-Z0-9ÃÃ‰ÃÃ“ÃšÃƒÃ•Ã‚ÃŠÃŽÃ”Ã›Ã‡./-]+-?[A-Z0-9ÃÃ‰ÃÃ“ÃšÃƒÃ•Ã‚ÃŠÃŽÃ”Ã›Ã‡./-]*-?$', tok) and '-' in tok:
+                if CODIGO_TOKEN_RE.match(tok) and '-' in tok:
                     code_tokens.append(tok)
                     # incluir segundo token se parecer continuaÃ§Ã£o do cÃ³digo (ex: SL-)
                     if idx == 0 and len(tokens) > 1:
                         tok2 = tokens[1]
-                        if re.match(r'^[A-Z0-9ÃÃ‰ÃÃ“ÃšÃƒÃ•Ã‚ÃŠÃŽÃ”Ã›Ã‡./-]+-?$', tok2) and (tok2.endswith('-') or '-' in tok2):
+                        if CODIGO_CONTINUACAO_RE.match(tok2) and (tok2.endswith('-') or '-' in tok2):
                             code_tokens.append(tok2)
                     break
             return ' '.join(code_tokens).strip().rstrip('.')
@@ -312,24 +360,24 @@ class ExtratorPedidos:
         def _extrair_info_caixa(header_line: str, spec_line: str) -> str:
             info_parts = []
             texto = ' '.join([x for x in [header_line, spec_line] if x])
-            m_cx = re.search(r'\b(CX\s*/\s*\d+|FD\s*/\s*\d+|C\s*/\s*\d+)\b', texto, re.IGNORECASE)
+            m_cx = EMBALAGEM_RE.search(texto)
             if m_cx:
                 info_parts.append(m_cx.group(1).replace(' ', ''))
-            m_kg = re.search(r'([\d.,]+)\s*kg', texto, re.IGNORECASE)
+            m_kg = PESO_RE.search(texto)
             if m_kg:
                 info_parts.append(f"{m_kg.group(1)} kg")
             # Volume (m3/m³). Alguns PDFs quebram o "m3" em outra linha.
-            m_m3 = re.search(r'([\d.,]+)\s*m[³3]', texto, re.IGNORECASE)
+            m_m3 = VOLUME_RE.search(texto)
             vol_m3 = self._converter_medida(m_m3.group(1)) if m_m3 else None
 
             # Candidato quando a linha termina com "0,044" (sem m3)
             vol_trailing = None
             if header_line:
-                m_trailing = re.search(r'\|\s*([\d.,]+)\s*$', header_line)
+                m_trailing = TRAILING_NUM_RE.search(header_line)
                 if m_trailing:
                     vol_trailing = self._converter_medida(m_trailing.group(1))
                 if vol_trailing is None:
-                    m_after_kg = re.search(r'kg\s*\|\s*([\d.,]+)', header_line, re.IGNORECASE)
+                    m_after_kg = APOS_KG_RE.search(header_line)
                     if m_after_kg:
                         vol_trailing = self._converter_medida(m_after_kg.group(1))
 
@@ -344,10 +392,45 @@ class ExtratorPedidos:
 
             if chosen_vol is not None:
                 info_parts.append(f"{self._formatar_decimal(chosen_vol)} m3")
-            m_dim = re.search(r'(\d+[xX]\d+[xX]\d+)', texto)
+            m_dim = DIMENSAO_SIMPLES_RE.search(texto)
             if m_dim:
                 info_parts.append(m_dim.group(1))
             return ' | '.join(info_parts).strip()
+
+        def _contem_dimensao(texto_linha: str | None) -> bool:
+            return bool(texto_linha and DIMENSAO_SIMPLES_RE.search(texto_linha))
+
+        def _enriquecer_info_caixa(base_info: str, linha_specs: str | None) -> str:
+            info_caixa = base_info
+            if not linha_specs:
+                return info_caixa
+            match_specs = SPEC_RE.search(linha_specs)
+            if match_specs:
+                return f"{base_info} | {match_specs.group(1)}"
+            if not _contem_dimensao(info_caixa):
+                m_dim_sep = DIMENSAO_SIMPLES_RE.search(linha_specs)
+                if m_dim_sep:
+                    return info_caixa.rstrip(' |') + ' | ' + m_dim_sep.group(1)
+            return info_caixa
+
+        def _criar_item(codigo: str, descricao: str, quantidade: int, valor_unitario: float, info_caixa: str) -> Item:
+            return Item(
+                produto=codigo,
+                descricao=descricao,
+                quantidade=quantidade,
+                valor_unitario=valor_unitario,
+                subtotal=quantidade * valor_unitario,
+                info_caixa=info_caixa,
+            )
+
+        def _reset_contexto_item() -> None:
+            nonlocal pending_desc, last_header_line, last_header_desc, last_header_code, last_code_line, last_spec_line
+            pending_desc = None
+            last_header_line = None
+            last_header_desc = None
+            last_header_code = None
+            last_code_line = None
+            last_spec_line = None
 
         def _eh_item_kit(codigo: str, descricao: str) -> bool:
             texto = f"{codigo or ''} {descricao or ''}".upper()
@@ -373,7 +456,7 @@ class ExtratorPedidos:
                 return 0
 
             def _norm(s: str) -> str:
-                return re.sub(r'[^A-Z0-9]+', ' ', (s or '').upper()).strip()
+                return NORMALIZAR_ESPACOS_RE.sub(' ', (s or '').upper()).strip()
 
             def _rotulo_componente_kit(codigo_kit: str, nome_comp: str) -> str:
                 """
@@ -428,14 +511,11 @@ class ExtratorPedidos:
 
                 # Alguns PDFs colam "UNIDADE ... R$ ..." na mesma linha do componente.
                 # Nesse caso, usa apenas o trecho antes de "UNIDADE".
-                candidata = re.split(r'\bUNIDADE\b', candidata_raw, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+                candidata = UNIDADE_SPLIT_RE.split(candidata_raw, maxsplit=1)[0].strip()
                 if not candidata:
                     continue
 
-                if not (
-                    re.search(r'\b(?:CX|FD|C)\s*/\s*\d+', candidata, re.IGNORECASE)
-                    or re.search(r'\d+[xX]\d+[xX]\d+', candidata)
-                ):
+                if not EMBALAGEM_OU_DIMENSAO_RE.search(candidata):
                     continue
 
                 # Evita capturar linha de outro KIT (próximo item do pedido).
@@ -471,10 +551,10 @@ class ExtratorPedidos:
 
                 # Fallback para casos como "KIT-...CABOMOP" (sem separador).
                 if not esquerda:
-                    m_comp = re.search(r'\b(MOP|CABO|MOUSE|TECLADO)\b', esquerda_raw, re.IGNORECASE)
+                    m_comp = COMPONENTE_KIT_RE.search(esquerda_raw)
                     if not m_comp:
                         # Buscar nome de componente na linha completa
-                        m_comp = re.search(r'\b(MOP|CABO|MOUSE|TECLADO)\b', candidata, re.IGNORECASE)
+                        m_comp = COMPONENTE_KIT_RE.search(candidata)
                     if m_comp:
                         esquerda = m_comp.group(1).upper()
 
@@ -493,7 +573,7 @@ class ExtratorPedidos:
                 _esq_words = esquerda.split()
                 if len(_esq_words) > 3 or '+' in esquerda or '=' in esquerda or '$' in esquerda:
                     continue
-                if re.match(r'^[\d.,]+\s*(kg|m[³3]|cm)?$', esquerda, re.IGNORECASE):
+                if NUMERO_MEDIDA_RE.match(esquerda):
                     continue
 
                 info_comp = _extrair_info_caixa(candidata, None)
@@ -521,21 +601,16 @@ class ExtratorPedidos:
                 lr = (linhas[idx] or '').strip()
                 if not lr:
                     continue
-                if re.search(r'\bUNIDADE\b', lr, re.IGNORECASE) and 'R$' in lr:
+                if UNIDADE_SPLIT_RE.search(lr) and 'R$' in lr:
                     continue
-                if (
-                    re.search(r'\b(?:CX|FD|C)\s*/\s*\d+', lr, re.IGNORECASE)
-                    or re.search(r'\d+[xX]\d+[xX]\d+', lr)
-                    or re.search(r'[\d.,]+\s*(?:kg|m[³3])', lr, re.IGNORECASE)
-                ):
+                if INFO_TECNICA_RE.search(lr):
                     collected_parts.append(lr)
                     if offset > inline_max_offset:
                         inline_max_offset = offset
 
             if collected_parts:
                 combined = ' '.join(collected_parts)
-                comp_kw = r'\b(MOUSE|TECLADO|MOP|CABO)\b'
-                segments = re.split(comp_kw, combined, flags=re.IGNORECASE)
+                segments = COMPONENTE_KIT_RE.split(combined)
                 # segments: [before, kw1, text1, kw2, text2, ...]
                 if len(segments) >= 3:
                     inline_comps: list[tuple[int, str, str]] = []
@@ -609,25 +684,27 @@ class ExtratorPedidos:
         i = 0
         while i < len(linhas):
             linha = linhas[i].strip()
+            linha_upper = linha.upper()
+            linha_lower = linha.lower()
             added = False
 
             # Ignorar cabeÃ§alhos comuns
-            if not linha or linha.lower() in ('unidade', 'principal') or re.match(r'produto descri', linha, re.IGNORECASE):
+            if not linha or linha_lower in ('unidade', 'principal') or LINHA_HEADER_RE.match(linha):
                 i += 1
                 continue
 
             # Atualizar contexto para linhas de cabeÃ§alho (com CX/FD)
-            if ('CX/' in linha or 'FD/' in linha) and ('UNIDADE' not in linha.upper()):
+            if ('CX/' in linha or 'FD/' in linha) and ('UNIDADE' not in linha_upper):
                 last_header_line = linha
                 codigo_tmp = _extrair_codigo_de_texto(linha.split('|')[0].strip())
                 last_header_desc = _extrair_desc_de_header(linha, codigo_tmp)
                 last_header_code = codigo_tmp
             # Atualizar contexto para linha de specs
-            if ('m3' in linha.lower() or 'm\u00b3' in linha.lower() or re.search(r'\d+[xX]\d+[xX]\d+', linha)) and ('UNIDADE' not in linha.upper()):
+            if (('m3' in linha_lower or 'm\u00b3' in linha_lower or _contem_dimensao(linha)) and ('UNIDADE' not in linha_upper)):
                 last_spec_line = linha
             # Atualizar contexto para linha de cÃ³digo isolado
             # (alguns PDFs trazem "CODIGO descricao" na linha anterior ao "UNIDADE ...")
-            if ('UNIDADE' not in linha.upper()) and ('R$' not in linha):
+            if ('UNIDADE' not in linha_upper) and ('R$' not in linha):
                 head = linha.split('|')[0].strip() if '|' in linha else linha.strip()
                 codigo_head = _extrair_codigo_de_texto(head)
                 if codigo_head:
@@ -640,44 +717,31 @@ class ExtratorPedidos:
                             pending_desc = desc_head
 
             # Guardar linha de descriÃ§Ã£o (sem cÃ³digo e sem unidade)
-            if (not code_re.match(linha)) and ('UNIDADE' not in linha.upper()) and ('|' not in linha) and ('R$' not in linha):
+            if (not CODE_RE.match(linha)) and ('UNIDADE' not in linha_upper) and ('|' not in linha) and ('R$' not in linha):
                 pending_desc = linha.strip()
                 i += 1
                 continue
             
             # Procurar por linha que comeÃ§a com cÃ³digo (letra+hÃ­fen)
             # Ex: ELM-DF-70x100. Esponja de Limpeza... | CX/240 | 1,650
-            if re.match(r'^[A-Z]+-[A-Z]+-', linha):
+            if CODIGO_PRINCIPAL_RE.match(linha):
                 # Caso: UNIDADE na mesma linha (cÃ³digo | CX/... | ... UNIDADE qtd R$ ...)
-                match_same = re.search(
-                    r'^([A-Z0-9]+(?:-[A-Z0-9]+)+)\s*\|\s*(.+?)\s*UNIDADE\s+(\d+)\s+R\$\s+([\d.,]+)',
-                    linha,
-                    re.IGNORECASE
-                )
+                match_same = ITEM_SAME_LINE_RE.search(linha)
                 if match_same:
                     codigo = match_same.group(1)
                     descricao_parte1 = pending_desc or ""
                     info_caixa = match_same.group(2).strip()
                     quantidade = int(match_same.group(3))
                     valor_unitario = self._converter_valor(match_same.group(4))
-                    subtotal = quantidade * valor_unitario
 
                     # Se a linha de specs vier separada
                     if i + 1 < len(linhas):
                         linha_specs = linhas[i + 1].strip()
-                        match_specs = spec_re.search(linha_specs)
-                        if match_specs and ('kg' not in info_caixa.lower() or 'm3' not in info_caixa.lower()):
-                            info_caixa = f"{info_caixa} | {match_specs.group(1)}"
+                        if SPEC_RE.search(linha_specs) and ('kg' not in info_caixa.lower() or 'm3' not in info_caixa.lower()):
+                            info_caixa = _enriquecer_info_caixa(info_caixa, linha_specs)
                             i += 1
 
-                    item = Item(
-                        produto=codigo,
-                        descricao=descricao_parte1,
-                        quantidade=quantidade,
-                        valor_unitario=valor_unitario,
-                        subtotal=subtotal,
-                        info_caixa=info_caixa
-                    )
+                    item = _criar_item(codigo, descricao_parte1, quantidade, valor_unitario, info_caixa)
                     itens.append(item)
                     pending_desc = None
 
@@ -693,7 +757,7 @@ class ExtratorPedidos:
                     continue
 
                 # Extrair cÃ³digo e info de caixa da mesma linha
-                match = re.search(r'^([A-Z]+-[A-Z]+-[\d\w.]+)\.\s*(.+?)\s*\|\s*CX/(.+?)$', linha)
+                match = ITEM_CX_PONTUADO_RE.search(linha)
                 if match:
                     codigo = match.group(1)
                     descricao_parte1 = match.group(2).strip() if match.group(2) else ""
@@ -702,39 +766,20 @@ class ExtratorPedidos:
                     # PrÃ³xima linha tem: UNIDADE quantidade R$ valor data
                     if i + 1 < len(linhas):
                         prox_linha = linhas[i + 1].strip()
-                        match_qtde = re.search(r'UNIDADE\s+(\d+)\s+R\$\s+([\d.,]+)', prox_linha)
+                        match_qtde = UNIDADE_QTD_VALOR_RE.search(prox_linha)
                         
                         if match_qtde:
                             quantidade = int(match_qtde.group(1))
                             valor_unitario = self._converter_valor(match_qtde.group(2))
-                            subtotal = quantidade * valor_unitario
                             
                             # PrÃ³xima linha tem: peso kg | volume m3 | dimensÃµes
                             # Ex: 3.240 kg | 0,044m3 | 31x31x45
                             info_caixa = cx_info_parcial
                             if i + 2 < len(linhas):
                                 linha_specs = linhas[i + 2].strip()
-                                # Procurar por padrÃ£o: nÃºmero kg | nÃºmero m3 | dimensÃµes
-                                match_specs = spec_re.search(linha_specs)
-                                if match_specs:
-                                    info_caixa = f"{cx_info_parcial} | {match_specs.group(1)}"
-                                elif not re.search(r'\d+[xX]\d+[xX]\d+', info_caixa):
-                                    m_dim_sep = re.search(r'(\d+[xX]\d+[xX]\d+)', linha_specs)
-                                    if m_dim_sep:
-                                        info_caixa = info_caixa.rstrip(' |') + ' | ' + m_dim_sep.group(1)
-                                elif not re.search(r'\d+[xX]\d+[xX]\d+', info_caixa):
-                                    m_dim_sep = re.search(r'(\d+[xX]\d+[xX]\d+)', linha_specs)
-                                    if m_dim_sep:
-                                        info_caixa = info_caixa.rstrip(' |') + ' | ' + m_dim_sep.group(1)
+                                info_caixa = _enriquecer_info_caixa(cx_info_parcial, linha_specs)
                             
-                            item = Item(
-                                produto=codigo,
-                                descricao=descricao_parte1,
-                                quantidade=quantidade,
-                                valor_unitario=valor_unitario,
-                                subtotal=subtotal,
-                                info_caixa=info_caixa
-                            )
+                            item = _criar_item(codigo, descricao_parte1, quantidade, valor_unitario, info_caixa)
                             itens.append(item)
                             pending_desc = None
 
@@ -750,7 +795,7 @@ class ExtratorPedidos:
                             continue
 
                 # Caso: cÃ³digo | CX/... (sem ponto) e UNIDADE na linha seguinte
-                match_cx = re.search(r'^([A-Z0-9]+(?:-[A-Z0-9]+)+)\s*\|\s*CX\s*/?\s*(.+)$', linha, re.IGNORECASE)
+                match_cx = ITEM_CX_RE.search(linha)
                 if match_cx:
                     codigo = match_cx.group(1)
                     descricao_parte1 = pending_desc or ""
@@ -758,39 +803,17 @@ class ExtratorPedidos:
 
                     if i + 1 < len(linhas):
                         prox_linha = linhas[i + 1].strip()
-                        match_qtde = re.search(r'UNIDADE\s+(\d+)\s+R\$\s+([\d.,]+)', prox_linha)
+                        match_qtde = UNIDADE_QTD_VALOR_RE.search(prox_linha)
                         if match_qtde:
                             quantidade = int(match_qtde.group(1))
                             valor_unitario = self._converter_valor(match_qtde.group(2))
-                            subtotal = quantidade * valor_unitario
 
                             info_caixa = cx_info_parcial
                             if i + 2 < len(linhas):
                                 linha_specs = linhas[i + 2].strip()
-                                match_specs = spec_re.search(linha_specs)
-                                if match_specs:
-                                    info_caixa = f"{cx_info_parcial} | {match_specs.group(1)}"
-                                elif not re.search(r'\d+[xX]\d+[xX]\d+', info_caixa):
-                                    m_dim_sep = re.search(r'(\d+[xX]\d+[xX]\d+)', linha_specs)
-                                    if m_dim_sep:
-                                        info_caixa = info_caixa.rstrip(' |') + ' | ' + m_dim_sep.group(1)
-                                elif not re.search(r'\d+[xX]\d+[xX]\d+', info_caixa):
-                                    m_dim_sep = re.search(r'(\d+[xX]\d+[xX]\d+)', linha_specs)
-                                    if m_dim_sep:
-                                        info_caixa = info_caixa.rstrip(' |') + ' | ' + m_dim_sep.group(1)
-                                elif not re.search(r'\d+[xX]\d+[xX]\d+', info_caixa):
-                                    m_dim_sep = re.search(r'(\d+[xX]\d+[xX]\d+)', linha_specs)
-                                    if m_dim_sep:
-                                        info_caixa = info_caixa.rstrip(' |') + ' | ' + m_dim_sep.group(1)
+                                info_caixa = _enriquecer_info_caixa(cx_info_parcial, linha_specs)
 
-                            item = Item(
-                                produto=codigo,
-                                descricao=descricao_parte1,
-                                quantidade=quantidade,
-                                valor_unitario=valor_unitario,
-                                subtotal=subtotal,
-                                info_caixa=info_caixa
-                            )
+                            item = _criar_item(codigo, descricao_parte1, quantidade, valor_unitario, info_caixa)
                             itens.append(item)
                             pending_desc = None
 
@@ -806,12 +829,11 @@ class ExtratorPedidos:
                             continue
 
             # Fallback: linha com UNIDADE (nao capturada acima)
-            if (not added) and ('UNIDADE' in linha.upper()) and ('R$' in linha):
-                match_qtde = re.search(r'UNIDADE\s+(\d+)\s+R\$\s+([\d.,]+)', linha, re.IGNORECASE)
+            if (not added) and ('UNIDADE' in linha_upper) and ('R$' in linha):
+                match_qtde = UNIDADE_QTD_VALOR_RE.search(linha)
                 if match_qtde:
                     quantidade = int(match_qtde.group(1))
                     valor_unitario = self._converter_valor(match_qtde.group(2))
-                    subtotal = quantidade * valor_unitario
 
                     # Codigo e descricao
                     before = linha.split('UNIDADE')[0].strip()
@@ -825,10 +847,10 @@ class ExtratorPedidos:
                         descricao = last_header_desc or pending_desc or ""
                     if not codigo and last_header_code:
                         codigo = last_header_code
-                        m_num = re.search(r'(\d+)$', descricao)
+                        m_num = SUFIXO_NUMERICO_RE.search(descricao)
                         numero_final = m_num.group(1) if m_num else ""
                         veio_de_embalagem = bool(
-                            numero_final and re.search(rf'\b(?:CX|FD)\s*/\s*{re.escape(numero_final)}\b', descricao, re.IGNORECASE)
+                            numero_final and re.search(CX_FD_NUMERO_RE_TEMPLATE.format(numero=re.escape(numero_final)), descricao, re.IGNORECASE)
                         )
                         if numero_final and numero_final not in codigo and not veio_de_embalagem:
                             codigo = f"{codigo} {m_num.group(1)}"
@@ -839,25 +861,13 @@ class ExtratorPedidos:
                     spec_line = None
                     if i + 1 < len(linhas):
                         spec_line = linhas[i + 1].strip()
-                        if not (('m3' in spec_line.lower()) or ('m\u00b3' in spec_line.lower()) or re.search(r'\d+[xX]\d+[xX]\d+', spec_line)):
+                        if not (('m3' in spec_line.lower()) or ('m\u00b3' in spec_line.lower()) or _contem_dimensao(spec_line)):
                             spec_line = None
                     info_caixa = _extrair_info_caixa(last_header_line, spec_line or last_spec_line)
 
-                    item = Item(
-                        produto=codigo,
-                        descricao=descricao,
-                        quantidade=quantidade,
-                        valor_unitario=valor_unitario,
-                        subtotal=subtotal,
-                        info_caixa=info_caixa
-                    )
+                    item = _criar_item(codigo, descricao, quantidade, valor_unitario, info_caixa)
                     itens.append(item)
-                    pending_desc = None
-                    last_header_line = None
-                    last_header_desc = None
-                    last_code_line = None
-                    last_spec_line = None
-                    last_header_code = None
+                    _reset_contexto_item()
 
                     offset_fardo = _adicionar_item_cabo_kit(
                         codigo=codigo,
@@ -871,12 +881,8 @@ class ExtratorPedidos:
 
             # Fallback: linha com subtotal (R$) sem "UNIDADE"
             # Ex: PICOLO.01.30 PCT 250 GR 1000 R$ 2.590,00 31/01/2026
-            if (not added) and ('R$' in linha) and ('UNIDADE' not in linha.upper()):
-                match_sub = re.search(
-                    r'^([A-Z0-9./-]+)\s+(.*?)\s+(\d+)\s+R\$\s*([\d.,]+)',
-                    linha,
-                    re.IGNORECASE
-                )
+            if (not added) and ('R$' in linha) and ('UNIDADE' not in linha_upper):
+                match_sub = ITEM_SUBTOTAL_RE.search(linha)
                 if match_sub:
                     codigo = match_sub.group(1).strip().rstrip('.')
                     descricao = (match_sub.group(2) or "").strip()
@@ -887,7 +893,7 @@ class ExtratorPedidos:
                     # Caso comum em alguns PDFs: "MR 00022 CAIXA 10 50 R$ ..."
                     # O SKU vem quebrado em 2 tokens (prefixo + numero).
                     if codigo and re.fullmatch(r'[A-Z]{1,4}', codigo):
-                        m_sku_num = re.match(r'^(\d{3,}[A-Z0-9./-]*)\b', descricao)
+                        m_sku_num = SKU_NUMERO_RE.match(descricao)
                         if m_sku_num:
                             codigo = f"{codigo} {m_sku_num.group(1)}"
                             if last_header_desc:
@@ -905,7 +911,7 @@ class ExtratorPedidos:
                     spec_line = last_spec_line
                     if i + 1 < len(linhas):
                         prox = linhas[i + 1].strip()
-                        if re.search(r'\d+[xX]\d+[xX]\d+', prox):
+                        if _contem_dimensao(prox):
                             spec_line = prox if not spec_line else f"{spec_line} | {prox}"
 
                     info_caixa = _extrair_info_caixa(last_header_line, spec_line)
@@ -921,12 +927,7 @@ class ExtratorPedidos:
                         info_caixa=info_caixa
                     )
                     itens.append(item)
-                    pending_desc = None
-                    last_header_line = None
-                    last_header_desc = None
-                    last_code_line = None
-                    last_spec_line = None
-                    last_header_code = None
+                    _reset_contexto_item()
 
                     offset_fardo = _adicionar_item_cabo_kit(
                         codigo=codigo,
@@ -999,19 +1000,19 @@ class ExtratorPedidos:
             return info or ""
         partes = [p.strip() for p in info.split('|')]
         # Peso alternativo apÃ³s CX/FD (quando peso kg Ã© muito baixo)
-        m_alt = re.search(r'(?:CX|FD|C)\s*/\s*\d+\s*\|\s*([\d.,]+)', info, re.IGNORECASE)
+        m_alt = PESO_ALTERNATIVO_RE.search(info)
         peso_alt = self._converter_medida(m_alt.group(1)) if m_alt else None
         partes_formatadas = []
         for p in partes:
             p_fmt = p
-            m_peso = re.search(r'([\d.,]+)\s*kg', p_fmt, re.IGNORECASE)
+            m_peso = PESO_RE.search(p_fmt)
             if m_peso:
                 val = self._converter_medida(m_peso.group(1))
                 if val is not None:
                     if val < 1 and peso_alt is not None and peso_alt >= 1:
                         val = peso_alt
                     p_fmt = re.sub(r'[\d.,]+\s*kg', f"{self._formatar_decimal(val)} kg", p_fmt, flags=re.IGNORECASE)
-            m_vol = re.search(r'([\d.,]+)\s*m3', p_fmt, re.IGNORECASE)
+            m_vol = M3_NORMALIZADO_RE.search(p_fmt)
             if m_vol:
                 val = self._converter_medida(m_vol.group(1))
                 if val is not None:
@@ -1047,17 +1048,13 @@ class ExtratorPedidos:
         if not local_entrega:
             return None, None, None
 
-        linhas = [linha.strip() for linha in local_entrega.split('\n') if linha.strip()]
+        linhas = _linhas_nao_vazias(local_entrega)
 
         # Cidade/UF
         def _match_cidade_uf(linha: str):
             if not linha:
                 return None
-            return re.match(
-                r'^\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ .\'-]{1,})\s*/\s*([A-Za-z]{2})\s*$',
-                linha.strip(),
-                re.IGNORECASE,
-            )
+            return CIDADE_UF_RE.match(linha.strip())
 
         cidade_uf = None
         idx_cidade_uf = -1
@@ -1072,8 +1069,8 @@ class ExtratorPedidos:
         cep = None
         cep_candidates = []
         for idx, linha in enumerate(linhas):
-            for m_cep in re.finditer(r'\b(\d{2}\.?\d{3}-?\d{3}|\d{5}-?\d{3})\b', linha):
-                digitos = re.sub(r'\D', '', m_cep.group(1) or '')
+            for m_cep in CEP_RE.finditer(linha):
+                digitos = SO_DIGITOS_RE.sub('', m_cep.group(1) or '')
                 if len(digitos) != 8:
                     continue
                 cep_fmt = digitos[:5] + '-' + digitos[5:]
@@ -1106,10 +1103,10 @@ class ExtratorPedidos:
                 continue
             if _match_cidade_uf(linha):
                 continue
-            if re.match(r'^(ENDERECO|ENDEREÃ‡O|ENDERECO DE ENTREGA|ENDEREÃ‡O DE ENTREGA)\s*:\s*', linha, re.IGNORECASE):
-                endereco_fallback = re.sub(r'^(ENDERECO|ENDEREÃ‡O|ENDERECO DE ENTREGA|ENDEREÃ‡O DE ENTREGA)\s*:\s*', '', linha, flags=re.IGNORECASE).strip()
+            if PREFIXO_ENDERECO_RE.match(linha):
+                endereco_fallback = PREFIXO_ENDERECO_RE.sub('', linha).strip()
             if re.search(r'\d', linha):
-                rua_num = re.sub(r'^(ENDERECO|ENDEREÃ‡O|ENDERECO DE ENTREGA|ENDEREÃ‡O DE ENTREGA)\s*:\s*', '', linha, flags=re.IGNORECASE).strip()
+                rua_num = PREFIXO_ENDERECO_RE.sub('', linha).strip()
                 break
         if not rua_num and endereco_fallback:
             rua_num = endereco_fallback
@@ -1122,9 +1119,9 @@ class ExtratorPedidos:
                     continue
                 if re.search(r'\bCEP\b', linha_limpa, re.IGNORECASE):
                     continue
-                if re.match(r'^\s*[A-ZÀ-ÿ][A-ZÀ-ÿ .\'-]{2,}\s*/\s*[A-Z]{2}\s*$', linha_limpa, re.IGNORECASE):
+                if CIDADE_UF_RE.match(linha_limpa):
                     continue
-                sem_prefixo = re.sub(r'^\s*ENDERE[^:]*:\s*', '', linha_limpa, flags=re.IGNORECASE).strip()
+                sem_prefixo = PREFIXO_ENDERECO_FLEX_RE.sub('', linha_limpa).strip()
                 tinha_prefixo = sem_prefixo != linha_limpa
                 if tinha_prefixo and sem_prefixo:
                     endereco_fallback = sem_prefixo
@@ -1137,7 +1134,7 @@ class ExtratorPedidos:
 
         # Exibir somente rua e número, sem o prefixo "ENDEREÇO:".
         if rua_num:
-            rua_num = re.sub(r'^\s*ENDERE[^:]*:\s*', '', rua_num, flags=re.IGNORECASE).strip()
+            rua_num = PREFIXO_ENDERECO_FLEX_RE.sub('', rua_num).strip()
             rua_num = re.sub(r'^\s*[-–—]\s*', '', rua_num)
 
         return rua_num, cep, cidade_uf
@@ -1172,7 +1169,7 @@ class ExtratorPedidos:
         _, _, cidade_uf = self._extrair_componentes_local(local_entrega)
         if not cidade_uf:
             return ""
-        m = re.search(r'/\s*([A-Za-z]{2})\s*$', str(cidade_uf))
+        m = UF_FINAL_RE.search(str(cidade_uf))
         return m.group(1).upper() if m else ""
 
     def chave_local_entrega(self, local_entrega: str) -> str:
@@ -1199,22 +1196,22 @@ class ExtratorPedidos:
         if not info:
             return None, None, None, '', 'CX'
 
-        container = 'FD' if re.search(r'\bFD\b', info, re.IGNORECASE) else 'CX'
+        container = 'FD' if FD_CONTAINER_RE.search(info) else 'CX'
 
-        m_u = re.search(r'(?:CX|FD|C)\s*[/]?\s*(\d+)|c/?\s*(\d+)\s*und|\b(\d+)\s*und\b', info, re.IGNORECASE)
+        m_u = UNIDADES_EMBALAGEM_RE.search(info)
         units_per_box = int(next(g for g in m_u.groups() if g)) if m_u else None
 
-        m_peso = re.search(r'([\d.,]+)\s*kg', info, re.IGNORECASE)
+        m_peso = PESO_RE.search(info)
         peso_box = self._converter_medida(m_peso.group(1)) if m_peso else None
 
         # Alguns PDFs trazem o peso logo apos o CX/FD sem "kg"
-        m_alt = re.search(r'(?:CX|FD|C)\s*/\s*\d+\s*\|\s*([\d.,]+)', info, re.IGNORECASE)
+        m_alt = PESO_ALTERNATIVO_RE.search(info)
         peso_alt = self._converter_medida(m_alt.group(1)) if m_alt else None
 
-        m_vol = re.search(r'([\d.,]+)\s*m3', info, re.IGNORECASE)
+        m_vol = M3_NORMALIZADO_RE.search(info)
         vol_box = self._converter_medida(m_vol.group(1)) if m_vol else None
 
-        m_dim = re.search(r'(\d+[xX]\d+[xX]\d+(?:\s*cm)?)', info)
+        m_dim = DIMENSAO_RE.search(info)
         dims = m_dim.group(1) if m_dim else ''
 
         if peso_alt is not None:
@@ -1591,4 +1588,3 @@ class ExtratorPedidos:
                 linhas.append('<br>')
 
         return ''.join(linhas)
-
