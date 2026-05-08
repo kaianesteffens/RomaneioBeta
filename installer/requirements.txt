@@ -6,3 +6,4 @@ playwright==1.58.0
 toml
 beautifulsoup4
 httpx
+cryptography==48.0.0

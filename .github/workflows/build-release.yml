@@ -11,8 +11,11 @@ jobs:
     runs-on: windows-latest
     env:
       HAS_RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN != '' }}
+      HAS_UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_B64 != '' }}
       RELEASE_REPO: ${{ vars.RELEASE_REPO || 'kaianesteffens/RomaneioBeta-releases' }}
       RELEASE_REPO_ALIASES: ${{ vars.RELEASE_REPO_ALIASES }}
+      UPDATE_PUBLIC_KEY_B64: ${{ vars.UPDATE_PUBLIC_KEY_B64 }}
+      ALLOW_UNSIGNED_DEV_RELEASE: ${{ vars.ALLOW_UNSIGNED_DEV_RELEASE || 'false' }}
 
     steps:
       - name: Checkout
@@ -21,11 +24,27 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
+      - name: Validate update signing configuration
+        shell: pwsh
+        run: |
+          $allowUnsignedDev = $env:ALLOW_UNSIGNED_DEV_RELEASE -eq "true"
+          $hasPrivateKey = $env:HAS_UPDATE_SIGNING_KEY -eq "true"
+          $hasPublicKey = -not [string]::IsNullOrWhiteSpace($env:UPDATE_PUBLIC_KEY_B64)
+          if ((-not $hasPrivateKey -or -not $hasPublicKey) -and -not $allowUnsignedDev) {
+            throw "Update signing is required. Configure secret UPDATE_SIGNING_PRIVATE_KEY_B64 and variable UPDATE_PUBLIC_KEY_B64, or set variable ALLOW_UNSIGNED_DEV_RELEASE=true only for explicit dev builds."
+          }
+          if ($allowUnsignedDev -and (-not $hasPrivateKey -or -not $hasPublicKey)) {
+            Write-Warning "Unsigned dev build explicitly allowed. Release updates produced by this run must not be published."
+          } else {
+            Write-Host "[OK] Update signing configured"
+          }
+
       - name: Inject error reporting credentials
         shell: pwsh
         run: |
           $gistId    = "${{ secrets.ERROR_GIST_ID }}"
           $token     = "${{ secrets.ERROR_REPORT_TOKEN }}"
+          $updatePublicKey = $env:UPDATE_PUBLIC_KEY_B64
           $githubRepo = $env:RELEASE_REPO
           $aliasCandidates = @()
           if ($env:RELEASE_REPO_ALIASES) {
@@ -42,6 +61,7 @@ jobs:
             "github_repo = `"$githubRepo`""
             "github_repo_aliases = $aliasesToml"
             "license_url = `"$licenseUrl`""
+            "update_public_key_b64 = `"$updatePublicKey`""
           ) -join "`r`n"
           if ($gistId -and $token) {
             $content += "`r`nerror_gist_id = `"$gistId`""
@@ -162,8 +182,10 @@ jobs:
             release_assets = @(
               "Fretio-Setup-latest.exe",
               "Fretio-Update-latest.zip",
+              "Fretio-Update-latest.zip.sig",
               "FreteBot-Setup-latest.exe",
               "FreteBot-Update-latest.zip",
+              "FreteBot-Update-latest.zip.sig",
               "Romaneio.exe"
             )
             committed_repo_assets = $committedAssets
@@ -174,6 +196,35 @@ jobs:
           Write-Host "Artefatos de release preparados em installer\release-assets"
           Write-Host "Artefatos committaveis preparados em installer\repository-assets"
 
+      - name: Sign update ZIP assets
+        shell: pwsh
+        env:
+          UPDATE_SIGNING_PRIVATE_KEY_B64: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_B64 }}
+        run: |
+          if (-not $env:UPDATE_SIGNING_PRIVATE_KEY_B64) {
+            if ($env:ALLOW_UNSIGNED_DEV_RELEASE -eq "true") {
+              Write-Warning "Assinatura ignorada somente porque ALLOW_UNSIGNED_DEV_RELEASE=true."
+              exit 0
+            }
+            throw "UPDATE_SIGNING_PRIVATE_KEY_B64 nao definido; release sem assinatura nao e permitida."
+          }
+
+          python -m pip install cryptography==48.0.0 --quiet --disable-pip-version-check
+          $ver = "${{ steps.meta.outputs.version }}"
+          $targets = @(
+            "installer\installer\Fretio-Update-$ver.zip",
+            "installer\release-assets\Fretio-Update-latest.zip",
+            "installer\release-assets\FreteBot-Update-latest.zip",
+            "installer\repository-assets\Fretio-Update-latest.zip",
+            "installer\repository-assets\FreteBot-Update-latest.zip"
+          )
+          foreach ($target in $targets) {
+            if (Test-Path $target) {
+              python installer\sign_update_asset.py $target "$target.sig"
+              if ($LASTEXITCODE -ne 0) { throw "Falha ao assinar $target" }
+            }
+          }
+
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v6
         with:
@@ -183,6 +234,7 @@ jobs:
             installer/dist/Fretio/**
             installer/installer/Fretio-Setup-${{ steps.meta.outputs.version }}.exe
             installer/installer/Fretio-Update-${{ steps.meta.outputs.version }}.zip
+            installer/installer/Fretio-Update-${{ steps.meta.outputs.version }}.zip.sig
             installer/installer/Romaneio.exe
             installer/release-assets/**
             installer/repository-assets/**
@@ -211,9 +263,12 @@ jobs:
           $zip = "installer/installer/Fretio-Update-$ver.zip"
           $setup = "installer/installer/Fretio-Setup-$ver.exe"
           $zipLatest = "installer/release-assets/Fretio-Update-latest.zip"
+          $zipLatestSig = "installer/release-assets/Fretio-Update-latest.zip.sig"
           $zipLatestLegacy = "installer/release-assets/FreteBot-Update-latest.zip"
+          $zipLatestLegacySig = "installer/release-assets/FreteBot-Update-latest.zip.sig"
           $setupLatest = "installer/release-assets/Fretio-Setup-latest.exe"
           $setupLatestLegacy = "installer/release-assets/FreteBot-Setup-latest.exe"
+          $zipSig = "$zip.sig"
           $releaseRepo = $env:RELEASE_REPO
 
           gh release view $tag --repo $releaseRepo 2>$null
@@ -226,7 +281,7 @@ jobs:
           }
 
           $launcher = "installer/installer/Romaneio.exe"
-          gh release upload $tag $zip $setup $launcher $zipLatest $zipLatestLegacy $setupLatest $setupLatestLegacy `
+          gh release upload $tag $zip $zipSig $setup $launcher $zipLatest $zipLatestSig $zipLatestLegacy $zipLatestLegacySig $setupLatest $setupLatestLegacy `
             --repo $releaseRepo `
             --clobber
 
