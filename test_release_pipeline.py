@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 from io import BytesIO
 from urllib.error import HTTPError
+import zipfile
 
 
 ROOT = Path(__file__).parent
@@ -11,6 +12,14 @@ sys.path.insert(0, str(ROOT / "installer"))
 import error_reporter as er
 import launcher
 import updater
+import validate_update_zip
+
+
+def _make_zip(path: Path, entries: dict[str, str]) -> Path:
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, content in entries.items():
+            zf.writestr(name, content)
+    return path
 
 
 def test_updater_collects_repo_aliases_from_config_and_env(monkeypatch, tmp_path):
@@ -86,6 +95,137 @@ def test_launcher_prefers_stable_latest_zip_alias():
 
     assert asset is not None
     assert asset["name"] == "Fretio-Update-latest.zip"
+
+
+def test_version_parsing_accepts_v_prefix_and_suffix():
+    assert updater._parse_version("v1.22-beta") == (1, 22)
+    assert launcher._parse_ver("V2.0.1") == (2, 0, 1)
+    assert updater._parse_version("sem-versao") == (0,)
+
+
+def test_update_zip_validator_accepts_expected_root_format(tmp_path):
+    zip_path = _make_zip(
+        tmp_path / "Fretio-Update-1.0.zip",
+        {
+            "Fretio.exe": "",
+            "version.txt": "1.0",
+            "_internal/version.txt": "1.0",
+            "_internal/lib.dll": "",
+        },
+    )
+
+    validate_update_zip.validate(zip_path)
+
+
+def test_launcher_safe_extract_supports_single_root_folder(tmp_path):
+    zip_path = _make_zip(
+        tmp_path / "update.zip",
+        {
+            "Fretio/Fretio.exe": "",
+            "Fretio/_internal/version.txt": "1.0",
+        },
+    )
+    app_dir = tmp_path / "app"
+
+    launcher._safe_extract_zip_to_app(zip_path, app_dir)
+
+    assert (app_dir / "Fretio.exe").exists()
+    assert (app_dir / "_internal" / "version.txt").read_text(encoding="utf-8") == "1.0"
+
+
+def test_launcher_safe_extract_rejects_path_traversal(tmp_path):
+    zip_path = _make_zip(
+        tmp_path / "bad.zip",
+        {
+            "Fretio.exe": "",
+            "_internal/version.txt": "1.0",
+            "../evil.txt": "x",
+        },
+    )
+
+    try:
+        launcher._safe_extract_zip_to_app(zip_path, tmp_path / "app")
+    except ValueError as exc:
+        assert "caminho inseguro" in str(exc) or "Path traversal" in str(exc)
+    else:
+        raise AssertionError("ZIP com path traversal deveria falhar")
+
+
+def test_updater_rejects_incomplete_zip_before_bat(tmp_path):
+    zip_path = _make_zip(
+        tmp_path / "bad.zip",
+        {
+            "version.txt": "1.0",
+            "_internal/version.txt": "1.0",
+        },
+    )
+    extract_dir = tmp_path / "extracted"
+    extract_dir.mkdir()
+
+    try:
+        updater._safe_extract_update_zip(zip_path, extract_dir)
+    except ValueError as exc:
+        assert "Fretio.exe/FreteBot.exe" in str(exc)
+    else:
+        raise AssertionError("ZIP sem executável deveria falhar")
+
+
+def test_apply_update_does_not_create_bat_for_incomplete_zip(monkeypatch, tmp_path):
+    update_dir = tmp_path / "update"
+    bad_entries = {
+        "version.txt": "2.0",
+        "_internal/version.txt": "2.0",
+    }
+
+    def fake_download(_url, dest, _total_size=0, callback=None):
+        _make_zip(dest, bad_entries)
+
+    monkeypatch.setattr(updater, "_license_dir_update", lambda: update_dir)
+    monkeypatch.setattr(updater, "_download_with_progress", fake_download)
+
+    info = updater.UpdateInfo(
+        tag="v2.0",
+        version="2.0",
+        download_url="https://example.test/update.zip",
+        asset_name="update.zip",
+        asset_size=10,
+        release_notes="",
+        html_url="",
+        source_repo="owner/repo",
+    )
+
+    assert updater.apply_update(info) is False
+    assert not (update_dir / "_apply_update.bat").exists()
+    assert not (update_dir / "_pending_update").exists()
+
+
+def test_launcher_resolves_valid_legacy_executable(monkeypatch, tmp_path):
+    app_dir = tmp_path / "Romaneio Beta"
+    app_dir.mkdir()
+    (app_dir / "FreteBot.exe").write_text("", encoding="utf-8")
+    (app_dir / "version.txt").write_text("1.2", encoding="utf-8")
+    monkeypatch.setattr(launcher, "APP_DIR_CANDIDATES", (app_dir,))
+
+    assert launcher._resolve_app_dir() == app_dir
+    assert launcher._resolve_app_exe(app_dir) == app_dir / "FreteBot.exe"
+
+
+def test_launcher_opens_valid_local_app_when_github_is_offline(monkeypatch, tmp_path):
+    app_dir = tmp_path / "Fretio"
+    app_dir.mkdir()
+    exe_path = app_dir / "Fretio.exe"
+    exe_path.write_text("", encoding="utf-8")
+    (app_dir / "version.txt").write_text("1.2", encoding="utf-8")
+    launched = []
+
+    monkeypatch.setattr(launcher, "APP_DIR_CANDIDATES", (app_dir,))
+    monkeypatch.setattr(launcher, "_resolve_latest_release", lambda: (_ for _ in ()).throw(OSError("offline")))
+    monkeypatch.setattr(launcher, "_launch_app", lambda app_exe: launched.append(app_exe))
+    monkeypatch.setattr(launcher.time, "sleep", lambda _seconds: None)
+
+    launcher._worker(None)
+
+    assert launched == [exe_path]
 
 
 def test_error_reporter_uses_env_fallback_without_embedded_secret(monkeypatch):
