@@ -230,9 +230,11 @@ jobs:
           }
 
       - name: Upload workflow artifacts
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: fretio-windows-v${{ steps.meta.outputs.version }}
+          retention-days: 1
           if-no-files-found: error
           path: |
             installer/dist/Fretio/**
