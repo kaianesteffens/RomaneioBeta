@@ -16,13 +16,14 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 # ── Configuração ────────────────────────────────────────────────
 _HTTP_TIMEOUT = 15
 _GRACE_DAYS = 7  # dias de funcionamento offline após última validação
+_CONFIG_SECTIONS = ("fretio", "fretebot", "romaneio")
 
 
 def _load_toml_file(path: Path) -> dict:
@@ -139,30 +140,53 @@ class LicenseStatus:
     offline: bool = False  # True se validou via cache local
 
 
+def _iter_config_paths() -> list[Path]:
+    config_paths: list[Path] = []
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        config_paths.append(Path(appdata) / "Fretio" / "CONFIG.toml")
+        config_paths.append(Path(appdata) / "FreteBot" / "CONFIG.toml")
+    base = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
+    config_paths.append(base / "CONFIG.toml")
+    if base != Path(__file__).parent:
+        config_paths.append(Path(__file__).parent / "CONFIG.toml")
+    return config_paths
+
+
+def _get_config_value(key: str) -> str:
+    try:
+        for cp in _iter_config_paths():
+            if not cp.exists():
+                continue
+            cfg = _load_toml_file(cp)
+            for section_name in _CONFIG_SECTIONS:
+                section = cfg.get(section_name, {})
+                if not isinstance(section, dict):
+                    continue
+                value = section.get(key, "")
+                if value:
+                    return str(value).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _get_license_api_url() -> str:
+    """Lê endpoint próprio de licenciamento, sem usar token GitHub."""
+    for env_name in ("FRETIO_LICENSE_API_URL", "FRETEBOT_LICENSE_API_URL", "Fretio_LICENSE_API_URL"):
+        url = os.environ.get(env_name, "").strip()
+        if url:
+            return url
+    return _get_config_value("license_api_url")
+
+
 def _get_gist_url() -> str:
     """Lê a URL do gist de licenças do CONFIG.toml ou variável de ambiente."""
     url = os.environ.get("Fretio_LICENSE_URL", "").strip()
     if url:
         return url
 
-    try:
-        config_paths: list[Path] = []
-        appdata = os.getenv("APPDATA")
-        if appdata:
-            config_paths.append(Path(appdata) / "Fretio" / "CONFIG.toml")
-        base = Path(getattr(sys, '_MEIPASS', Path(__file__).parent))
-        config_paths.append(base / "CONFIG.toml")
-
-        for cp in config_paths:
-            if not cp.exists():
-                continue
-            cfg = _load_toml_file(cp)
-            url = cfg.get("fretio", {}).get("license_url", "")
-            if url:
-                return str(url).strip()
-    except Exception:
-        pass
-    return ""
+    return _get_config_value("license_url")
 
 
 def _fetch_licenses(gist_url: str) -> dict:
@@ -312,6 +336,172 @@ def _load_validation_cache(key: str) -> Optional[LicenseStatus]:
     return None
 
 
+class LicenseClient:
+    """Cliente HTTP para backend próprio de licenciamento."""
+
+    def __init__(self, api_url: str) -> None:
+        self.api_url = str(api_url or "").strip()
+
+    def validate(self, key: str, machine_id: str) -> LicenseStatus:
+        payload = json.dumps({
+            "key": key,
+            "machine_id": machine_id,
+        }).encode("utf-8")
+        req = Request(self.api_url, data=payload, method="POST", headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "Fretio-License/1.0",
+        })
+        with urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+            data = json.loads(resp.read())
+        return self._status_from_response(data)
+
+    @staticmethod
+    def _status_from_response(data: Any) -> LicenseStatus:
+        if isinstance(data, dict) and isinstance(data.get("license"), dict):
+            data = data["license"]
+        if isinstance(data, dict) and isinstance(data.get("status"), dict):
+            data = data["status"]
+        if not isinstance(data, dict):
+            return LicenseStatus(valid=False, message="Resposta inválida do servidor de licença.")
+        return LicenseStatus(
+            valid=bool(data.get("valid", False)),
+            owner=str(data.get("owner", "") or ""),
+            message=str(data.get("message", "") or ""),
+            blocked=bool(data.get("blocked", False)),
+            expires=str(data.get("expires", "") or ""),
+        )
+
+
+class LicenseService:
+    """Orquestra backend novo, fallback legado e cache offline."""
+
+    _NETWORK_ERRORS = (URLError, OSError, json.JSONDecodeError)
+
+    def validate(self, key: str, machine_id: str) -> LicenseStatus:
+        api_url = _get_license_api_url()
+        if api_url:
+            return self._validate_backend(api_url, key, machine_id)
+        return self._validate_legacy_gist(key, machine_id)
+
+    def _offline_or_error(self, key: str) -> LicenseStatus:
+        cached = _load_validation_cache(key)
+        if cached:
+            return cached
+        return LicenseStatus(
+            valid=False,
+            message="Sem conexão para validar licença. Tente novamente com internet.",
+        )
+
+    def _validate_backend(self, api_url: str, key: str, machine_id: str) -> LicenseStatus:
+        try:
+            status = LicenseClient(api_url).validate(key, machine_id)
+            if status.valid or status.blocked:
+                _save_validation_cache(key, status)
+            return status
+        except self._NETWORK_ERRORS:
+            return self._offline_or_error(key)
+
+    def _validate_legacy_gist(self, key: str, machine_id: str) -> LicenseStatus:
+        gist_url = _get_gist_url()
+        if not gist_url:
+            # Sem URL configurada → licença livre (sem sistema ativo)
+            return LicenseStatus(valid=True, owner="(sem licenciamento)", message="")
+
+        # Tentar validação online
+        try:
+            # Usa API (dados frescos) quando possível, fallback para CDN
+            try:
+                data = _fetch_licenses_fresh()
+            except Exception:
+                data = _fetch_licenses(gist_url)
+            licenses: dict = data.get("licenses", {})
+            blocked_keys: list = data.get("blocked_keys", [])
+            blocked_machines: list = data.get("blocked_machines", [])
+
+            # Verificar máquina bloqueada
+            if machine_id in blocked_machines:
+                status = LicenseStatus(
+                    valid=False, blocked=True,
+                    message="Esta máquina foi bloqueada. Contate o suporte.",
+                )
+                _save_validation_cache(key, status)
+                return status
+
+            # Verificar chave bloqueada
+            if key in [k.strip().upper() for k in blocked_keys]:
+                status = LicenseStatus(
+                    valid=False, blocked=True,
+                    message="Esta licença foi revogada. Contate o suporte.",
+                )
+                _save_validation_cache(key, status)
+                return status
+
+            # Verificar se chave existe
+            lic_data = licenses.get(key)
+            if not lic_data:
+                return LicenseStatus(
+                    valid=False,
+                    message="Chave de licença inválida.",
+                )
+
+            # Verificar se está ativa
+            if not lic_data.get("active", True):
+                status = LicenseStatus(
+                    valid=False, blocked=True,
+                    owner=lic_data.get("owner", ""),
+                    message="Licença desativada. Contate o suporte.",
+                )
+                _save_validation_cache(key, status)
+                return status
+
+            # Verificar expiração
+            expires = lic_data.get("expires", "")
+            if expires:
+                from datetime import date
+                try:
+                    exp_date = date.fromisoformat(expires)
+                    if date.today() > exp_date:
+                        return LicenseStatus(
+                            valid=False,
+                            owner=lic_data.get("owner", ""),
+                            expires=expires,
+                            message=f"Licença expirou em {expires}.",
+                        )
+                except ValueError:
+                    pass
+
+            # Verificar binding de máquina
+            bound_machines = lic_data.get("machines", [])
+            max_machines = lic_data.get("max_machines", 1)
+
+            if bound_machines and machine_id not in bound_machines:
+                if len(bound_machines) >= max_machines:
+                    return LicenseStatus(
+                        valid=False,
+                        owner=lic_data.get("owner", ""),
+                        message="Esta licença já está ativada em outro computador.",
+                    )
+
+            # Registrar máquina se ainda não vinculada
+            if machine_id not in bound_machines:
+                _register_machine(key, machine_id, gist_url)
+
+            # Tudo OK
+            status = LicenseStatus(
+                valid=True,
+                owner=lic_data.get("owner", ""),
+                expires=expires,
+                message="Licença válida.",
+            )
+            _save_validation_cache(key, status)
+            return status
+
+        except self._NETWORK_ERRORS:
+            # Sem conexão → tentar cache
+            return self._offline_or_error(key)
+
+
 def validate_license(key: str, machine_id: str = "") -> LicenseStatus:
     """
     Valida uma chave de licença contra o servidor remoto.
@@ -324,106 +514,4 @@ def validate_license(key: str, machine_id: str = "") -> LicenseStatus:
     if not machine_id:
         machine_id = get_machine_id()
 
-    gist_url = _get_gist_url()
-    if not gist_url:
-        # Sem URL configurada → licença livre (sem sistema ativo)
-        return LicenseStatus(valid=True, owner="(sem licenciamento)", message="")
-
-    # Tentar validação online
-    try:
-        # Usa API (dados frescos) quando possível, fallback para CDN
-        try:
-            data = _fetch_licenses_fresh()
-        except Exception:
-            data = _fetch_licenses(gist_url)
-        licenses: dict = data.get("licenses", {})
-        blocked_keys: list = data.get("blocked_keys", [])
-        blocked_machines: list = data.get("blocked_machines", [])
-
-        # Verificar máquina bloqueada
-        if machine_id in blocked_machines:
-            status = LicenseStatus(
-                valid=False, blocked=True,
-                message="Esta máquina foi bloqueada. Contate o suporte.",
-            )
-            _save_validation_cache(key, status)
-            return status
-
-        # Verificar chave bloqueada
-        if key in [k.strip().upper() for k in blocked_keys]:
-            status = LicenseStatus(
-                valid=False, blocked=True,
-                message="Esta licença foi revogada. Contate o suporte.",
-            )
-            _save_validation_cache(key, status)
-            return status
-
-        # Verificar se chave existe
-        lic_data = licenses.get(key)
-        if not lic_data:
-            return LicenseStatus(
-                valid=False,
-                message="Chave de licença inválida.",
-            )
-
-        # Verificar se está ativa
-        if not lic_data.get("active", True):
-            status = LicenseStatus(
-                valid=False, blocked=True,
-                owner=lic_data.get("owner", ""),
-                message="Licença desativada. Contate o suporte.",
-            )
-            _save_validation_cache(key, status)
-            return status
-
-        # Verificar expiração
-        expires = lic_data.get("expires", "")
-        if expires:
-            from datetime import date
-            try:
-                exp_date = date.fromisoformat(expires)
-                if date.today() > exp_date:
-                    return LicenseStatus(
-                        valid=False,
-                        owner=lic_data.get("owner", ""),
-                        expires=expires,
-                        message=f"Licença expirou em {expires}.",
-                    )
-            except ValueError:
-                pass
-
-        # Verificar binding de máquina
-        bound_machines = lic_data.get("machines", [])
-        max_machines = lic_data.get("max_machines", 1)
-
-        if bound_machines and machine_id not in bound_machines:
-            if len(bound_machines) >= max_machines:
-                return LicenseStatus(
-                    valid=False,
-                    owner=lic_data.get("owner", ""),
-                    message="Esta licença já está ativada em outro computador.",
-                )
-
-        # Registrar máquina se ainda não vinculada
-        if machine_id not in bound_machines:
-            _register_machine(key, machine_id, gist_url)
-
-        # Tudo OK
-        status = LicenseStatus(
-            valid=True,
-            owner=lic_data.get("owner", ""),
-            expires=expires,
-            message="Licença válida.",
-        )
-        _save_validation_cache(key, status)
-        return status
-
-    except (URLError, OSError, json.JSONDecodeError):
-        # Sem conexão → tentar cache
-        cached = _load_validation_cache(key)
-        if cached:
-            return cached
-        return LicenseStatus(
-            valid=False,
-            message=f"Sem conexão para validar licença. Tente novamente com internet.",
-        )
+    return LicenseService().validate(key, machine_id)
