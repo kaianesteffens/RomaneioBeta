@@ -16,6 +16,10 @@ echo.
 
 set "PYDIR=%~dp0python-3.12"
 set "PY=%PYDIR%\python.exe"
+set "REQ_LOCK=%~dp0requirements-lock.txt"
+set "REQ_FALLBACK=%~dp0requirements.txt"
+set "PINNED_PIP_VERSION=26.1.1"
+set "PINNED_PYINSTALLER_VERSION=6.20.0"
 
 if defined CI (
     set "FB_PAUSE_CMD=rem"
@@ -62,14 +66,30 @@ echo      Versao: %PYVER%
 REM ── 2. Instalar dependencias ─────────────────────────────────
 echo.
 echo [2/5] Instalando dependencias Python...
-"%PY%" -m pip install --upgrade pip --quiet 2>nul
-"%PY%" -m pip install -r requirements.txt --quiet
-if %ERRORLEVEL% neq 0 (
-    echo ERRO: Falha ao instalar dependencias!
-    %FB_PAUSE_CMD%
-    exit /b 1
+"%PY%" -m pip install --upgrade pip==%PINNED_PIP_VERSION% --quiet --disable-pip-version-check 2>nul
+if exist "%REQ_LOCK%" (
+    echo      Usando lockfile: %REQ_LOCK%
+    "%PY%" -m pip install --no-deps -r "%REQ_LOCK%" --quiet --disable-pip-version-check
+    if %ERRORLEVEL% neq 0 (
+        echo ERRO: Falha ao instalar dependencias pelo lockfile!
+        %FB_PAUSE_CMD%
+        exit /b 1
+    )
+) else (
+    echo      [AVISO] requirements-lock.txt nao encontrado; usando requirements.txt.
+    "%PY%" -m pip install -r "%REQ_FALLBACK%" --quiet --disable-pip-version-check
+    if %ERRORLEVEL% neq 0 (
+        echo ERRO: Falha ao instalar dependencias!
+        %FB_PAUSE_CMD%
+        exit /b 1
+    )
+    "%PY%" -m pip install pyinstaller==%PINNED_PYINSTALLER_VERSION% --quiet --disable-pip-version-check
+    if %ERRORLEVEL% neq 0 (
+        echo ERRO: Falha ao instalar PyInstaller!
+        %FB_PAUSE_CMD%
+        exit /b 1
+    )
 )
-"%PY%" -m pip install pyinstaller --quiet
 echo [OK] Dependencias instaladas
 
 REM ── 2.5. Definir versão do build (1.0, 1.1, 1.2, ...) ───────
@@ -219,7 +239,7 @@ if not defined SYSPY (
 )
 
 REM Garante que pyinstaller esta disponivel no Python do sistema
-%SYSPY% -m pip install pyinstaller --quiet --disable-pip-version-check
+%SYSPY% -m pip install pyinstaller==%PINNED_PYINSTALLER_VERSION% --quiet --disable-pip-version-check
 %SYSPY% -m PyInstaller --clean --noconfirm launcher.spec
 if %ERRORLEVEL% neq 0 (
     echo [AVISO] Falha ao compilar Romaneio.exe. O Fretio principal foi gerado normalmente.
