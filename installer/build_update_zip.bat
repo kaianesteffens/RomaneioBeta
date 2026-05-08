@@ -55,6 +55,14 @@ REM Mostrar tamanho
 for %%F in ("%ZIP_PATH%") do set "ZIP_SIZE=%%~zF"
 set /a "ZIP_MB=!ZIP_SIZE! / 1048576"
 
+echo Validando estrutura do ZIP...
+python "%~dp0validate_update_zip.py" "%ZIP_PATH%"
+if %ERRORLEVEL% neq 0 (
+    echo ERRO: ZIP de update invalido!
+    %FB_PAUSE_CMD%
+    exit /b 1
+)
+
 echo.
 echo ============================================================
 echo  ZIP de atualizacao gerado!

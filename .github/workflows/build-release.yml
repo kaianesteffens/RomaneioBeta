@@ -131,6 +131,10 @@ jobs:
           Write-Host "ZIP:      $zip"
           Write-Host "Launcher: $launcher"
 
+      - name: Validate update ZIP
+        shell: pwsh
+        run: python installer\validate_update_zip.py "installer\installer\Fretio-Update-${{ steps.meta.outputs.version }}.zip"
+
       - name: Prepare stable repository artifacts
         shell: pwsh
         run: |
