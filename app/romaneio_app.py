@@ -3426,6 +3426,12 @@ def main():
             _startup_logger.info(f"Exe: {sys.executable}")
             _startup_logger.info(f"CWD: {os.getcwd()}")
             _startup_logger.info(f"APPDATA: {os.getenv('APPDATA', '?')}")
+            _startup_logger.info(f"LOCALAPPDATA: {os.getenv('LOCALAPPDATA', '?')}")
+            _startup_logger.info(f"_MEIPASS: {getattr(sys, '_MEIPASS', '')}")
+            try:
+                _startup_logger.info(f"Exe dir: {Path(sys.executable).resolve().parent}")
+            except Exception:
+                pass
             try:
                 _v = (Path(getattr(sys, '_MEIPASS', '')) / 'version.txt').read_text().strip()
             except Exception:

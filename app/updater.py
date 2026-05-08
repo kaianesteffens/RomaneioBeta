@@ -14,12 +14,15 @@ Uso:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
 import sys
+import traceback
 import zipfile
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 from urllib.error import URLError
@@ -46,6 +49,50 @@ _PREFERRED_UPDATE_ASSET_NAMES = (
     "fretebot-update-latest.zip",
     "romaneiobeta-update-latest.zip",
 )
+_APP_EXE_NAMES = ("Fretio.exe", "FreteBot.exe")
+
+
+def _log_path() -> Path:
+    appdata = os.getenv("APPDATA")
+    if appdata:
+        return Path(appdata) / "Fretio" / "updater.log"
+    return Path.home() / ".Fretio" / "updater.log"
+
+
+def _setup_diag_logger() -> logging.Logger:
+    logger = logging.getLogger("fretio.updater")
+    if logger.handlers:
+        return logger
+    try:
+        log_file = _log_path()
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        if log_file.exists() and log_file.stat().st_size > 2 * 1024 * 1024:
+            log_file.write_text("", encoding="utf-8")
+        handler = logging.FileHandler(log_file, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+    except Exception:
+        logger.addHandler(logging.NullHandler())
+    return logger
+
+
+_LOGGER = _setup_diag_logger()
+
+
+def _log(message: str, *args: Any) -> None:
+    try:
+        _LOGGER.info(message, *args)
+    except Exception:
+        pass
+
+
+def _log_exception(message: str) -> None:
+    try:
+        _LOGGER.error("%s\n%s", message, traceback.format_exc())
+    except Exception:
+        pass
 
 
 @dataclass
@@ -108,6 +155,79 @@ def _parse_version(tag: str) -> tuple[int, ...]:
     return tuple(parts) if parts else (0,)
 
 
+def _validate_zip_member_name(name: str) -> str:
+    normalized = name.replace("\\", "/")
+    path = PurePosixPath(normalized)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"ZIP inválido: caminho inseguro {name!r}")
+    if path.parts and ":" in path.parts[0]:
+        raise ValueError(f"ZIP inválido: caminho absoluto {name!r}")
+    return normalized
+
+
+def _strip_single_root(names: Sequence[str]) -> tuple[list[str], str | None]:
+    file_names = [name for name in names if name and not name.endswith("/")]
+    if not file_names:
+        return list(names), None
+    split_names = [name.split("/") for name in file_names]
+    first_parts = {parts[0] for parts in split_names if parts}
+    has_root_file = any(len(parts) == 1 for parts in split_names)
+    if len(first_parts) == 1 and not has_root_file:
+        root = next(iter(first_parts))
+        stripped = [
+            name[len(root) + 1:] if name == root or name.startswith(root + "/") else name
+            for name in names
+        ]
+        return stripped, root
+    return list(names), None
+
+
+def _validate_update_zip(zf: zipfile.ZipFile) -> str | None:
+    names = [_validate_zip_member_name(info.filename) for info in zf.infolist()]
+    stripped, root = _strip_single_root(names)
+    files = {name.rstrip("/").lower() for name in stripped if name and not name.endswith("/")}
+    has_exe = any(exe_name.lower() in files for exe_name in _APP_EXE_NAMES)
+    has_version = "version.txt" in files or "_internal/version.txt" in files
+    if not has_exe:
+        raise ValueError("ZIP de update inválido: Fretio.exe/FreteBot.exe não encontrado na raiz do pacote.")
+    if not has_version:
+        raise ValueError("ZIP de update inválido: version.txt ou _internal/version.txt não encontrado.")
+    return root
+
+
+def _has_valid_update_structure(source_dir: Path) -> bool:
+    return (
+        any((source_dir / exe_name).exists() for exe_name in _APP_EXE_NAMES)
+        and ((source_dir / "version.txt").exists() or (source_dir / "_internal" / "version.txt").exists())
+    )
+
+
+def _resolve_extracted_source_dir(extract_dir: Path) -> Path:
+    contents = [p for p in extract_dir.iterdir() if p.name != "__MACOSX"]
+    if len(contents) == 1 and contents[0].is_dir():
+        return contents[0]
+    return extract_dir
+
+
+def _safe_extract_update_zip(zip_path: Path, extract_dir: Path) -> Path:
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        root = _validate_update_zip(zf)
+        resolved_extract = extract_dir.resolve()
+        for member in zf.infolist():
+            safe_name = _validate_zip_member_name(member.filename)
+            member_path = (extract_dir / safe_name).resolve()
+            if os.path.commonpath([str(resolved_extract), str(member_path)]) != str(resolved_extract):
+                raise ValueError(f"Path traversal detectado no ZIP: {member.filename!r}")
+        zf.extractall(extract_dir)
+
+    source_dir = extract_dir / root if root else _resolve_extracted_source_dir(extract_dir)
+    if not _has_valid_update_structure(source_dir):
+        raise ValueError(
+            "ZIP de update inválido: executável e version.txt/_internal/version.txt são obrigatórios."
+        )
+    return source_dir
+
+
 def _split_repo_candidates(raw: Any) -> list[str]:
     if isinstance(raw, str):
         normalized = raw.replace(";", ",").replace("\n", ",")
@@ -153,7 +273,13 @@ def _select_update_asset(assets: Sequence[dict[str, Any]]) -> dict[str, Any] | N
             return (2, 0, lowered)
         return (3, 0, lowered)
 
-    return min(zip_assets, key=_asset_rank)
+    selected = min(zip_assets, key=_asset_rank)
+    _log(
+        "Asset ZIP escolhido: %s | tamanho=%s",
+        selected.get("name", ""),
+        selected.get("size", 0),
+    )
+    return selected
 
 
 def _select_signature_asset(
@@ -232,6 +358,9 @@ def check_for_update(
         UpdateInfo se houver atualização, None caso contrário.
     """
     repo_candidates = _resolve_repo_candidates(repo)
+    _log("=" * 60)
+    _log("Verificando atualização | versão atual=%s", current_version)
+    _log("Repos candidatos: %s", repo_candidates)
     if not repo_candidates:
         return None
 
@@ -242,19 +371,24 @@ def check_for_update(
             url = f"https://api.github.com/repos/{repo_name}/releases/latest"
             data = _github_api(url)
         except (URLError, OSError, json.JSONDecodeError):
+            _log_exception(f"Falha ao consultar release em {repo_name}")
             continue
 
         tag = data.get("tag_name", "")
         if not tag:
+            _log("Release ignorada sem tag: repo=%s", repo_name)
             continue
 
         remote_ver = _parse_version(tag)
         if remote_ver <= local_ver:
+            _log("Release encontrada sem update: repo=%s tag=%s", repo_name, tag)
             continue
 
+        _log("Release encontrada: repo=%s tag=%s html=%s", repo_name, tag, data.get("html_url", ""))
         assets = data.get("assets", [])
         zip_asset = _select_update_asset(assets)
         if not zip_asset:
+            _log("Release sem asset ZIP válido: repo=%s tag=%s", repo_name, tag)
             continue
         signature_asset = _select_signature_asset(assets, str(zip_asset.get("name", "")))
 
@@ -351,6 +485,10 @@ def apply_update(
         True se a atualização foi preparada com sucesso.
     """
     app_dir = _get_app_dir()
+    _log("=" * 60)
+    _log("Preparando update | versão=%s | asset=%s | repo=%s", info.version, info.asset_name, info.source_repo)
+    _log("Asset tamanho: %s", info.asset_size)
+    _log("app_dir: %s", app_dir)
 
     if callback:
         callback(f"Baixando v{info.version}...")
@@ -361,6 +499,7 @@ def apply_update(
 
     zip_path = update_dir / info.asset_name
     signature_path = update_dir / _signature_asset_name(info)
+    _log("Caminho do ZIP baixado: %s", zip_path)
 
     try:
         _download_with_progress(info.download_url, zip_path, info.asset_size, callback)
@@ -374,28 +513,18 @@ def apply_update(
         extract_dir = update_dir / "extracted"
         if extract_dir.exists():
             shutil.rmtree(str(extract_dir), ignore_errors=True)
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        _log("Diretório extraído: %s", extract_dir)
 
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            # Valida path traversal antes de extrair
-            resolved_extract = extract_dir.resolve()
-            for member in zf.namelist():
-                member_path = (extract_dir / member).resolve()
-                if os.path.commonpath([str(resolved_extract), str(member_path)]) != str(resolved_extract):
-                    raise ValueError(f"Path traversal detectado no ZIP: {member!r}")
-            zf.extractall(extract_dir)
-
-        # Detecta raiz do conteúdo extraído
-        contents = list(extract_dir.iterdir())
-        if len(contents) == 1 and contents[0].is_dir():
-            source_dir = contents[0]
-        else:
-            source_dir = extract_dir
+        source_dir = _safe_extract_update_zip(zip_path, extract_dir)
+        _log("Diretório fonte validado: %s", source_dir)
 
         if callback:
             callback("Preparando atualização...")
 
         # Cria script batch que faz a substituição após o app fechar
         bat_path = update_dir / "_apply_update.bat"
+        _log("Arquivo BAT gerado: %s", bat_path)
         app_exe = Path(sys.executable) if getattr(sys, "frozen", False) else None
         pid = os.getpid()
 
@@ -421,6 +550,7 @@ REM Restaurar CONFIG.toml protegido (xcopy pode ter sobrescrito)
 REM O CONFIG.toml do usuario fica em %APPDATA%, entao nao e afetado
 
 REM Atualizar version.txt
+if not exist "{app_dir}\\_internal" mkdir "{app_dir}\\_internal"
 echo {info.version}> "{app_dir}\\version.txt"
 echo {info.version}> "{app_dir}\\_internal\\version.txt"
 
@@ -451,8 +581,9 @@ REM Reiniciar o app
         return True
 
     except Exception as e:
+        _log_exception("Falha ao preparar atualização")
         if callback:
-            callback(f"Erro na atualização: {e}")
+            callback(f"Erro na atualização: {e}. Log: {_log_path()}")
         # Limpa em caso de erro
         try:
             if zip_path.exists():
