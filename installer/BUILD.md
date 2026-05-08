@@ -16,8 +16,8 @@ build.bat
 ```
 
 O script faz tudo automaticamente:
-1. Instala dependências Python (`pip install -r requirements.txt`)
-2. Instala PyInstaller
+1. Instala dependências Python pelo lockfile (`requirements-lock.txt`)
+2. Usa `requirements.txt` como fallback se o lockfile não existir
 3. Instala Chromium via Playwright
 4. Gera o executável com PyInstaller (pasta `dist\Fretio\`)
 5. Compila o instalador com Inno Setup (`installer\Fretio-Setup.exe`)
@@ -28,8 +28,7 @@ O script faz tudo automaticamente:
 
 ```cmd
 cd _release_stage\app
-pip install -r requirements.txt
-pip install pyinstaller
+pip install --no-deps -r requirements-lock.txt
 python -m playwright install chromium
 ```
 
@@ -89,7 +88,8 @@ Fretio-Setup.exe
 | `Fretio-installer.iss` | Script Inno Setup (instalador Windows) |
 | `build.bat` | Script automatizado de build |
 | `instalar_navegador.bat` | Instala Chromium após instalação |
-| `requirements.txt` | Dependências Python |
+| `requirements.txt` | Dependências Python diretas/fallback |
+| `requirements-lock.txt` | Dependências Python congeladas para build reproduzível |
 
 ## Notas
 
@@ -97,3 +97,17 @@ Fretio-Setup.exe
 - **CONFIG.toml**: Contém credenciais das transportadoras. Nunca é sobrescrito em atualizações (flag `onlyifdoesntexist` no Inno Setup).
 - **Modo GUI**: O .exe roda sem janela de console (`console=False` no PyInstaller).
 - **Desinstalação**: Pelo Windows → Configurações → Apps → Fretio → Desinstalar.
+
+## Atualizar o lockfile de dependências
+
+Atualize o lockfile somente quando for intencional atualizar dependências do build.
+
+```cmd
+cd installer
+python-3.12\python.exe -m pip install -r requirements.txt pyinstaller==6.20.0
+python-3.12\python.exe -m pip freeze > requirements-lock.txt
+python-3.12\python.exe -m pip install --no-deps -r requirements-lock.txt
+build.bat
+```
+
+Depois confira no diff se `playwright==1.58.0`, `greenlet==3.1.1` e `pyinstaller==6.20.0` só mudaram quando essa atualização foi deliberada.
