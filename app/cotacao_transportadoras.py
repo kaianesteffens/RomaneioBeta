@@ -372,6 +372,29 @@ def _candidatos_config(config_path: Path | None = None) -> list[Path]:
     return candidates
 
 
+def _empresa_from_config_path(config_path: Path | None) -> str:
+    if not config_path:
+        return "default"
+    try:
+        path = Path(config_path)
+        if path.name.lower() == "config.toml" and path.parent.name:
+            return path.parent.name
+    except Exception:
+        pass
+    return "default"
+
+
+def _aplicar_credenciais_seguras(config: dict[str, Any], empresa: str) -> dict[str, Any]:
+    try:
+        import secure_credentials
+
+        secure_credentials.migrate_plaintext_credentials(config, empresa)
+        return secure_credentials.overlay_secure_credentials(config, empresa)
+    except Exception as error:
+        _log_diag(f"Credenciais seguras indisponíveis; usando CONFIG.toml: {error}")
+        return config
+
+
 def _carregar_config(config_path: Path | None = None) -> dict[str, Any]:
     if config_path is None:
         manager = ConfigManager.get_instance("default")
@@ -395,7 +418,7 @@ def _carregar_config(config_path: Path | None = None) -> dict[str, Any]:
                 data = tomllib.load(file)
                 if isinstance(data, dict):
                     _log_diag(f"CONFIG carregado de: {cfg_path}")
-                    return data
+                    return _aplicar_credenciais_seguras(data, _empresa_from_config_path(cfg_path))
         except Exception as error:
             _log_diag(f"Falha ao ler CONFIG em {cfg_path}: {error}")
 
@@ -406,7 +429,7 @@ def _carregar_config(config_path: Path | None = None) -> dict[str, Any]:
                 with criado.open("rb") as file:
                     data = tomllib.load(file)
                     if isinstance(data, dict):
-                        return data
+                        return _aplicar_credenciais_seguras(data, _empresa_from_config_path(criado))
             except Exception as error:
                 _log_diag(f"Falha ao ler CONFIG criado em {criado}: {error}")
 

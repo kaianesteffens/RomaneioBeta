@@ -260,6 +260,20 @@ class ConfigManager:
             self._logger(operation="parse_fallback").error("Failed to parse fallback config: %s", e)
         
         return {}
+
+    def _apply_secure_credentials(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Overlay credentials from OS secure storage without changing public config shape."""
+        try:
+            import secure_credentials  # type: ignore[import-not-found]
+
+            secure_credentials.migrate_plaintext_credentials(config, self.empresa_nome)
+            return secure_credentials.overlay_secure_credentials(config, self.empresa_nome)
+        except Exception as exc:
+            self._logger(operation="secure_credentials").warning(
+                "Credenciais seguras indisponíveis; usando CONFIG.toml: %s",
+                exc,
+            )
+            return config
     
     def _check_hot_reload(self) -> bool:
         """
@@ -346,11 +360,11 @@ class ConfigManager:
             for config_path in self._get_config_paths():
                 config = self._load_toml_file(config_path)
                 if config is not None:
-                    self._config_data = config
-                    return config
+                    self._config_data = self._apply_secure_credentials(config)
+                    return self._config_data
             
             # Fallback to hardcoded defaults
-            self._config_data = self._parse_fallback()
+            self._config_data = self._apply_secure_credentials(self._parse_fallback())
             return self._config_data
     
     def get(
