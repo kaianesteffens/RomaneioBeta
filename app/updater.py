@@ -25,6 +25,8 @@ from typing import Any, Callable, Iterable, Optional, Sequence
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from update_security import verify_update_signature
+
 # Timeout para requisições HTTP (segundos)
 _HTTP_TIMEOUT = 30
 _DEFAULT_GITHUB_REPOS = ("kaianesteffens/RomaneioBeta-releases",)
@@ -57,6 +59,8 @@ class UpdateInfo:
     release_notes: str        # Corpo da release (Markdown)
     html_url: str             # URL da release no GitHub
     source_repo: str = ""     # Repositório usado para resolver a release
+    signature_download_url: str = ""  # URL do asset .sig
+    signature_asset_name: str = ""    # Nome do asset .sig
 
 
 def _load_toml_file(path: Path) -> dict[str, Any]:
@@ -152,6 +156,17 @@ def _select_update_asset(assets: Sequence[dict[str, Any]]) -> dict[str, Any] | N
     return min(zip_assets, key=_asset_rank)
 
 
+def _select_signature_asset(
+    assets: Sequence[dict[str, Any]],
+    zip_asset_name: str,
+) -> dict[str, Any] | None:
+    expected_name = f"{zip_asset_name}.sig".lower()
+    for asset in assets:
+        if str(asset.get("name", "")).strip().lower() == expected_name:
+            return asset
+    return None
+
+
 def get_repo_candidates_from_config() -> list[str]:
     repos: list[str] = []
 
@@ -237,9 +252,11 @@ def check_for_update(
         if remote_ver <= local_ver:
             continue
 
-        zip_asset = _select_update_asset(data.get("assets", []))
+        assets = data.get("assets", [])
+        zip_asset = _select_update_asset(assets)
         if not zip_asset:
             continue
+        signature_asset = _select_signature_asset(assets, str(zip_asset.get("name", "")))
 
         return UpdateInfo(
             tag=tag,
@@ -250,6 +267,8 @@ def check_for_update(
             release_notes=data.get("body", "") or "",
             html_url=data.get("html_url", ""),
             source_repo=repo_name,
+            signature_download_url=(signature_asset or {}).get("browser_download_url", ""),
+            signature_asset_name=(signature_asset or {}).get("name", ""),
         )
     return None
 
@@ -285,6 +304,29 @@ def _download_with_progress(
                     callback(f"Baixando atualização... {pct}%")
 
 
+def _signature_download_url(info: UpdateInfo) -> str:
+    if info.signature_download_url:
+        return info.signature_download_url
+    if info.download_url:
+        return f"{info.download_url}.sig"
+    return ""
+
+
+def _signature_asset_name(info: UpdateInfo) -> str:
+    if info.signature_asset_name:
+        return info.signature_asset_name
+    if info.asset_name:
+        return f"{info.asset_name}.sig"
+    return "update.zip.sig"
+
+
+def _download_update_signature(info: UpdateInfo, dest: Path) -> None:
+    signature_url = _signature_download_url(info)
+    if not signature_url:
+        raise ValueError("Assinatura do update ausente.")
+    _download_with_progress(signature_url, dest, 0, None)
+
+
 def apply_update(
     info: UpdateInfo,
     callback: Optional[Callable[[str], None]] = None,
@@ -318,9 +360,12 @@ def apply_update(
     update_dir.mkdir(parents=True, exist_ok=True)
 
     zip_path = update_dir / info.asset_name
+    signature_path = update_dir / _signature_asset_name(info)
 
     try:
         _download_with_progress(info.download_url, zip_path, info.asset_size, callback)
+        _download_update_signature(info, signature_path)
+        verify_update_signature(zip_path, signature_path)
 
         if callback:
             callback("Extraindo atualização...")
@@ -335,7 +380,7 @@ def apply_update(
             resolved_extract = extract_dir.resolve()
             for member in zf.namelist():
                 member_path = (extract_dir / member).resolve()
-                if not str(member_path).startswith(str(resolved_extract)):
+                if os.path.commonpath([str(resolved_extract), str(member_path)]) != str(resolved_extract):
                     raise ValueError(f"Path traversal detectado no ZIP: {member!r}")
             zf.extractall(extract_dir)
 
@@ -412,6 +457,11 @@ REM Reiniciar o app
         try:
             if zip_path.exists():
                 zip_path.unlink()
+        except Exception:
+            pass
+        try:
+            if signature_path.exists():
+                signature_path.unlink()
         except Exception:
             pass
         return False
