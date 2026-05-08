@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import sys
 import time
 import traceback
@@ -44,6 +45,82 @@ _EMBEDDED_ERROR_REPORT_TOKEN: str = ""
 # ── Log de diagnóstico ────────────────────────────────────────────
 _LOG_MAX_BYTES = 100 * 1024  # 100 KB — rotaciona apagando metade quando ultrapassar
 _log_lock = threading.Lock()
+
+
+def sanitize_error_payload(text: str) -> str:
+    """Remove dados sensíveis de payloads de erro antes do envio remoto."""
+    sanitized = str(text or "")
+
+    secret_field_names = (
+        "senha",
+        "password",
+        "token",
+        "error_report_token",
+    )
+    license_field_names = (
+        "license",
+        "license_key",
+        "licenca",
+        "licença",
+    )
+    field_pattern = "|".join(re.escape(name) for name in secret_field_names + license_field_names)
+
+    def _redact_field(match: re.Match) -> str:
+        field_name = match.group(1).casefold()
+        marker = "[LICENSE_REDACTED]" if field_name in {name.casefold() for name in license_field_names} else "[TOKEN_REDACTED]"
+        return f"{match.group(1)}{match.group(2)}{match.group(3)}{marker}"
+
+    sanitized = re.sub(
+        rf"(?i)\b({field_pattern})\b(\s*[:=]\s*)([`'\"]?)([^`'\"\s,;|]+)",
+        _redact_field,
+        sanitized,
+    )
+
+    sanitized = re.sub(
+        r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+",
+        "Bearer [TOKEN_REDACTED]",
+        sanitized,
+    )
+    sanitized = re.sub(r"\bghp_[A-Za-z0-9_]{20,}\b", "[TOKEN_REDACTED]", sanitized)
+    sanitized = re.sub(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b", "[TOKEN_REDACTED]", sanitized)
+    sanitized = re.sub(
+        r"(?i)([?&](?:token|access_token|auth|key|password|senha|license|licenca|licen%C3%A7a)=)[^&#\s]+",
+        r"\1[TOKEN_REDACTED]",
+        sanitized,
+    )
+    sanitized = re.sub(
+        r"(?i)\bhttps?://[^\s`'\"<>]*(?:token|access_token|auth|key|password|senha|license|licenca|licen%C3%A7a)=[^\s`'\"<>]+",
+        "[URL_REDACTED]",
+        sanitized,
+    )
+
+    sanitized = re.sub(
+        r"\bFBOT-[A-Z0-9]{4}(?:-[A-Z0-9]{4}){0,5}\b",
+        "[LICENSE_REDACTED]",
+        sanitized,
+        flags=re.IGNORECASE,
+    )
+    sanitized = re.sub(
+        r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b",
+        "[EMAIL_REDACTED]",
+        sanitized,
+    )
+    sanitized = re.sub(
+        r"\b\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}\b",
+        "[CNPJ_REDACTED]",
+        sanitized,
+    )
+    sanitized = re.sub(
+        r"\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b",
+        "[CPF_REDACTED]",
+        sanitized,
+    )
+    sanitized = re.sub(
+        r"\b\d{5}-?\d{3}\b",
+        "[CEP_REDACTED]",
+        sanitized,
+    )
+    return sanitized
 
 
 def _log_path() -> Path:
@@ -505,7 +582,7 @@ def report_error(
                 recent_diag,
                 "```",
             ]
-        body = "\n".join(body_parts)
+        body = sanitize_error_payload("\n".join(body_parts))
 
         # Envia em thread separada para não bloquear o app
         label = f"{exc_type_name}/{context or 'N/A'}"
@@ -571,7 +648,7 @@ def report_error_message(message: str, context: str = "", wait: bool = False) ->
                 recent_diag,
                 "```",
             ]
-        body = "\n".join(body_parts)
+        body = sanitize_error_payload("\n".join(body_parts))
 
         label = f"msg/{context or 'N/A'}"
         t = threading.Thread(target=_send_to_gist, args=(body, label), daemon=True)
