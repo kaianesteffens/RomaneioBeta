@@ -5,5 +5,6 @@ greenlet==3.1.1
 playwright==1.58.0
 toml
 beautifulsoup4
+certifi
 httpx
 cryptography==48.0.0

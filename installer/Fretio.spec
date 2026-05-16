@@ -6,7 +6,7 @@ Gera: dist/Fretio/ com Fretio.exe + dependências
 
 from pathlib import Path
 import os
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 project_root = Path(SPECPATH).parent / "app"  # Diretório do app com romaneio_app.py
 
@@ -33,6 +33,7 @@ hiddenimports = [
     "fretio.config_manager",
     # Dependências externas
     "bs4",
+    "certifi",
     "httpx",
     "httpx._transports",
     "httpx._transports.default",
@@ -66,6 +67,7 @@ hiddenimports += collect_submodules("ui")
 
 # ── Data files ────────────────────────────────────────────────────────────
 datas = []
+datas += collect_data_files("certifi")
 
 # CONFIG.example.toml (template para o usuário)
 config_example = project_root / "fretio" / "CONFIG.example.toml"

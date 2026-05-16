@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-05-16T17:50:59.523926+00:00",
+  "checked_at": "2026-05-16T18:12:17.344475+00:00",
   "env_after": {
     "FRETIO_LICENSE_API_URL": "https://fretio.api.br/api/licenses/validate",
     "FRETIO_ERROR_API_URL": "https://fretio.api.br/api/errors",
@@ -9,15 +9,15 @@
   },
   "cache_deleted": true,
   "direct_post": {
-    "ok": false,
-    "http_status": 0,
-    "valid": false,
-    "message": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate (_ssl.c:1081)"
+    "ok": true,
+    "http_status": 200,
+    "valid": true,
+    "message": "Licença válida."
   },
   "license_py_validation": {
-    "valid": false,
+    "valid": true,
     "offline": false,
-    "message": "Sem conexão para validar licença. Tente novamente com internet.",
+    "message": "Licença válida.",
     "machine_id": "69ff6224ef9bc8f282a437726eb167d8"
   }
 }

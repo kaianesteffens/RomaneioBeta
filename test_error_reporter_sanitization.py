@@ -1,4 +1,5 @@
 import json
+import ssl
 import sys
 from pathlib import Path
 from urllib.error import URLError
@@ -206,7 +207,8 @@ def test_report_error_posts_to_error_api_when_configured(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    def fake_urlopen(req, timeout=15):
+    def fake_urlopen(req, timeout=15, context=None):
+        assert isinstance(context, ssl.SSLContext)
         requests.append(req)
         return _Response()
 
@@ -288,7 +290,8 @@ def test_report_error_api_failure_does_not_raise(monkeypatch):
         def join(self, timeout=None):
             return None
 
-    def fake_urlopen(req, timeout=15):
+    def fake_urlopen(req, timeout=15, context=None):
+        assert isinstance(context, ssl.SSLContext)
         calls.append(req.full_url)
         raise URLError("offline")
 

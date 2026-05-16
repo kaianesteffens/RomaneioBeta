@@ -18,6 +18,11 @@ import updater
 from fretio.config_manager import ConfigManager
 
 
+def _clear_license_api_env(monkeypatch):
+    for env_name in ("FRETIO_LICENSE_API_URL", "FRETEBOT_LICENSE_API_URL", "Fretio_LICENSE_API_URL"):
+        monkeypatch.delenv(env_name, raising=False)
+
+
 def test_contract_parse_romaneio_colado_preserves_shipping_payload():
     romaneio = """
     <p>DESTINATARIO</p>
@@ -158,6 +163,7 @@ def test_contract_config_manager_uses_hardcoded_fallback_when_no_config_exists(
 
 
 def test_contract_validate_license_accepts_free_mode_when_no_url(monkeypatch):
+    _clear_license_api_env(monkeypatch)
     monkeypatch.setattr(lic, "_get_gist_url", lambda: "")
 
     status = lic.validate_license("FBOT-TESTE", machine_id="MAQ-1")
@@ -170,6 +176,7 @@ def test_contract_validate_license_accepts_free_mode_when_no_url(monkeypatch):
 
 
 def test_contract_validate_license_online_active_registers_machine(monkeypatch, tmp_path):
+    _clear_license_api_env(monkeypatch)
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
     monkeypatch.setattr(lic, "_get_gist_url", lambda: "https://example.test/licenses.json")
     monkeypatch.setattr(
@@ -203,6 +210,7 @@ def test_contract_validate_license_online_active_registers_machine(monkeypatch, 
 
 
 def test_contract_validate_license_offline_uses_valid_cache(monkeypatch, tmp_path):
+    _clear_license_api_env(monkeypatch)
     appdata = tmp_path / "appdata"
     cache_path = appdata / "Fretio" / ".license_cache"
     cache_path.parent.mkdir(parents=True)
