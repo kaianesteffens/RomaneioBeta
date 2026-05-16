@@ -6,6 +6,8 @@ github_repo_aliases = []  # Repositórios extras/fallback para sobreviver a reno
 # license_api_url é o servidor novo de licenças; license_url é o fallback antigo via Gist.
 license_api_url = "http://b3wjxbvlglanxcdwfoft4x0b.2.24.102.36.sslip.io/api/licenses/validate"
 license_url = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
+# error_api_url é o servidor novo de erros; error_gist_id/error_report_token são fallback antigo via Gist.
+error_api_url = "http://b3wjxbvlglanxcdwfoft4x0b.2.24.102.36.sslip.io/api/errors"
 error_gist_id = ""  # ID do gist para envio automático de erros
 error_report_token = ""  # Token GitHub com scope 'gist' para envio de erros
 
