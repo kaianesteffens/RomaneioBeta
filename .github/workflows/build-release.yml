@@ -288,6 +288,13 @@ jobs:
               --title "Fretio v$ver" `
               --latest `
               --notes "Build automatico Windows - v$ver"
+          } else {
+            gh release edit $tag `
+              --repo $releaseRepo `
+              --latest
+            if ($LASTEXITCODE -ne 0) {
+              throw "Falha ao marcar $tag como latest em $releaseRepo"
+            }
           }
 
           $launcher = "installer/installer/Romaneio.exe"
