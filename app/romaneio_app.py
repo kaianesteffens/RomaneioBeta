@@ -86,6 +86,7 @@ from cotacao_transportadoras import (
 from updater import check_for_update, apply_update, get_repo_from_config, needs_restart, restart_app
 from license import get_saved_license, save_license, validate_license, get_machine_id, LicenseStatus
 from remote_config import fetch_remote_config
+from remote_permissions import ensure_feature_allowed, feature_allowed_or_default
 from error_reporter import install_global_hooks, report_error, report_error_message, configure as _er_configure
 from extrator_nfe import extrair_arquivo as extrair_nfe_arquivo, NotaFiscal, identificar_transportadora, formatar_nota_resumo, parsear_info_complementar
 from rastreamento import rastrear_multiplas, ResultadoRastreio, obter_link_rastreio
@@ -2033,11 +2034,18 @@ class RomaneioWindow(QMainWindow):
         if hasattr(self, '_carrier_status_frame'):
             self._carrier_status_frame.setVisible(index == 2)
         # Pre-login so quando acessar Calcular Frete (2) ou Frete Fornecedores (3)
-        if index in (2, 3) and not self._pre_login_done and not self._is_shutting_down():
+        if (
+            index in (2, 3)
+            and feature_allowed_or_default("cotacao")
+            and not self._pre_login_done
+            and not self._is_shutting_down()
+        ):
             self._run_pre_login()
             self._pre_login_done = True
 
     def _selecionar_arquivo(self):
+        if not ensure_feature_allowed("romaneio", self):
+            return
         arquivo, _ = QFileDialog.getOpenFileName(
             self,
             "Selecionar PDF",
@@ -2078,6 +2086,8 @@ class RomaneioWindow(QMainWindow):
         QMessageBox.information(self, "Sucesso", "Resultado copiado para a area de transferencia")
 
     def _processar_pdf(self, arquivo: str):
+        if not ensure_feature_allowed("romaneio", self):
+            return
         self.pedidos = self.extrator.extrair_arquivo(arquivo)
         if not self.pedidos:
             QMessageBox.warning(
@@ -2117,6 +2127,10 @@ class RomaneioWindow(QMainWindow):
 
     def _iniciar_cotacao(self, modo: str):
         if self._is_shutting_down():
+            return
+        if not ensure_feature_allowed("cotacao", self):
+            return
+        if modo == "romaneio_colado" and not ensure_feature_allowed("romaneio", self):
             return
         self._modo_cotacao = modo
         self._cep_origem_override = ""
@@ -2234,6 +2248,8 @@ class RomaneioWindow(QMainWindow):
 
     def _cotar_frete_fornecedor(self):
         if self._is_shutting_down():
+            return
+        if not ensure_feature_allowed("cotacao", self):
             return
         try:
             romaneio_texto, cep_fornecedor = self._montar_romaneio_fornecedor()
@@ -2597,6 +2613,8 @@ class RomaneioWindow(QMainWindow):
         detalhe = re.sub(r"\s+", " ", str(detalhe)).strip()
         if len(detalhe) > 140:
             detalhe = detalhe[:137] + "..."
+        if resultado.status == "desabilitada":
+            return f"- {nome} ignorada: {detalhe}"
         return f"- {nome} falhou: {detalhe}"
 
     def closeEvent(self, event):
@@ -2625,6 +2643,8 @@ class RomaneioWindow(QMainWindow):
 
     def _selecionar_nfe(self):
         """Abre dialogo para selecionar arquivos XML de NF-e (um ou varios)."""
+        if not ensure_feature_allowed("nfe", self):
+            return
         arquivos, _ = QFileDialog.getOpenFileNames(
             self,
             "Selecionar NF-e (XML)",
@@ -2967,6 +2987,8 @@ class RomaneioWindow(QMainWindow):
     def _iniciar_rastreamento(self):
         """Inicia o rastreamento das NF-es carregadas."""
         if self._is_shutting_down():
+            return
+        if not ensure_feature_allowed("rastreio", self):
             return
         notas_a_rastrear = self._rastreio_notas_subset if self._rastreio_notas_subset else self._notas_rastreio
         if not notas_a_rastrear:

@@ -25,6 +25,21 @@ from fretio.providers.base import launch_browser_resilient
 
 logger = get_logger(__name__)
 
+try:
+    from remote_permissions import (
+        CARRIER_DISABLED_MESSAGE,
+        carrier_enabled_or_message,
+        normalize_carrier_name,
+    )
+except Exception:
+    CARRIER_DISABLED_MESSAGE = "Transportadora desabilitada pela configuração remota."
+
+    def carrier_enabled_or_message(carrier):
+        return True, ""
+
+    def normalize_carrier_name(carrier):
+        return str(carrier or "").strip().lower()
+
 _TRANSPORTADORAS_IGNORADAS_RASTREIO = {"correios", "azul", "bornelli"}
 
 
@@ -1301,8 +1316,29 @@ async def rastrear_multiplas(
     total = len(notas)
     resultados = []
     for i, nota in enumerate(notas):
+        transportadora = normalize_carrier_name(nota.get("transportadora", ""))
+        allowed, message = carrier_enabled_or_message(transportadora)
+        if not allowed:
+            resultado = ResultadoRastreio(
+                numero_nfe=nota.get("numero_nfe", ""),
+                transportadora=(transportadora or "").upper(),
+                status_texto=message or CARRIER_DISABLED_MESSAGE,
+            )
+            logger.info(
+                "[RASTREIO-%s] NF %s: %s",
+                resultado.transportadora,
+                resultado.numero_nfe,
+                message or CARRIER_DISABLED_MESSAGE,
+            )
+            resultados.append(resultado)
+            if callback:
+                try:
+                    callback(i + 1, total, resultado)
+                except Exception:
+                    pass
+            continue
         resultado = await rastrear_nfe(
-            transportadora=nota.get("transportadora", ""),
+            transportadora=transportadora,
             numero_nfe=nota.get("numero_nfe", ""),
             cnpj_emitente=nota.get("cnpj_emitente", ""),
             chave_acesso=nota.get("chave_acesso", ""),

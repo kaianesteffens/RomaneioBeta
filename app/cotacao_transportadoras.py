@@ -32,6 +32,32 @@ except Exception:
     def report_error(*a, **kw): pass
     def report_error_message(*a, **kw): pass
 
+try:
+    from remote_permissions import (
+        CARRIER_DISABLED_MESSAGE,
+        KNOWN_CARRIERS,
+        carrier_enabled_or_message,
+        normalize_carrier_name,
+    )
+except Exception:
+    CARRIER_DISABLED_MESSAGE = "Transportadora desabilitada pela configuração remota."
+    KNOWN_CARRIERS = (
+        "braspress",
+        "bauer",
+        "trd",
+        "agex",
+        "eucatur",
+        "rodonaves",
+        "alfa",
+        "coopex",
+    )
+
+    def carrier_enabled_or_message(carrier):
+        return True, ""
+
+    def normalize_carrier_name(carrier):
+        return str(carrier or "").strip().lower()
+
 # Inicializar logging dos providers
 try:
     from fretio.logging_conf import get_logger, setup_logging
@@ -308,6 +334,39 @@ def _log_diag(msg: str) -> None:
             f.write(f"[{ts}] {msg}\n")
     except Exception:
         pass
+
+
+def _remote_disabled_results_for_config(config: dict[str, Any], *, contexto: str) -> tuple[dict[str, Any], list[ResultadoCotacao]]:
+    effective_config = dict(config) if isinstance(config, dict) else {}
+    transportadoras_cfg = effective_config.get("transportadoras", {}) if isinstance(effective_config, dict) else {}
+    if not isinstance(transportadoras_cfg, dict):
+        transportadoras_cfg = {}
+    transportadoras_cfg = dict(transportadoras_cfg)
+
+    skipped: list[ResultadoCotacao] = []
+    for carrier in KNOWN_CARRIERS:
+        canonical = normalize_carrier_name(carrier)
+        allowed, message = carrier_enabled_or_message(canonical)
+        if allowed:
+            continue
+        section = transportadoras_cfg.get(canonical)
+        if not isinstance(section, dict):
+            section = {}
+        section = dict(section)
+        section["habilitado"] = False
+        transportadoras_cfg[canonical] = section
+        display = canonical.upper()
+        _log_diag(f"{display} ignorada em {contexto}: {message or CARRIER_DISABLED_MESSAGE}")
+        skipped.append(
+            ResultadoCotacao(
+                transportadora=display,
+                status="desabilitada",
+                detalhes=message or CARRIER_DISABLED_MESSAGE,
+            )
+        )
+
+    effective_config["transportadoras"] = transportadoras_cfg
+    return effective_config, skipped
 
 
 def _config_template_path() -> Path | None:
@@ -1216,6 +1275,10 @@ class TransportadoraSession:
                 _log_diag(f"Modo foco {foco.upper()} ativo: apenas essa transportadora fará pre-login.")
             if isinstance(effective_config, dict):
                 effective_config["transportadoras"] = transportadoras_cfg if isinstance(transportadoras_cfg, dict) else {}
+            effective_config, _remote_skipped = _remote_disabled_results_for_config(
+                effective_config,
+                contexto="pre-login",
+            )
             provider_factory = ProviderFactory(config=effective_config)
 
             bcfg = provider_factory.get_provider_config("braspress")
@@ -1499,6 +1562,10 @@ async def _executar_cotacoes_com_dados(
             )
     if isinstance(effective_config, dict):
         effective_config["transportadoras"] = transportadoras_cfg if isinstance(transportadoras_cfg, dict) else {}
+    effective_config, remote_skipped_results = _remote_disabled_results_for_config(
+        effective_config,
+        contexto="cotacao",
+    )
     provider_factory = ProviderFactory(config=effective_config)
 
     async def _obter_provider_sessao(
@@ -1596,7 +1663,7 @@ async def _executar_cotacoes_com_dados(
         return [ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=msg)]
 
     tasks: list[tuple[str, Any, dict[str, Any]]] = []  # (nome, provider, kwargs_coteir)
-    erros_setup: list[ResultadoCotacao] = []
+    erros_setup: list[ResultadoCotacao] = list(remote_skipped_results)
     uf_destino_cep = _cep_para_uf(destino)
     uf_destino = uf_destino_informada or uf_destino_cep
     if uf_destino_informada and uf_destino_cep and uf_destino_informada != uf_destino_cep:
@@ -2455,6 +2522,7 @@ def formatar_resultados_cotacao(resultados: list[ResultadoCotacao]) -> str:
         [r for r in resultados if r.status == "ok" and r.valor_frete is not None],
         key=lambda r: (float(r.valor_frete or 0.0), int(r.prazo_dias or 0), r.transportadora),
     )
+    desabilitadas = [r for r in resultados if r.status == "desabilitada"]
     for item in validas:
         val = f"{item.valor_frete:.2f}".replace(".", ",")
         linhas.append(
@@ -2470,6 +2538,13 @@ def formatar_resultados_cotacao(resultados: list[ResultadoCotacao]) -> str:
         linhas.append("Nenhuma cotacao valida retornada")
         if _diag_log_enabled():
             linhas.append("Diagnostico: verifique o arquivo romaneio_cotacao.log")
+
+    if desabilitadas:
+        linhas.append("")
+        linhas.append("Transportadoras ignoradas:")
+        for item in desabilitadas:
+            detalhe = item.detalhes or CARRIER_DISABLED_MESSAGE
+            linhas.append(f"- {item.transportadora}: {detalhe}")
 
     return "\n".join(linhas)
 
