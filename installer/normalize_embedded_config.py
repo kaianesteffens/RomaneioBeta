@@ -7,6 +7,7 @@ import toml  # type: ignore[import-untyped]
 
 DEFAULT_GITHUB_REPO = "kaianesteffens/RomaneioBeta-releases"
 DEFAULT_LICENSE_API_URL = "https://fretio.api.br/api/licenses/validate"
+DEFAULT_LICENSE_CONFIG_API_URL = "https://fretio.api.br/api/licenses/config"
 DEFAULT_LICENSE_URL = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
 DEFAULT_ERROR_API_URL = "https://fretio.api.br/api/errors"
 
@@ -26,6 +27,7 @@ def _ensure_sections(data: dict) -> None:
     required = {
         "github_repo": DEFAULT_GITHUB_REPO,
         "license_api_url": DEFAULT_LICENSE_API_URL,
+        "license_config_api_url": DEFAULT_LICENSE_CONFIG_API_URL,
         "license_url": DEFAULT_LICENSE_URL,
         "error_api_url": DEFAULT_ERROR_API_URL,
     }

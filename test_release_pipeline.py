@@ -291,7 +291,10 @@ def test_error_reporter_retries_with_next_token_after_bad_credentials(monkeypatc
     )
 
     monkeypatch.setenv("APPDATA", str(appdata))
+    monkeypatch.delenv("FRETIO_ERROR_API_URL", raising=False)
+    monkeypatch.delenv("FRETEBOT_ERROR_API_URL", raising=False)
     monkeypatch.setattr(er, "_iter_config_candidates", lambda: [root_cfg, bundled_cfg])
+    monkeypatch.setattr(er, "_error_api_url", "")
     er._gist_id = ""
     er._token = ""
     er._initialized = False
@@ -369,6 +372,9 @@ def test_error_reporter_appends_recent_diag_log(monkeypatch, tmp_path):
         lambda body, label="": sent.setdefault("payload", {"body": body, "label": label}) or True,
     )
     monkeypatch.setattr(er.threading, "Thread", _ImmediateThread)
+    monkeypatch.delenv("FRETIO_ERROR_API_URL", raising=False)
+    monkeypatch.delenv("FRETEBOT_ERROR_API_URL", raising=False)
+    monkeypatch.setattr(er, "_error_api_url", "")
     monkeypatch.setattr(er, "_gist_id", "gist")
     monkeypatch.setattr(er, "_token", "token")
 
@@ -395,5 +401,7 @@ def test_normalize_embedded_config_backfills_license_api_url(monkeypatch):
 
     assert data["fretio"]["license_api_url"] == normalize_embedded_config.DEFAULT_LICENSE_API_URL
     assert data["fretebot"]["license_api_url"] == normalize_embedded_config.DEFAULT_LICENSE_API_URL
+    assert data["fretio"]["license_config_api_url"] == normalize_embedded_config.DEFAULT_LICENSE_CONFIG_API_URL
+    assert data["fretebot"]["license_config_api_url"] == normalize_embedded_config.DEFAULT_LICENSE_CONFIG_API_URL
     assert data["fretio"]["error_api_url"] == normalize_embedded_config.DEFAULT_ERROR_API_URL
     assert data["fretebot"]["error_api_url"] == normalize_embedded_config.DEFAULT_ERROR_API_URL

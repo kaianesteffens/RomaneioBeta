@@ -85,6 +85,7 @@ from cotacao_transportadoras import (
 )
 from updater import check_for_update, apply_update, get_repo_from_config, needs_restart, restart_app
 from license import get_saved_license, save_license, validate_license, get_machine_id, LicenseStatus
+from remote_config import fetch_remote_config
 from error_reporter import install_global_hooks, report_error, report_error_message, configure as _er_configure
 from extrator_nfe import extrair_arquivo as extrair_nfe_arquivo, NotaFiscal, identificar_transportadora, formatar_nota_resumo, parsear_info_complementar
 from rastreamento import rastrear_multiplas, ResultadoRastreio, obter_link_rastreio
@@ -119,6 +120,18 @@ def _resource_path(relative_path: str) -> Path:
     if base:
         return Path(base) / relative_path
     return Path(__file__).resolve().parent / relative_path
+
+
+def _start_remote_config_fetch(startup_logger=None) -> None:
+    try:
+        fetch_remote_config(wait=False)
+        if startup_logger is not None:
+            startup_logger.info("Busca de configuracao remota da licenca iniciada")
+    except Exception as exc:
+        if startup_logger is not None:
+            startup_logger.warning("Falha ao iniciar busca de configuracao remota: %s", exc)
+        else:
+            print(f"[fretio] Falha ao iniciar configuracao remota: {exc}", file=sys.stderr, flush=True)
 
 
 def _carregar_versao_app() -> str:
@@ -261,7 +274,15 @@ def _migrate_appdata_fretebot_to_fretio() -> None:
 
             changed = False
             src_fb = src_data.get("fretio", {}) if isinstance(src_data.get("fretio", {}), dict) else {}
-            for key in ("github_repo", "license_url", "error_gist_id", "error_report_token"):
+            for key in (
+                "github_repo",
+                "license_api_url",
+                "license_config_api_url",
+                "license_url",
+                "error_api_url",
+                "error_gist_id",
+                "error_report_token",
+            ):
                 src_val = str(src_fb.get(key, "") or "").strip()
                 dst_val = str(dst_fb.get(key, "") or "").strip()
                 if src_val and not dst_val:
@@ -3479,6 +3500,7 @@ def main():
                         save_license(_lic_key)
                         if _startup_logger is not None:
                             _startup_logger.info("Licença validada com sucesso")
+                        _start_remote_config_fetch(_startup_logger)
                         break
                     else:
                         if _startup_logger is not None:
@@ -3511,6 +3533,7 @@ def main():
                             save_license(_lic_key2.strip().upper())
                             if _startup_logger is not None:
                                 _startup_logger.info("Nova licença validada após revogação")
+                            _start_remote_config_fetch(_startup_logger)
                         else:
                             if _startup_logger is not None:
                                 _startup_logger.warning("Nova licença inválida após revogação: %s", _lic_status2.message or "chave não reconhecida")
@@ -3524,6 +3547,8 @@ def main():
                         if _startup_logger is not None:
                             _startup_logger.warning("Reativação cancelada pelo usuário")
                         sys.exit(1)
+                else:
+                    _start_remote_config_fetch(_startup_logger)
         except SystemExit:
             raise
         except Exception as _lic_err:
