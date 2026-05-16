@@ -6,9 +6,9 @@ from pathlib import Path
 import toml  # type: ignore[import-untyped]
 
 DEFAULT_GITHUB_REPO = "kaianesteffens/RomaneioBeta-releases"
-DEFAULT_LICENSE_API_URL = "http://b3wjxbvlglanxcdwfoft4x0b.2.24.102.36.sslip.io/api/licenses/validate"
+DEFAULT_LICENSE_API_URL = "https://fretio.api.br/api/licenses/validate"
 DEFAULT_LICENSE_URL = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
-DEFAULT_ERROR_API_URL = "http://b3wjxbvlglanxcdwfoft4x0b.2.24.102.36.sslip.io/api/errors"
+DEFAULT_ERROR_API_URL = "https://fretio.api.br/api/errors"
 
 
 def _ensure_sections(data: dict) -> None:

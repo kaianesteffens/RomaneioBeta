@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 APP_DIR = ROOT_DIR / "app"
-ERROR_API_URL = "http://b3wjxbvlglanxcdwfoft4x0b.2.24.102.36.sslip.io/api/errors"
+ERROR_API_URL = "https://fretio.api.br/api/errors"
 
 sys.path.insert(0, str(APP_DIR))
 
