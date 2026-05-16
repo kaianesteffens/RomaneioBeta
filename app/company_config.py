@@ -10,6 +10,7 @@ from typing import Any
 _DEFAULT_GITHUB_REPO = "kaianesteffens/RomaneioBeta-releases"
 _DEFAULT_LICENSE_API_URL = "http://b3wjxbvlglanxcdwfoft4x0b.2.24.102.36.sslip.io/api/licenses/validate"
 _DEFAULT_LICENSE_URL = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
+_DEFAULT_ERROR_API_URL = "http://b3wjxbvlglanxcdwfoft4x0b.2.24.102.36.sslip.io/api/errors"
 
 TODAS_UFS = [
     "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA",
@@ -140,6 +141,7 @@ def _garantir_defaults_fretio(config: dict[str, Any]) -> bool:
         "github_repo": _DEFAULT_GITHUB_REPO,
         "license_api_url": _DEFAULT_LICENSE_API_URL,
         "license_url": _DEFAULT_LICENSE_URL,
+        "error_api_url": _DEFAULT_ERROR_API_URL,
     }
     for key, fallback in required_defaults.items():
         current = str(fretio_cfg.get(key, "") or "").strip()
@@ -159,6 +161,7 @@ def _criar_config_empresa_vazia(nome: str) -> None:
             "github_repo": _DEFAULT_GITHUB_REPO,
             "license_api_url": _DEFAULT_LICENSE_API_URL,
             "license_url": _DEFAULT_LICENSE_URL,
+            "error_api_url": _DEFAULT_ERROR_API_URL,
         },
         "romaneio": {"cep_origem": ""},
         "transportadoras": {
