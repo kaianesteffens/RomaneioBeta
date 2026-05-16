@@ -1,0 +1,23 @@
+{
+  "checked_at": "2026-05-16T17:42:02.130724+00:00",
+  "forced_license_api_url": "https://fretio.api.br/api/licenses/validate",
+  "cache_deleted": true,
+  "local_validation": {
+    "valid": false,
+    "owner": "",
+    "message": "Sem conexão para validar licença. Tente novamente com internet.",
+    "blocked": false,
+    "expires": "",
+    "offline": false,
+    "machine_id": "69ff6224ef9bc8f282a437726eb167d8"
+  },
+  "server_license": {
+    "license_id": 2,
+    "key_prefix": "FBOT-AA3C...",
+    "validation_count": 8,
+    "machine_count": 1,
+    "active": true,
+    "blocked": false,
+    "max_machines": 1
+  }
+}
