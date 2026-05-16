@@ -12,6 +12,7 @@ _DEFAULT_LICENSE_API_URL = "https://fretio.api.br/api/licenses/validate"
 _DEFAULT_LICENSE_CONFIG_API_URL = "https://fretio.api.br/api/licenses/config"
 _DEFAULT_LICENSE_URL = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
 _DEFAULT_ERROR_API_URL = "https://fretio.api.br/api/errors"
+_DEFAULT_USAGE_API_URL = "https://fretio.api.br/api/usage/events"
 
 TODAS_UFS = [
     "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA",
@@ -144,6 +145,7 @@ def _garantir_defaults_fretio(config: dict[str, Any]) -> bool:
         "license_config_api_url": _DEFAULT_LICENSE_CONFIG_API_URL,
         "license_url": _DEFAULT_LICENSE_URL,
         "error_api_url": _DEFAULT_ERROR_API_URL,
+        "usage_api_url": _DEFAULT_USAGE_API_URL,
     }
     for key, fallback in required_defaults.items():
         current = str(fretio_cfg.get(key, "") or "").strip()
@@ -165,6 +167,7 @@ def _criar_config_empresa_vazia(nome: str) -> None:
             "license_config_api_url": _DEFAULT_LICENSE_CONFIG_API_URL,
             "license_url": _DEFAULT_LICENSE_URL,
             "error_api_url": _DEFAULT_ERROR_API_URL,
+            "usage_api_url": _DEFAULT_USAGE_API_URL,
         },
         "romaneio": {"cep_origem": ""},
         "transportadoras": {
