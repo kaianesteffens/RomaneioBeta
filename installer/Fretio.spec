@@ -57,6 +57,7 @@ hiddenimports = [
     "update_security",
     "license",
     "remote_config",
+    "remote_permissions",
     "error_reporter",
     "error_handler",
     "logging_conf",
