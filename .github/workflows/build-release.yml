@@ -59,6 +59,7 @@ jobs:
           $licenseConfigApiUrl = "https://fretio.api.br/api/licenses/config"
           $licenseUrl = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
           $errorApiUrl = "https://fretio.api.br/api/errors"
+          $usageApiUrl = "https://fretio.api.br/api/usage/events"
           $content = @(
             '[fretio]'
             "github_repo = `"$githubRepo`""
@@ -67,6 +68,7 @@ jobs:
             "license_config_api_url = `"$licenseConfigApiUrl`""
             "license_url = `"$licenseUrl`""
             "error_api_url = `"$errorApiUrl`""
+            "usage_api_url = `"$usageApiUrl`""
             "update_public_key_b64 = `"$updatePublicKey`""
           ) -join "`r`n"
           if ($gistId -and $token) {

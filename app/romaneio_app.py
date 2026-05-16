@@ -7,6 +7,7 @@ import os
 import sys
 import re
 import concurrent.futures
+import time
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable
@@ -85,9 +86,19 @@ from cotacao_transportadoras import (
 )
 from updater import check_for_update, apply_update, get_repo_from_config, needs_restart, restart_app
 from license import get_saved_license, save_license, validate_license, get_machine_id, LicenseStatus
-from remote_config import fetch_remote_config
+from remote_config import fetch_remote_config, get_last_fetch_status
 from remote_permissions import ensure_feature_allowed, feature_allowed_or_default
 from error_reporter import install_global_hooks, report_error, report_error_message, configure as _er_configure
+from usage_reporter import (
+    configure as _usage_configure,
+    report_app_started,
+    report_license_validated,
+    report_remote_config_fetched,
+    report_nfe_imported,
+    report_romaneio_processed,
+    report_tracking_finished,
+    report_tracking_started,
+)
 from extrator_nfe import extrair_arquivo as extrair_nfe_arquivo, NotaFiscal, identificar_transportadora, formatar_nota_resumo, parsear_info_complementar
 from rastreamento import rastrear_multiplas, ResultadoRastreio, obter_link_rastreio
 from ui_components import (
@@ -125,7 +136,19 @@ def _resource_path(relative_path: str) -> Path:
 
 def _start_remote_config_fetch(startup_logger=None) -> None:
     try:
-        fetch_remote_config(wait=False)
+        def _worker() -> None:
+            status = "error"
+            try:
+                fetch_remote_config(wait=True)
+                status = get_last_fetch_status() or "default"
+            except Exception:
+                status = "error"
+            try:
+                report_remote_config_fetched(status=status)
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, name="FretioRemoteConfigFetch", daemon=True).start()
         if startup_logger is not None:
             startup_logger.info("Busca de configuracao remota da licenca iniciada")
     except Exception as exc:
@@ -819,6 +842,7 @@ class RomaneioWindow(QMainWindow):
         self.empresa_nome = empresa_nome
         self._config_path = _empresa_config_path(empresa_nome)
         _er_configure(self._config_path)
+        _usage_configure(self._config_path)
         self._proxima_empresa: str | None = None
         self.extrator = ExtratorPedidos()
         self.pedidos = []
@@ -836,6 +860,7 @@ class RomaneioWindow(QMainWindow):
         self._cep_origem_override = ""
         self._romaneios_processados: list[dict] = []
         self._last_cotacao_results: list = []
+        self._tracking_started_at: float | None = None
         self.app_version = _carregar_versao_app()
         self.app_name = f"Fretio {self.app_version} \u2014 {empresa_nome}"
         self._theme_mode = str((self._sessao.config.get("fretio", {}) or {}).get("ui_tema", "sistema")).lower()
@@ -2119,6 +2144,7 @@ class RomaneioWindow(QMainWindow):
         self.label_info.setText(f"OK: {len(self.pedidos)} pedido(s) extraido(s) de {Path(arquivo).name}")
         self.label_info.setStyleSheet("color: #067647;")
         self._registrar_romaneio(arquivo)
+        report_romaneio_processed("ok", metadata={"quantidade_pedidos": len(self.pedidos)})
         self._atualizar_dashboard()
 
     def _atualizar_estado_romaneio_colado(self):
@@ -2679,6 +2705,16 @@ class RomaneioWindow(QMainWindow):
                 "Alguns arquivos não puderam ser processados:\n\n" + "\n".join(erros)
             )
 
+        if novas_notas or erros:
+            report_nfe_imported(
+                "ok" if novas_notas else "error",
+                metadata={
+                    "quantidade": len(novas_notas),
+                    "arquivos_processados": len(arquivos),
+                    "erros": len(erros),
+                },
+            )
+
         if novas_notas:
             self._inserir_cards_novas_notas(novas_notas)
             self._rastreio_notas_subset = list(novas_notas)
@@ -2994,6 +3030,8 @@ class RomaneioWindow(QMainWindow):
         if not notas_a_rastrear:
             QMessageBox.warning(self, "Aviso", "Nenhuma NF-e carregada para rastrear")
             return
+        self._tracking_started_at = time.monotonic()
+        report_tracking_started(metadata={"quantidade_notas": len(notas_a_rastrear)})
         self._rastreio_notas_para_thread = list(notas_a_rastrear)
         self.btn_rastrear.setEnabled(False)
         self.btn_select_nfe.setEnabled(False)
@@ -3091,6 +3129,14 @@ class RomaneioWindow(QMainWindow):
         entregues = sum(1 for r in resultados if r.entregue)
         com_screenshot = sum(1 for r in resultados if r.screenshot_path)
         total = len(resultados)
+        started_at = self._tracking_started_at
+        duration_ms = int((time.monotonic() - started_at) * 1000) if started_at else None
+        status = "ok" if resultados and any(not getattr(r, "erro", "") for r in resultados) else "error"
+        report_tracking_finished(
+            status,
+            duration_ms=duration_ms,
+            metadata={"quantidade_notas": total},
+        )
         self.label_info.setText(
             f"Rastreamento concluído: {entregues}/{total} entregue(s)"
             + (f" — {com_screenshot} screenshot(s)" if com_screenshot else "")
@@ -3101,6 +3147,7 @@ class RomaneioWindow(QMainWindow):
         self._rastreio_notas_subset = None
         self._rastreio_card_offset = 0
         self._rastreio_notas_para_thread = None
+        self._tracking_started_at = None
 
     def _abrir_pasta_screenshots(self):
         """Abre a pasta de screenshots no explorador de arquivos."""
@@ -3494,6 +3541,7 @@ def main():
         app.setQuitOnLastWindowClosed(True)
         if _startup_logger is not None:
             _startup_logger.info("QApplication criada com sucesso")
+        report_app_started()
 
         # ── Verificação de licença ──
         try:
@@ -3522,6 +3570,7 @@ def main():
                         save_license(_lic_key)
                         if _startup_logger is not None:
                             _startup_logger.info("Licença validada com sucesso")
+                        report_license_validated("ok")
                         _start_remote_config_fetch(_startup_logger)
                         break
                     else:
@@ -3555,6 +3604,7 @@ def main():
                             save_license(_lic_key2.strip().upper())
                             if _startup_logger is not None:
                                 _startup_logger.info("Nova licença validada após revogação")
+                            report_license_validated("ok")
                             _start_remote_config_fetch(_startup_logger)
                         else:
                             if _startup_logger is not None:
@@ -3570,6 +3620,7 @@ def main():
                             _startup_logger.warning("Reativação cancelada pelo usuário")
                         sys.exit(1)
                 else:
+                    report_license_validated("ok")
                     _start_remote_config_fetch(_startup_logger)
         except SystemExit:
             raise

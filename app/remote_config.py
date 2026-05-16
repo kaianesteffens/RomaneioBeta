@@ -21,6 +21,7 @@ _HTTP_TIMEOUT = 15
 _CONFIG_SECTIONS = ("fretio", "fretebot", "romaneio")
 _CACHE_LOCK = threading.Lock()
 _LOGGER = logging.getLogger("remote_config")
+_LAST_FETCH_STATUS = "default"
 
 
 DEFAULT_REMOTE_CONFIG: dict[str, Any] = {
@@ -84,6 +85,15 @@ _SENSITIVE_VALUE_MARKERS = (
     "token=",
 )
 _NETWORK_ERRORS = (URLError, OSError, TimeoutError, json.JSONDecodeError)
+
+
+def _set_last_fetch_status(status: str) -> None:
+    global _LAST_FETCH_STATUS
+    _LAST_FETCH_STATUS = status
+
+
+def get_last_fetch_status() -> str:
+    return _LAST_FETCH_STATUS
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -362,6 +372,7 @@ def _fetch_remote_config_now() -> dict[str, Any]:
     key = str(get_saved_license() or "").strip().upper()
     if not key:
         _LOGGER.info("Configuracao remota ignorada: licenca local ausente")
+        _set_last_fetch_status("default")
         return _default_cache()
 
     api_url = _get_license_config_api_url()
@@ -371,10 +382,16 @@ def _fetch_remote_config_now() -> dict[str, Any]:
     if cache_payload.get("valid") is True:
         _write_cache(cache_payload)
         _LOGGER.info("Configuracao remota da licenca atualizada")
+        _set_last_fetch_status("ok")
         return cache_payload
 
     _LOGGER.warning("Servidor de configuracao remota retornou valid=false")
-    return get_cached_remote_config() or _default_cache()
+    cached = get_cached_remote_config()
+    if cached:
+        _set_last_fetch_status("cache")
+        return cached
+    _set_last_fetch_status("error")
+    return _default_cache()
 
 
 def _fetch_remote_config_safely() -> dict[str, Any]:
@@ -384,7 +401,14 @@ def _fetch_remote_config_safely() -> dict[str, Any]:
         _LOGGER.warning("Falha ao buscar configuracao remota; usando cache/defaults: %s", exc)
     except Exception as exc:
         _LOGGER.warning("Erro inesperado na configuracao remota; usando cache/defaults: %s", exc)
-    return get_cached_remote_config() or _default_cache()
+        _set_last_fetch_status("error")
+    cached = get_cached_remote_config()
+    if cached:
+        _set_last_fetch_status("cache")
+        return cached
+    if get_last_fetch_status() != "error":
+        _set_last_fetch_status("default")
+    return _default_cache()
 
 
 def fetch_remote_config(wait: bool = True) -> dict[str, Any]:

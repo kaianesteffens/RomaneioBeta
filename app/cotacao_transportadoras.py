@@ -33,6 +33,17 @@ except Exception:
     def report_error_message(*a, **kw): pass
 
 try:
+    from usage_reporter import (
+        report_carrier_quotation_result,
+        report_quotation_finished,
+        report_quotation_started,
+    )
+except Exception:
+    def report_carrier_quotation_result(*a, **kw): return {"sent": False}
+    def report_quotation_finished(*a, **kw): return {"sent": False}
+    def report_quotation_started(*a, **kw): return {"sent": False}
+
+try:
     from remote_permissions import (
         CARRIER_DISABLED_MESSAGE,
         KNOWN_CARRIERS,
@@ -164,6 +175,7 @@ class ResultadoCotacao:
     valor_frete: float | None = None
     prazo_dias: int | None = None
     detalhes: str | None = None
+    duration_ms: int | None = None
 
 
 @lru_cache(maxsize=4096)
@@ -367,6 +379,116 @@ def _remote_disabled_results_for_config(config: dict[str, Any], *, contexto: str
 
     effective_config["transportadoras"] = transportadoras_cfg
     return effective_config, skipped
+
+
+def _quotation_usage_metadata(
+    dados: dict[str, Any] | None,
+    *,
+    modo: str,
+    quantidade_transportadoras: int | None = None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"modo": modo}
+    if quantidade_transportadoras is not None:
+        metadata["quantidade_transportadoras"] = int(quantidade_transportadoras)
+    if not isinstance(dados, dict):
+        return metadata
+
+    uf_destino = str(dados.get("uf_destino", "") or "").strip().upper()
+    if len(uf_destino) == 2 and uf_destino.isalpha():
+        metadata["uf_destino"] = uf_destino
+    try:
+        volumes = int(dados.get("volumes", 0) or 0)
+        if volumes >= 0:
+            metadata["volumes"] = volumes
+    except Exception:
+        pass
+    try:
+        peso = float(dados.get("peso", 0.0) or 0.0)
+        if peso >= 0:
+            metadata["peso_total_kg"] = round(peso, 3)
+    except Exception:
+        pass
+    return metadata
+
+
+def _usage_status_from_result(status: Any) -> str:
+    normalized = str(status or "").strip().lower()
+    if normalized == "ok":
+        return "ok"
+    if normalized == "desabilitada":
+        return "desabilitada"
+    if normalized in {"nao_atendido", "não_atendido", "sem_cotacao", "sem_cotação"}:
+        return "sem_cotacao"
+    return "erro"
+
+
+def _value_cents_from_frete(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(round(float(value) * 100))
+    except Exception:
+        return None
+
+
+def _carrier_usage_defaults(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    transportadoras_cfg = config.get("transportadoras", {}) if isinstance(config, dict) else {}
+    if not isinstance(transportadoras_cfg, dict):
+        transportadoras_cfg = {}
+
+    defaults: dict[str, dict[str, Any]] = {}
+    for carrier in KNOWN_CARRIERS:
+        canonical = normalize_carrier_name(carrier)
+        section = transportadoras_cfg.get(canonical, {})
+        status = "sem_cotacao"
+        if isinstance(section, dict) and bool(section.get("habilitado", True)) is False:
+            status = "desabilitada"
+        defaults[canonical] = {
+            "status": status,
+            "duration_ms": None,
+            "value_cents": None,
+        }
+    return defaults
+
+
+def _report_quotation_usage_results(
+    *,
+    config: dict[str, Any],
+    dados: dict[str, Any] | None,
+    resultados: list[ResultadoCotacao] | None,
+    modo: str,
+    duration_ms: int | None,
+) -> None:
+    try:
+        results = resultados or []
+        carrier_results = _carrier_usage_defaults(config)
+        for result in results:
+            canonical = normalize_carrier_name(getattr(result, "transportadora", ""))
+            if canonical not in carrier_results:
+                continue
+            carrier_results[canonical] = {
+                "status": _usage_status_from_result(getattr(result, "status", "")),
+                "duration_ms": getattr(result, "duration_ms", None),
+                "value_cents": _value_cents_from_frete(getattr(result, "valor_frete", None)),
+            }
+
+        metadata = _quotation_usage_metadata(
+            dados,
+            modo=modo,
+            quantidade_transportadoras=len(carrier_results),
+        )
+        finished_status = "ok" if any(getattr(r, "status", "") == "ok" for r in results) else "error"
+        report_quotation_finished(finished_status, duration_ms=duration_ms, metadata=metadata)
+        for provider, payload in carrier_results.items():
+            report_carrier_quotation_result(
+                provider,
+                payload["status"],
+                duration_ms=payload["duration_ms"],
+                value_cents=payload["value_cents"],
+                metadata=metadata,
+            )
+    except Exception:
+        pass
 
 
 def _config_template_path() -> Path | None:
@@ -2173,22 +2295,27 @@ async def _executar_cotacoes_com_dados(
 
     async def _run_cotacao(i: int, nome: str, provider: Any, kwargs: dict[str, Any], is_alfa: bool):
         effective_timeout = _TIMEOUT_COTACAO_S.get(nome.upper(), _TIMEOUT_COTACAO_PADRAO_S)
+        started_at = time.monotonic()
+
+        def _duration_ms() -> int:
+            return int((time.monotonic() - started_at) * 1000)
+
         try:
             coro = provider.coteir(**kwargs)
             cotacao = await asyncio.wait_for(coro, timeout=effective_timeout)
-            return i, nome, provider, kwargs, cotacao, None
+            return i, nome, provider, kwargs, cotacao, None, _duration_ms()
         except asyncio.TimeoutError:
             last_step = getattr(provider, '_passo_atual', 'desconhecido')
             return i, nome, provider, kwargs, None, TimeoutError(
                 f"Timeout de {effective_timeout}s na cotação {nome} (passo: {last_step})"
-            )
+            ), _duration_ms()
         except asyncio.CancelledError as exc:
             detalhe = str(exc).strip() or "sem detalhe"
             return i, nome, provider, kwargs, None, RuntimeError(
                 f"Cotação {nome} cancelada: {detalhe}"
-            )
+            ), _duration_ms()
         except Exception as exc:
-            return i, nome, provider, kwargs, None, exc
+            return i, nome, provider, kwargs, None, exc, _duration_ms()
 
     async def _exec(i: int, nome: str, provider: Any, kwargs: dict[str, Any]):
         is_alfa = nome.upper() == "ALFA"
@@ -2206,7 +2333,7 @@ async def _executar_cotacoes_com_dados(
         """Processa resultado de _exec, retorna (ResultadoCotacao|None, ok: bool)."""
         nonlocal concluidas
 
-        if not isinstance(res, tuple) or len(res) != 6:
+        if not isinstance(res, tuple) or len(res) != 7:
             msg = f"Executor retornou formato inesperado de resultado: {type(res).__name__}"
             _log_diag(msg)
             r = ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=msg)
@@ -2215,7 +2342,7 @@ async def _executar_cotacoes_com_dados(
             _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
             return
 
-        _i, nome_task, provider_task, kwargs_task, cotacao, erro = res
+        _i, nome_task, provider_task, kwargs_task, cotacao, erro, duration_ms = res
 
         if isinstance(erro, BaseException):
             erro_str = str(erro)
@@ -2224,6 +2351,7 @@ async def _executar_cotacoes_com_dados(
                 _log_diag(f"{nome_task}: destino não atendido (erro de negócio, ignorando)")
                 r = ResultadoCotacao(
                     transportadora=nome_task, status="nao_atendido", detalhes=erro_str,
+                    duration_ms=duration_ms,
                 )
                 concluidas += 1
                 resultados.append(r)
@@ -2240,6 +2368,7 @@ async def _executar_cotacoes_com_dados(
                 r = ResultadoCotacao(
                     transportadora=nome_task, status="erro",
                     detalhes=f"{type(erro).__name__}: {erro}",
+                    duration_ms=duration_ms,
                 )
                 concluidas += 1
                 resultados.append(r)
@@ -2253,6 +2382,7 @@ async def _executar_cotacoes_com_dados(
                 _log_diag(f"{nome_task}: destino não atendido (erro de negócio, ignorando)")
                 r = ResultadoCotacao(
                     transportadora=nome_task, status="nao_atendido", detalhes=erro_str,
+                    duration_ms=duration_ms,
                 )
                 concluidas += 1
                 resultados.append(r)
@@ -2265,6 +2395,7 @@ async def _executar_cotacoes_com_dados(
             else:
                 r = ResultadoCotacao(
                     transportadora=nome_task, status="erro", detalhes=str(erro),
+                    duration_ms=duration_ms,
                 )
                 concluidas += 1
                 resultados.append(r)
@@ -2282,6 +2413,7 @@ async def _executar_cotacoes_com_dados(
                 r = ResultadoCotacao(
                     transportadora=nome_task, status="erro",
                     detalhes=f"Resultado inválido: {parse_exc}",
+                    duration_ms=duration_ms,
                 )
                 concluidas += 1
                 resultados.append(r)
@@ -2291,6 +2423,7 @@ async def _executar_cotacoes_com_dados(
             r = ResultadoCotacao(
                 transportadora=transportadora, status="ok",
                 valor_frete=valor_frete, prazo_dias=prazo_dias, detalhes=detalhes,
+                duration_ms=duration_ms,
             )
             resultados.append(r)
             concluidas += 1
@@ -2311,6 +2444,7 @@ async def _executar_cotacoes_com_dados(
                 _log_diag(f"{nome_task}: destino não atendido (erro de negócio, ignorando)")
                 r = ResultadoCotacao(
                     transportadora=nome_task, status="nao_atendido", detalhes=str(detalhe),
+                    duration_ms=duration_ms,
                 )
                 concluidas += 1
                 resultados.append(r)
@@ -2324,6 +2458,7 @@ async def _executar_cotacoes_com_dados(
             else:
                 r = ResultadoCotacao(
                     transportadora=nome_task, status="erro", detalhes=str(detalhe),
+                    duration_ms=duration_ms,
                 )
                 concluidas += 1
                 resultados.append(r)
@@ -2442,17 +2577,32 @@ async def cotar_transportadoras(
 ) -> list[ResultadoCotacao]:
     """Executa cotação em todas as transportadoras configuradas."""
     config = sessao.config if sessao else _carregar_config(config_path=config_path)
-    dados = _dados_envio(extrator=extrator, pedidos=pedidos)
-    if not dados:
-        _log_diag("Sem dados de envio para cotação")
-        return [ResultadoCotacao(transportadora="GERAL", status="erro", detalhes="Nenhum pedido disponível para cotação")]
-    return await _executar_cotacoes_com_dados(
-        config=config,
-        dados=dados,
-        cep_origem=cep_origem,
-        sessao=sessao,
-        progresso_callback=progresso_callback,
-    )
+    started_at = time.monotonic()
+    dados: dict[str, Any] | None = None
+    resultados: list[ResultadoCotacao] | None = None
+    report_quotation_started(metadata=_quotation_usage_metadata(None, modo="pdf"))
+    try:
+        dados = _dados_envio(extrator=extrator, pedidos=pedidos)
+        if not dados:
+            _log_diag("Sem dados de envio para cotação")
+            resultados = [ResultadoCotacao(transportadora="GERAL", status="erro", detalhes="Nenhum pedido disponível para cotação")]
+            return resultados
+        resultados = await _executar_cotacoes_com_dados(
+            config=config,
+            dados=dados,
+            cep_origem=cep_origem,
+            sessao=sessao,
+            progresso_callback=progresso_callback,
+        )
+        return resultados
+    finally:
+        _report_quotation_usage_results(
+            config=config,
+            dados=dados,
+            resultados=resultados,
+            modo="pdf",
+            duration_ms=int((time.monotonic() - started_at) * 1000),
+        )
 
 
 async def cotar_transportadoras_romaneio_colado(
@@ -2466,20 +2616,43 @@ async def cotar_transportadoras_romaneio_colado(
     tipo_frete: str = "",
 ) -> list[ResultadoCotacao]:
     config = sessao.config if sessao else _carregar_config(config_path=config_path)
+    started_at = time.monotonic()
+    dados: dict[str, Any] | None = None
+    resultados: list[ResultadoCotacao] | None = None
+    modo = "fornecedor" if cnpj_remetente else "romaneio_colado"
+    report_quotation_started(metadata=_quotation_usage_metadata(None, modo=modo))
     try:
         dados = _dados_envio_romaneio_colado(romaneio_colado)
     except ValueError as e:
         _log_diag(f"Romaneio colado inválido: {e}")
-        return [ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=str(e))]
-    return await _executar_cotacoes_com_dados(
-        config=config,
-        dados=dados,
-        cep_origem=cep_origem,
-        sessao=sessao,
-        progresso_callback=progresso_callback,
-        cnpj_remetente=cnpj_remetente,
-        tipo_frete=tipo_frete,
-    )
+        resultados = [ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=str(e))]
+        _report_quotation_usage_results(
+            config=config,
+            dados=dados,
+            resultados=resultados,
+            modo=modo,
+            duration_ms=int((time.monotonic() - started_at) * 1000),
+        )
+        return resultados
+    try:
+        resultados = await _executar_cotacoes_com_dados(
+            config=config,
+            dados=dados,
+            cep_origem=cep_origem,
+            sessao=sessao,
+            progresso_callback=progresso_callback,
+            cnpj_remetente=cnpj_remetente,
+            tipo_frete=tipo_frete,
+        )
+        return resultados
+    finally:
+        _report_quotation_usage_results(
+            config=config,
+            dados=dados,
+            resultados=resultados,
+            modo=modo,
+            duration_ms=int((time.monotonic() - started_at) * 1000),
+        )
 
 
 async def diagnosticar_transportadoras(

@@ -123,6 +123,8 @@ def test_cubagens_validas_discards_invalid_rows():
 
 
 def test_rodonaves_setup_error_does_not_escape_except_scope(monkeypatch):
+    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+
     class FakeFactory:
         def __init__(self, config):
             self.config = config

@@ -59,6 +59,7 @@ hiddenimports = [
     "remote_config",
     "remote_permissions",
     "error_reporter",
+    "usage_reporter",
     "error_handler",
     "logging_conf",
     "extrator_nfe",
