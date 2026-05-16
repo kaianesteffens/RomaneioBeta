@@ -28,6 +28,7 @@ def test_company_config_creates_and_lists_empty_company_config(monkeypatch, tmp_
     assert cc._listar_empresas() == ["DARLU"]
     assert data["fretio"]["fator_cubagem"] == 6000
     assert data["fretio"]["github_repo"] == cc._DEFAULT_GITHUB_REPO
+    assert data["fretio"]["license_api_url"] == cc._DEFAULT_LICENSE_API_URL
     assert data["fretio"]["license_url"] == cc._DEFAULT_LICENSE_URL
     assert data["romaneio"]["cep_origem"] == ""
     assert data["transportadoras"]["braspress"]["habilitado"] is False
@@ -51,6 +52,7 @@ def test_company_config_migrates_existing_root_config(monkeypatch, tmp_path):
         'cep_origem = "99740000"\n'
         "\n"
         "[fretebot]\n"
+        'license_api_url = "https://licenses.example.test/validate"\n'
         'license_url = "https://example.test/licenses.json"\n',
         encoding="utf-8",
     )
@@ -65,6 +67,25 @@ def test_company_config_migrates_existing_root_config(monkeypatch, tmp_path):
     assert cc._ler_ultima_empresa() == "darlu"
     assert data["romaneio"]["cep_origem"] == "99740000"
     assert data["fretio"]["github_repo"] == cc._DEFAULT_GITHUB_REPO
+    assert data["fretio"]["license_api_url"] == "https://licenses.example.test/validate"
+    assert data["fretio"]["license_url"] == "https://example.test/licenses.json"
+
+
+def test_company_config_migrates_root_config_without_license_api_url(monkeypatch, tmp_path):
+    appdata = tmp_path / "appdata"
+    root_config = appdata / "Fretio" / "CONFIG.toml"
+    root_config.parent.mkdir(parents=True)
+    root_config.write_text(
+        "[fretio]\n"
+        'license_url = "https://example.test/licenses.json"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("APPDATA", str(appdata))
+
+    cc._migrar_config_se_necessario()
+
+    data = _load_toml(cc._empresa_config_path("darlu"))
+    assert data["fretio"]["license_api_url"] == cc._DEFAULT_LICENSE_API_URL
     assert data["fretio"]["license_url"] == "https://example.test/licenses.json"
 
 

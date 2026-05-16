@@ -119,6 +119,19 @@ def test_license_service_backend_offline_uses_existing_validation_cache(monkeypa
     )
 
 
+def test_license_service_backend_offline_without_cache_returns_friendly_message(monkeypatch, tmp_path):
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setattr(lic, "_get_license_api_url", lambda: "https://licenses.example.test/validate")
+    monkeypatch.setattr(lic, "urlopen", lambda req, timeout: (_ for _ in ()).throw(URLError("offline")))
+
+    status = lic.validate_license("FBOT-SEM-CACHE", machine_id="MAQ-1")
+
+    assert status == lic.LicenseStatus(
+        valid=False,
+        message="Sem conexão para validar licença. Tente novamente com internet.",
+    )
+
+
 def test_license_service_without_api_url_preserves_legacy_gist_validation(monkeypatch, tmp_path):
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
     monkeypatch.setattr(lic, "_get_license_api_url", lambda: "")

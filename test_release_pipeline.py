@@ -379,3 +379,17 @@ def test_error_reporter_appends_recent_diag_log(monkeypatch, tmp_path):
     assert "### Traceback" in body
     assert "### Diagnostico Local Recente" in body
     assert "linha recente" in body
+
+
+def test_normalize_embedded_config_backfills_license_api_url(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setitem(sys.modules, "toml", SimpleNamespace(loads=lambda raw: {}, dumps=lambda data: ""))
+    sys.modules.pop("normalize_embedded_config", None)
+    import normalize_embedded_config
+
+    data = {"fretio": {}}
+    normalize_embedded_config._ensure_sections(data)
+
+    assert data["fretio"]["license_api_url"] == normalize_embedded_config.DEFAULT_LICENSE_API_URL
+    assert data["fretebot"]["license_api_url"] == normalize_embedded_config.DEFAULT_LICENSE_API_URL
