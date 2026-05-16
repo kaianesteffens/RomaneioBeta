@@ -1,4 +1,5 @@
 import sys
+import ssl
 from pathlib import Path
 from io import BytesIO
 from urllib.error import HTTPError
@@ -318,7 +319,8 @@ def test_error_reporter_retries_with_next_token_after_bad_credentials(monkeypatc
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    def fake_urlopen(req, timeout=15):
+    def fake_urlopen(req, timeout=15, context=None):
+        assert isinstance(context, ssl.SSLContext)
         auth = req.get_header("Authorization")
         requests.append(auth)
         if auth == "Bearer token-old":

@@ -12,6 +12,7 @@ import json
 import os
 import platform
 import re
+import ssl
 import sys
 import time
 import traceback
@@ -47,6 +48,15 @@ _EMBEDDED_ERROR_REPORT_TOKEN: str = ""
 # ── Log de diagnóstico ────────────────────────────────────────────
 _LOG_MAX_BYTES = 100 * 1024  # 100 KB — rotaciona apagando metade quando ultrapassar
 _log_lock = threading.Lock()
+
+
+def _ssl_context() -> ssl.SSLContext:
+    try:
+        import certifi  # type: ignore[import-untyped]
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
 
 
 def sanitize_error_payload(text: str) -> str:
@@ -518,7 +528,7 @@ def _send_to_gist(body: str, label: str = "") -> bool:
         req.add_header("Accept", "application/vnd.github+json")
         req.add_header("Content-Type", "application/json")
         req.add_header("X-GitHub-Api-Version", "2022-11-28")
-        with urlopen(req, timeout=15) as resp:
+        with urlopen(req, timeout=15, context=_ssl_context()) as resp:
             ok = resp.status == 201
             if ok:
                 _diag("INFO", f"_send_to_gist({label}): enviado com sucesso (HTTP 201)")
@@ -590,7 +600,7 @@ def _send_to_error_api(payload: dict[str, str], label: str = "") -> bool:
             "Content-Type": "application/json",
             "User-Agent": "Fretio-ErrorReporter/1.0",
         })
-        with urlopen(req, timeout=15) as resp:
+        with urlopen(req, timeout=15, context=_ssl_context()) as resp:
             ok = 200 <= int(getattr(resp, "status", 0) or 0) < 300
             if ok:
                 _diag("INFO", f"_send_to_error_api({label}): enviado com sucesso (HTTP {resp.status})")

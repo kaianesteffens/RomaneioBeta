@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import platform
+import ssl
 import subprocess
 import sys
 import time
@@ -24,6 +25,15 @@ from urllib.request import Request, urlopen
 _HTTP_TIMEOUT = 15
 _GRACE_DAYS = 7  # dias de funcionamento offline após última validação
 _CONFIG_SECTIONS = ("fretio", "fretebot", "romaneio")
+
+
+def _ssl_context() -> ssl.SSLContext:
+    try:
+        import certifi  # type: ignore[import-untyped]
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
 
 
 def _load_toml_file(path: Path) -> dict:
@@ -195,7 +205,7 @@ def _fetch_licenses(gist_url: str) -> dict:
         "Accept": "application/json",
         "User-Agent": "Fretio-License/1.0",
     })
-    with urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+    with urlopen(req, timeout=_HTTP_TIMEOUT, context=_ssl_context()) as resp:
         return json.loads(resp.read())
 
 
@@ -208,7 +218,7 @@ def _fetch_licenses_fresh() -> dict:
     req = Request(api_url)
     req.add_header("Authorization", f"token {token}")
     req.add_header("Accept", "application/vnd.github+json")
-    with urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+    with urlopen(req, timeout=_HTTP_TIMEOUT, context=_ssl_context()) as resp:
         gist_data = json.loads(resp.read())
     content = gist_data.get("files", {}).get("licenses.json", {}).get("content", "")
     return json.loads(content) if content else {}
@@ -260,7 +270,7 @@ def _register_machine(key: str, machine_id: str, gist_url: str) -> bool:
         req = Request(api_url)
         req.add_header("Authorization", f"token {token}")
         req.add_header("Accept", "application/vnd.github+json")
-        with urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+        with urlopen(req, timeout=_HTTP_TIMEOUT, context=_ssl_context()) as resp:
             gist_data = json.loads(resp.read())
         content = gist_data.get("files", {}).get("licenses.json", {}).get("content", "")
         data = json.loads(content) if content else {}
@@ -289,7 +299,7 @@ def _register_machine(key: str, machine_id: str, gist_url: str) -> bool:
         req.add_header("Authorization", f"token {token}")
         req.add_header("Accept", "application/vnd.github+json")
         req.add_header("Content-Type", "application/json")
-        with urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+        with urlopen(req, timeout=_HTTP_TIMEOUT, context=_ssl_context()) as resp:
             return resp.status == 200
     except Exception:
         return False
@@ -352,7 +362,7 @@ class LicenseClient:
             "Content-Type": "application/json",
             "User-Agent": "Fretio-License/1.0",
         })
-        with urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+        with urlopen(req, timeout=_HTTP_TIMEOUT, context=_ssl_context()) as resp:
             data = json.loads(resp.read())
         return self._status_from_response(data)
 

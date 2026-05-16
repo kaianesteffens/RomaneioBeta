@@ -1,4 +1,5 @@
 import json
+import ssl
 import sys
 import time
 from pathlib import Path
@@ -29,7 +30,8 @@ def test_license_service_backend_valid_response_is_mapped_and_cached(monkeypatch
     requests = []
     saved = []
 
-    def fake_urlopen(req, timeout):
+    def fake_urlopen(req, timeout, context=None):
+        assert isinstance(context, ssl.SSLContext)
         requests.append(req)
         return FakeResponse(
             {
@@ -67,7 +69,8 @@ def test_license_service_backend_valid_response_is_mapped_and_cached(monkeypatch
 def test_license_service_backend_invalid_response_is_not_cached(monkeypatch):
     saved = []
 
-    def fake_urlopen(req, timeout):
+    def fake_urlopen(req, timeout, context=None):
+        assert isinstance(context, ssl.SSLContext)
         return FakeResponse(
             {
                 "valid": False,
@@ -107,7 +110,7 @@ def test_license_service_backend_offline_uses_existing_validation_cache(monkeypa
 
     monkeypatch.setenv("APPDATA", str(appdata))
     monkeypatch.setattr(lic, "_get_license_api_url", lambda: "https://licenses.example.test/validate")
-    monkeypatch.setattr(lic, "urlopen", lambda req, timeout: (_ for _ in ()).throw(URLError("offline")))
+    monkeypatch.setattr(lic, "urlopen", lambda req, timeout, context=None: (_ for _ in ()).throw(URLError("offline")))
 
     status = lic.validate_license("FBOT-CACHE", machine_id="MAQ-1")
 
@@ -122,7 +125,7 @@ def test_license_service_backend_offline_uses_existing_validation_cache(monkeypa
 def test_license_service_backend_offline_without_cache_returns_friendly_message(monkeypatch, tmp_path):
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
     monkeypatch.setattr(lic, "_get_license_api_url", lambda: "https://licenses.example.test/validate")
-    monkeypatch.setattr(lic, "urlopen", lambda req, timeout: (_ for _ in ()).throw(URLError("offline")))
+    monkeypatch.setattr(lic, "urlopen", lambda req, timeout, context=None: (_ for _ in ()).throw(URLError("offline")))
 
     status = lic.validate_license("FBOT-SEM-CACHE", machine_id="MAQ-1")
 
@@ -177,7 +180,8 @@ def test_license_api_url_does_not_use_or_send_error_report_token(monkeypatch, tm
     )
     requests = []
 
-    def fake_urlopen(req, timeout):
+    def fake_urlopen(req, timeout, context=None):
+        assert isinstance(context, ssl.SSLContext)
         requests.append(req)
         return FakeResponse({"valid": True, "owner": "Cliente API", "message": "Licença válida."})
 
@@ -207,3 +211,43 @@ def test_license_api_url_does_not_use_or_send_error_report_token(monkeypatch, tm
     assert "ghp_SECRET_ERROR_REPORT_TOKEN" not in body
     assert requests[0].get_header("Authorization") is None
     assert requests[0].full_url == "https://licenses.example.test/validate"
+
+
+def test_ssl_context_returns_secure_context():
+    context = lic._ssl_context()
+
+    assert isinstance(context, ssl.SSLContext)
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+
+
+def test_license_module_does_not_use_unverified_ssl_context():
+    source = Path(lic.__file__).read_text(encoding="utf-8")
+
+    assert "_create_unverified_context" not in source
+
+
+def test_validate_license_uses_env_api_url_when_defined(monkeypatch, tmp_path):
+    requests = []
+
+    def fake_urlopen(req, timeout, context=None):
+        assert isinstance(context, ssl.SSLContext)
+        requests.append(req)
+        return FakeResponse({"valid": True, "message": "Licença válida."})
+
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.delenv("FRETEBOT_LICENSE_API_URL", raising=False)
+    monkeypatch.delenv("Fretio_LICENSE_API_URL", raising=False)
+    monkeypatch.setenv("FRETIO_LICENSE_API_URL", "https://licenses.example.test/env-validate")
+    monkeypatch.setattr(lic, "urlopen", fake_urlopen)
+    monkeypatch.setattr(lic, "_save_validation_cache", lambda key, status: None)
+
+    status = lic.validate_license("fbot-env", machine_id="MAQ-ENV")
+
+    assert status.valid is True
+    assert len(requests) == 1
+    assert requests[0].full_url == "https://licenses.example.test/env-validate"
+    assert json.loads(requests[0].data.decode("utf-8")) == {
+        "key": "FBOT-ENV",
+        "machine_id": "MAQ-ENV",
+    }

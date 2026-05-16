@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 import traceback
@@ -50,6 +51,15 @@ _PREFERRED_UPDATE_ASSET_NAMES = (
     "romaneiobeta-update-latest.zip",
 )
 _APP_EXE_NAMES = ("Fretio.exe", "FreteBot.exe")
+
+
+def _ssl_context() -> ssl.SSLContext:
+    try:
+        import certifi  # type: ignore[import-untyped]
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
 
 
 def _log_path() -> Path:
@@ -137,7 +147,7 @@ def _github_api(url: str) -> Any:
         "Accept": "application/vnd.github+json",
         "User-Agent": "Fretio-Updater/1.0",
     })
-    with urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+    with urlopen(req, timeout=_HTTP_TIMEOUT, context=_ssl_context()) as resp:
         return json.loads(resp.read())
 
 
@@ -423,7 +433,7 @@ def _download_with_progress(
 ) -> None:
     """Baixa arquivo com progresso."""
     req = Request(url, headers={"User-Agent": "Fretio-Updater/1.0"})
-    with urlopen(req, timeout=120) as resp:
+    with urlopen(req, timeout=120, context=_ssl_context()) as resp:
         downloaded = 0
         chunk_size = 64 * 1024  # 64 KB
         with open(dest, "wb") as f:
