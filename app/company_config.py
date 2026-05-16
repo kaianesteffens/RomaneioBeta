@@ -8,9 +8,9 @@ from typing import Any
 
 
 _DEFAULT_GITHUB_REPO = "kaianesteffens/RomaneioBeta-releases"
-_DEFAULT_LICENSE_API_URL = "http://b3wjxbvlglanxcdwfoft4x0b.2.24.102.36.sslip.io/api/licenses/validate"
+_DEFAULT_LICENSE_API_URL = "https://fretio.api.br/api/licenses/validate"
 _DEFAULT_LICENSE_URL = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
-_DEFAULT_ERROR_API_URL = "http://b3wjxbvlglanxcdwfoft4x0b.2.24.102.36.sslip.io/api/errors"
+_DEFAULT_ERROR_API_URL = "https://fretio.api.br/api/errors"
 
 TODAS_UFS = [
     "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA",

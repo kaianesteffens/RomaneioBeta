@@ -55,9 +55,9 @@ jobs:
           }
           $aliasItems = foreach ($alias in $aliasCandidates) { '"' + ($alias -replace '"', '\"') + '"' }
           $aliasesToml = "[" + ($aliasItems -join ", ") + "]"
-          $licenseApiUrl = "http://b3wjxbvlglanxcdwfoft4x0b.2.24.102.36.sslip.io/api/licenses/validate"
+          $licenseApiUrl = "https://fretio.api.br/api/licenses/validate"
           $licenseUrl = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
-          $errorApiUrl = "http://b3wjxbvlglanxcdwfoft4x0b.2.24.102.36.sslip.io/api/errors"
+          $errorApiUrl = "https://fretio.api.br/api/errors"
           $content = @(
             '[fretio]'
             "github_repo = `"$githubRepo`""
