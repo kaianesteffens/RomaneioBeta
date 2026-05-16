@@ -3,7 +3,9 @@ fator_cubagem = 6000
 cache_dir = "cache"
 github_repo = "kaianesteffens/RomaneioBeta-releases"  # Repositório GitHub para auto-update
 github_repo_aliases = []  # Repositórios extras/fallback para sobreviver a renomeações
-license_url = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"  # URL do gist de licenças (administrador configura)
+# license_api_url é o servidor novo de licenças; license_url é o fallback antigo via Gist.
+license_api_url = "http://b3wjxbvlglanxcdwfoft4x0b.2.24.102.36.sslip.io/api/licenses/validate"
+license_url = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
 error_gist_id = ""  # ID do gist para envio automático de erros
 error_report_token = ""  # Token GitHub com scope 'gist' para envio de erros
 
