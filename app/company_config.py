@@ -8,6 +8,7 @@ from typing import Any
 
 
 _DEFAULT_GITHUB_REPO = "kaianesteffens/RomaneioBeta-releases"
+_DEFAULT_LICENSE_API_URL = "http://b3wjxbvlglanxcdwfoft4x0b.2.24.102.36.sslip.io/api/licenses/validate"
 _DEFAULT_LICENSE_URL = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
 
 TODAS_UFS = [
@@ -137,6 +138,7 @@ def _garantir_defaults_fretio(config: dict[str, Any]) -> bool:
 
     required_defaults = {
         "github_repo": _DEFAULT_GITHUB_REPO,
+        "license_api_url": _DEFAULT_LICENSE_API_URL,
         "license_url": _DEFAULT_LICENSE_URL,
     }
     for key, fallback in required_defaults.items():
@@ -155,6 +157,7 @@ def _criar_config_empresa_vazia(nome: str) -> None:
             "fator_cubagem": 6000,
             "cache_dir": "cache",
             "github_repo": _DEFAULT_GITHUB_REPO,
+            "license_api_url": _DEFAULT_LICENSE_API_URL,
             "license_url": _DEFAULT_LICENSE_URL,
         },
         "romaneio": {"cep_origem": ""},
