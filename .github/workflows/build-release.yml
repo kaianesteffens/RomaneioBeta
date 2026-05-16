@@ -55,11 +55,13 @@ jobs:
           }
           $aliasItems = foreach ($alias in $aliasCandidates) { '"' + ($alias -replace '"', '\"') + '"' }
           $aliasesToml = "[" + ($aliasItems -join ", ") + "]"
+          $licenseApiUrl = "http://b3wjxbvlglanxcdwfoft4x0b.2.24.102.36.sslip.io/api/licenses/validate"
           $licenseUrl = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
           $content = @(
             '[fretio]'
             "github_repo = `"$githubRepo`""
             "github_repo_aliases = $aliasesToml"
+            "license_api_url = `"$licenseApiUrl`""
             "license_url = `"$licenseUrl`""
             "update_public_key_b64 = `"$updatePublicKey`""
           ) -join "`r`n"
