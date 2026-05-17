@@ -3,6 +3,7 @@ import ssl
 import sys
 from pathlib import Path
 from urllib.error import URLError
+from urllib.parse import parse_qs, urlparse
 
 
 ROOT = Path(__file__).parent
@@ -83,6 +84,51 @@ def test_quotation_jobs_url_can_come_from_config(monkeypatch, tmp_path):
 
     assert result["job_id"] == 789
     assert captured["url"] == "https://config.example.test/jobs"
+
+
+def test_get_quotation_job_includes_identity_query(monkeypatch):
+    _prepare_identity(monkeypatch)
+    captured = {}
+
+    def fake_urlopen(req, timeout=8, context=None):
+        assert isinstance(context, ssl.SSLContext)
+        captured["url"] = req.full_url
+        return FakeResponse({"job": {"id": 123, "status": "queued"}}, status=200)
+
+    monkeypatch.setenv("FRETIO_QUOTATION_JOBS_API_URL", "https://jobs.example.test/api/quotations/jobs")
+    monkeypatch.setattr(qj, "urlopen", fake_urlopen)
+
+    result = qj.get_quotation_job(123, wait=True)
+
+    parsed = urlparse(captured["url"])
+    assert result["sent"] is True
+    assert result["job"] == {"id": 123, "status": "queued"}
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "jobs.example.test"
+    assert parsed.path == "/api/quotations/jobs/123"
+    assert parse_qs(parsed.query) == {
+        "license_key": ["FBOT-ABCD-1234-EFGH-5678"],
+        "machine_id": ["machine-123"],
+    }
+
+
+def test_get_without_identity_does_not_call_server(monkeypatch):
+    qj.configure(None)
+    monkeypatch.setattr(qj, "get_saved_license", lambda: "")
+    monkeypatch.setattr(qj, "get_machine_id", lambda: "machine-123")
+    called = False
+
+    def fake_urlopen(*args, **kwargs):
+        nonlocal called
+        called = True
+        return FakeResponse()
+
+    monkeypatch.setattr(qj, "urlopen", fake_urlopen)
+
+    result = qj.get_quotation_job(123, wait=True)
+
+    assert result["skipped"] is True
+    assert called is False
 
 
 def test_payload_sensitive_fields_are_removed(monkeypatch):
@@ -170,6 +216,8 @@ def test_update_quotation_job_result_sanitizes_result(monkeypatch):
     serialized = json.dumps(captured["payload"], ensure_ascii=False)
     assert result["updated"] is True
     assert captured["url"] == "https://jobs.example.test/api/quotations/jobs/123/result"
+    assert captured["payload"]["license_key"] == "FBOT-ABCD-1234-EFGH-5678"
+    assert captured["payload"]["machine_id"] == "machine-123"
     assert captured["payload"]["status"] == "finished"
     assert "error_message" not in captured["payload"]
     assert captured["payload"]["result"]["transportadoras"] == [
