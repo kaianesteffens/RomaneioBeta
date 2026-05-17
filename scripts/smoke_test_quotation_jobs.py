@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
@@ -48,6 +49,11 @@ def _api_url(base_url: str, path: str) -> str:
     if base.endswith("/api") and route.startswith("/api/"):
         route = route[4:]
     return base + route
+
+
+def _job_url(base_url: str, job_id: Any, license_key: str, machine_id: str) -> str:
+    query = urlencode({"license_key": license_key, "machine_id": machine_id})
+    return f"{_api_url(base_url, f'/api/quotations/jobs/{job_id}')}?{query}"
 
 
 def _headers(admin_token: str | None = None) -> dict[str, str]:
@@ -216,7 +222,7 @@ def main() -> int:
                 "license_key": license_key,
                 "machine_id": machine_id,
                 "app_version": "smoke-test",
-                "source_type": "smoke_test",
+                "source_type": "manual",
                 "payload": {"modo": "smoke_test"},
             },
         )
@@ -226,7 +232,7 @@ def main() -> int:
         if job_id:
             status_code, read_data = _request_json(
                 "GET",
-                _api_url(base_url, f"/api/quotations/jobs/{job_id}"),
+                _job_url(base_url, job_id, license_key, machine_id),
             )
             read = status_code is not None and 200 <= status_code < 300
 
@@ -254,7 +260,7 @@ def main() -> int:
 
             status_code, final_data = _request_json(
                 "GET",
-                _api_url(base_url, f"/api/quotations/jobs/{job_id}"),
+                _job_url(base_url, job_id, license_key, machine_id),
             )
             if status_code is not None and 200 <= status_code < 300:
                 final_status = (_job_status(final_data) or ("finished" if updated else "error")).strip().lower()
