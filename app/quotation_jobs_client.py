@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from license import get_machine_id, get_saved_license
@@ -276,7 +276,12 @@ def _get_quotation_job_now(job_id: Any) -> dict[str, Any]:
         result["skipped"] = True
         return result
     try:
-        url = f"{_get_quotation_jobs_api_url()}/{quote(job_id_text, safe='')}"
+        body = _identity_payload()
+        if not body["license_key"] or not body["machine_id"]:
+            result["skipped"] = True
+            return result
+        query = urlencode({"license_key": body["license_key"], "machine_id": body["machine_id"]})
+        url = f"{_get_quotation_jobs_api_url()}/{quote(job_id_text, safe='')}?{query}"
         status_code, data = _request_json(url, method="GET")
         result["status_code"] = status_code
         result["sent"] = status_code is not None and 200 <= int(status_code) < 300
