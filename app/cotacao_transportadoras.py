@@ -44,6 +44,12 @@ except Exception:
     def report_quotation_started(*a, **kw): return {"sent": False}
 
 try:
+    from quotation_jobs_client import create_quotation_job, update_quotation_job_result
+except Exception:
+    def create_quotation_job(*a, **kw): return {"created": False, "job_id": None}
+    def update_quotation_job_result(*a, **kw): return {"updated": False}
+
+try:
     from remote_permissions import (
         CARRIER_DISABLED_MESSAGE,
         KNOWN_CARRIERS,
@@ -386,8 +392,11 @@ def _quotation_usage_metadata(
     *,
     modo: str,
     quantidade_transportadoras: int | None = None,
+    job_id: Any = None,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {"modo": modo}
+    if job_id:
+        metadata["job_id"] = job_id
     if quantidade_transportadoras is not None:
         metadata["quantidade_transportadoras"] = int(quantidade_transportadoras)
     if not isinstance(dados, dict):
@@ -458,6 +467,7 @@ def _report_quotation_usage_results(
     resultados: list[ResultadoCotacao] | None,
     modo: str,
     duration_ms: int | None,
+    job_id: Any = None,
 ) -> None:
     try:
         results = resultados or []
@@ -476,6 +486,7 @@ def _report_quotation_usage_results(
             dados,
             modo=modo,
             quantidade_transportadoras=len(carrier_results),
+            job_id=job_id,
         )
         finished_status = "ok" if any(getattr(r, "status", "") == "ok" for r in results) else "error"
         report_quotation_finished(finished_status, duration_ms=duration_ms, metadata=metadata)
@@ -489,6 +500,207 @@ def _report_quotation_usage_results(
             )
     except Exception:
         pass
+
+
+def _coerce_enabled_flag(value: Any, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"1", "true", "sim", "yes", "on", "enabled", "habilitado"}:
+            return True
+        if normalized in {"0", "false", "nao", "não", "no", "off", "disabled", "desabilitado"}:
+            return False
+    return bool(value)
+
+
+def _quotation_job_carrier_lists(config: dict[str, Any]) -> tuple[list[str], list[str]]:
+    transportadoras_cfg = config.get("transportadoras", {}) if isinstance(config, dict) else {}
+    if not isinstance(transportadoras_cfg, dict):
+        transportadoras_cfg = {}
+    foco = str(MODO_FOCO_TRANSPORTADORA or "").strip().lower()
+    enabled: list[str] = []
+    disabled: list[str] = []
+
+    for carrier in KNOWN_CARRIERS:
+        canonical = normalize_carrier_name(carrier)
+        section = transportadoras_cfg.get(canonical, {})
+        if not isinstance(section, dict):
+            section = {}
+        configured = _coerce_enabled_flag(section.get("habilitado"), True)
+        if foco:
+            configured = canonical == foco
+        try:
+            remote_allowed, _message = carrier_enabled_or_message(canonical)
+        except Exception:
+            remote_allowed = True
+        if configured and remote_allowed:
+            enabled.append(canonical)
+        else:
+            disabled.append(canonical)
+    return enabled, disabled
+
+
+def _count_non_empty_lines(text: str) -> int:
+    try:
+        normalized = _normalizar_romaneio_colado(text)
+    except Exception:
+        normalized = str(text or "")
+    return sum(1 for line in normalized.splitlines() if line.strip())
+
+
+def _quotation_job_start_payload(
+    config: dict[str, Any],
+    *,
+    modo: str,
+    quantidade_pedidos: int | None = None,
+    quantidade_linhas: int | None = None,
+) -> dict[str, Any]:
+    enabled, disabled = _quotation_job_carrier_lists(config)
+    payload: dict[str, Any] = {
+        "modo": modo,
+        "transportadoras_habilitadas": enabled,
+        "transportadoras_desabilitadas": disabled,
+    }
+    if quantidade_pedidos is not None:
+        payload["quantidade_pedidos"] = max(0, int(quantidade_pedidos))
+    if quantidade_linhas is not None:
+        payload["quantidade_linhas"] = max(0, int(quantidade_linhas))
+    return payload
+
+
+def _create_quotation_job_best_effort(source_type: str, payload: dict[str, Any]) -> Any:
+    try:
+        result = create_quotation_job(source_type, payload=payload, wait=True)
+        job_id = result.get("job_id") if isinstance(result, dict) else None
+        if not job_id:
+            status_code = result.get("status_code") if isinstance(result, dict) else None
+            if status_code:
+                _log_diag(f"Job de cotação não criado (HTTP {status_code})")
+            else:
+                _log_diag("Job de cotação não criado; cotação local continuará")
+        return job_id
+    except Exception as exc:
+        _log_diag(f"Falha ao criar job de cotação; cotação local continuará: {exc}")
+        return None
+
+
+def _quotation_job_provider_status(status: Any) -> str:
+    normalized = _usage_status_from_result(status)
+    if normalized == "ok":
+        return "ok"
+    if normalized == "desabilitada":
+        return "disabled"
+    return "error"
+
+
+def _quotation_job_result_payload(
+    config: dict[str, Any],
+    resultados: list[ResultadoCotacao] | None,
+) -> dict[str, Any]:
+    carrier_results = _carrier_usage_defaults(config)
+    prazo_por_provider: dict[str, int | None] = {provider: None for provider in carrier_results}
+
+    for result in resultados or []:
+        canonical = normalize_carrier_name(getattr(result, "transportadora", ""))
+        if canonical not in carrier_results:
+            continue
+        carrier_results[canonical] = {
+            "status": _usage_status_from_result(getattr(result, "status", "")),
+            "duration_ms": getattr(result, "duration_ms", None),
+            "value_cents": _value_cents_from_frete(getattr(result, "valor_frete", None)),
+        }
+        try:
+            prazo = getattr(result, "prazo_dias", None)
+            prazo_por_provider[canonical] = int(prazo) if prazo is not None else None
+        except Exception:
+            prazo_por_provider[canonical] = None
+
+    transportadoras: list[dict[str, Any]] = []
+    success_count = 0
+    error_count = 0
+    disabled_count = 0
+
+    for provider, data in carrier_results.items():
+        status = _quotation_job_provider_status(data.get("status"))
+        if status == "ok":
+            success_count += 1
+        elif status == "disabled":
+            disabled_count += 1
+        else:
+            error_count += 1
+
+        item: dict[str, Any] = {
+            "provider": provider,
+            "status": status,
+        }
+        if data.get("value_cents") is not None:
+            item["value_cents"] = data.get("value_cents")
+        if data.get("duration_ms") is not None:
+            item["duration_ms"] = data.get("duration_ms")
+        if prazo_por_provider.get(provider) is not None:
+            item["prazo_dias"] = prazo_por_provider[provider]
+        transportadoras.append(item)
+
+    return {
+        "summary": {
+            "status": "ok" if success_count > 0 else "error",
+            "total_providers": len(transportadoras),
+            "success_count": success_count,
+            "error_count": error_count,
+            "disabled_count": disabled_count,
+        },
+        "transportadoras": transportadoras,
+    }
+
+
+def _quotation_results_indicate_general_error(resultados: list[ResultadoCotacao] | None) -> bool:
+    if resultados is None:
+        return True
+    if not resultados:
+        return False
+    provider_results = [
+        r for r in resultados
+        if normalize_carrier_name(getattr(r, "transportadora", "")) in set(KNOWN_CARRIERS)
+    ]
+    if provider_results:
+        return False
+    return any(str(getattr(r, "status", "") or "").startswith("erro") for r in resultados)
+
+
+def _quotation_job_error_message(resultados: list[ResultadoCotacao] | None) -> str:
+    for result in resultados or []:
+        if normalize_carrier_name(getattr(result, "transportadora", "")) in set(KNOWN_CARRIERS):
+            continue
+        detalhe = str(getattr(result, "detalhes", "") or "").strip()
+        if detalhe:
+            return re.sub(r"\s+", " ", detalhe)[:240]
+    return ""
+
+
+def _finish_quotation_job_best_effort(
+    job_id: Any,
+    *,
+    status: str,
+    result: dict[str, Any] | None,
+    error_message: str | None = None,
+) -> None:
+    if not job_id:
+        return
+    try:
+        update_result = update_quotation_job_result(
+            job_id,
+            status,
+            result=result,
+            error_message=error_message,
+            wait=False,
+        )
+        if isinstance(update_result, dict) and not update_result.get("queued") and not update_result.get("updated"):
+            _log_diag("Atualização do job de cotação não foi enfileirada")
+    except Exception as exc:
+        _log_diag(f"Falha ao atualizar job de cotação; app seguirá normalmente: {exc}")
 
 
 def _config_template_path() -> Path | None:
@@ -2580,7 +2792,14 @@ async def cotar_transportadoras(
     started_at = time.monotonic()
     dados: dict[str, Any] | None = None
     resultados: list[ResultadoCotacao] | None = None
-    report_quotation_started(metadata=_quotation_usage_metadata(None, modo="pdf"))
+    job_payload = _quotation_job_start_payload(
+        config,
+        modo="pdf",
+        quantidade_pedidos=len(pedidos or []),
+    )
+    job_id = await asyncio.to_thread(_create_quotation_job_best_effort, "romaneio", job_payload)
+    report_quotation_started(metadata=_quotation_usage_metadata(None, modo="pdf", job_id=job_id))
+    cancelled = False
     try:
         dados = _dados_envio(extrator=extrator, pedidos=pedidos)
         if not dados:
@@ -2595,13 +2814,26 @@ async def cotar_transportadoras(
             progresso_callback=progresso_callback,
         )
         return resultados
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
     finally:
+        duration_ms = int((time.monotonic() - started_at) * 1000)
         _report_quotation_usage_results(
             config=config,
             dados=dados,
             resultados=resultados,
             modo="pdf",
-            duration_ms=int((time.monotonic() - started_at) * 1000),
+            duration_ms=duration_ms,
+            job_id=job_id,
+        )
+        general_error = _quotation_results_indicate_general_error(resultados)
+        job_status = "cancelled" if cancelled else ("error" if general_error else "finished")
+        _finish_quotation_job_best_effort(
+            job_id,
+            status=job_status,
+            result=_quotation_job_result_payload(config, resultados),
+            error_message=_quotation_job_error_message(resultados) if general_error else None,
         )
 
 
@@ -2620,18 +2852,33 @@ async def cotar_transportadoras_romaneio_colado(
     dados: dict[str, Any] | None = None
     resultados: list[ResultadoCotacao] | None = None
     modo = "fornecedor" if cnpj_remetente else "romaneio_colado"
-    report_quotation_started(metadata=_quotation_usage_metadata(None, modo=modo))
+    job_payload = _quotation_job_start_payload(
+        config,
+        modo=modo,
+        quantidade_linhas=_count_non_empty_lines(romaneio_colado),
+    )
+    job_id = await asyncio.to_thread(_create_quotation_job_best_effort, "manual", job_payload)
+    report_quotation_started(metadata=_quotation_usage_metadata(None, modo=modo, job_id=job_id))
+    cancelled = False
     try:
         dados = _dados_envio_romaneio_colado(romaneio_colado)
     except ValueError as e:
         _log_diag(f"Romaneio colado inválido: {e}")
         resultados = [ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=str(e))]
+        duration_ms = int((time.monotonic() - started_at) * 1000)
         _report_quotation_usage_results(
             config=config,
             dados=dados,
             resultados=resultados,
             modo=modo,
-            duration_ms=int((time.monotonic() - started_at) * 1000),
+            duration_ms=duration_ms,
+            job_id=job_id,
+        )
+        _finish_quotation_job_best_effort(
+            job_id,
+            status="error",
+            result=_quotation_job_result_payload(config, resultados),
+            error_message=_quotation_job_error_message(resultados),
         )
         return resultados
     try:
@@ -2645,13 +2892,26 @@ async def cotar_transportadoras_romaneio_colado(
             tipo_frete=tipo_frete,
         )
         return resultados
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
     finally:
+        duration_ms = int((time.monotonic() - started_at) * 1000)
         _report_quotation_usage_results(
             config=config,
             dados=dados,
             resultados=resultados,
             modo=modo,
-            duration_ms=int((time.monotonic() - started_at) * 1000),
+            duration_ms=duration_ms,
+            job_id=job_id,
+        )
+        general_error = _quotation_results_indicate_general_error(resultados)
+        job_status = "cancelled" if cancelled else ("error" if general_error else "finished")
+        _finish_quotation_job_best_effort(
+            job_id,
+            status=job_status,
+            result=_quotation_job_result_payload(config, resultados),
+            error_message=_quotation_job_error_message(resultados) if general_error else None,
         )
 
 

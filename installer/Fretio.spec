@@ -60,6 +60,7 @@ hiddenimports = [
     "remote_permissions",
     "error_reporter",
     "usage_reporter",
+    "quotation_jobs_client",
     "error_handler",
     "logging_conf",
     "extrator_nfe",
