@@ -23,6 +23,9 @@ from error_handler import (
     silent_on_error,
 )
 
+# Desabilitar envio para servidor durante testes — evita ruído na API de produção
+ErrorHandler.configure(report_to_server=False)
+
 # Configurar logging para ver tudo
 logging.basicConfig(
     level=logging.DEBUG,
