@@ -11,6 +11,7 @@ license_url = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420a
 error_api_url = "https://fretio.api.br/api/errors"
 usage_api_url = "https://fretio.api.br/api/usage/events"
 quotation_jobs_api_url = "https://fretio.api.br/api/quotations/jobs"
+quotation_normalization_api_url = "https://fretio.api.br/api/quotations/normalize"
 error_gist_id = ""  # ID do gist para envio automático de erros
 error_report_token = ""  # Token GitHub com scope 'gist' para envio de erros
 

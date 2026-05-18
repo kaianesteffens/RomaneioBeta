@@ -405,3 +405,5 @@ def test_normalize_embedded_config_backfills_license_api_url(monkeypatch):
     assert data["fretebot"]["license_config_api_url"] == normalize_embedded_config.DEFAULT_LICENSE_CONFIG_API_URL
     assert data["fretio"]["error_api_url"] == normalize_embedded_config.DEFAULT_ERROR_API_URL
     assert data["fretebot"]["error_api_url"] == normalize_embedded_config.DEFAULT_ERROR_API_URL
+    assert data["fretio"]["quotation_normalization_api_url"] == normalize_embedded_config.DEFAULT_QUOTATION_NORMALIZATION_API_URL
+    assert data["fretebot"]["quotation_normalization_api_url"] == normalize_embedded_config.DEFAULT_QUOTATION_NORMALIZATION_API_URL

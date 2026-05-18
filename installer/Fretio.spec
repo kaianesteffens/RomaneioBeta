@@ -61,6 +61,8 @@ hiddenimports = [
     "error_reporter",
     "usage_reporter",
     "quotation_jobs_client",
+    "quotation_normalization_client",
+    "quotation_shadow_compare",
     "error_handler",
     "logging_conf",
     "extrator_nfe",

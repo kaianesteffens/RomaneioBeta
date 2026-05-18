@@ -50,6 +50,11 @@ except Exception:
     def update_quotation_job_result(*a, **kw): return {"updated": False}
 
 try:
+    from quotation_normalization_client import normalize_quotation_remote_shadow
+except Exception:
+    def normalize_quotation_remote_shadow(*a, **kw): return {"queued": False, "sent": False}
+
+try:
     from remote_permissions import (
         CARRIER_DISABLED_MESSAGE,
         KNOWN_CARRIERS,
@@ -701,6 +706,27 @@ def _finish_quotation_job_best_effort(
             _log_diag("Atualização do job de cotação não foi enfileirada")
     except Exception as exc:
         _log_diag(f"Falha ao atualizar job de cotação; app seguirá normalmente: {exc}")
+
+
+def _start_quotation_normalization_shadow(
+    source_type: str,
+    *,
+    dados: dict[str, Any] | None,
+    modo: str,
+    cep_origem: str = "",
+) -> None:
+    if not isinstance(dados, dict) or not dados:
+        return
+    try:
+        payload = dict(dados)
+        payload["modo"] = str(modo or "").strip()
+        if cep_origem:
+            payload["cep_origem"] = cep_origem
+        result = normalize_quotation_remote_shadow(source_type, payload=payload, wait=False)
+        if isinstance(result, dict) and result.get("queued"):
+            _log_diag("Normalizacao remota shadow enfileirada")
+    except Exception as exc:
+        _log_diag(f"Falha ao enfileirar normalizacao remota shadow: {exc}")
 
 
 def _config_template_path() -> Path | None:
@@ -2806,6 +2832,12 @@ async def cotar_transportadoras(
             _log_diag("Sem dados de envio para cotação")
             resultados = [ResultadoCotacao(transportadora="GERAL", status="erro", detalhes="Nenhum pedido disponível para cotação")]
             return resultados
+        _start_quotation_normalization_shadow(
+            "romaneio",
+            dados=dados,
+            modo="pdf",
+            cep_origem=cep_origem,
+        )
         resultados = await _executar_cotacoes_com_dados(
             config=config,
             dados=dados,
@@ -2882,6 +2914,12 @@ async def cotar_transportadoras_romaneio_colado(
         )
         return resultados
     try:
+        _start_quotation_normalization_shadow(
+            "manual",
+            dados=dados,
+            modo=modo,
+            cep_origem=cep_origem,
+        )
         resultados = await _executar_cotacoes_com_dados(
             config=config,
             dados=dados,
@@ -2934,6 +2972,12 @@ async def diagnosticar_transportadoras(
         "valor": float(valor),
         "volumes": int(volumes or 1),
     }
+    _start_quotation_normalization_shadow(
+        "manual",
+        dados=dados,
+        modo="diagnostico",
+        cep_origem=cep_origem,
+    )
     return await _executar_cotacoes_com_dados(
         config=config,
         dados=dados,

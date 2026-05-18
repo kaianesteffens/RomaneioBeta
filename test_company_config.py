@@ -34,6 +34,7 @@ def test_company_config_creates_and_lists_empty_company_config(monkeypatch, tmp_
     assert data["fretio"]["error_api_url"] == cc._DEFAULT_ERROR_API_URL
     assert data["fretio"]["usage_api_url"] == cc._DEFAULT_USAGE_API_URL
     assert data["fretio"]["quotation_jobs_api_url"] == cc._DEFAULT_QUOTATION_JOBS_API_URL
+    assert data["fretio"]["quotation_normalization_api_url"] == cc._DEFAULT_QUOTATION_NORMALIZATION_API_URL
     assert data["romaneio"]["cep_origem"] == ""
     assert data["transportadoras"]["braspress"]["habilitado"] is False
     assert data["transportadoras"]["rodonaves"]["ufs_atendidas"] == cc.TODAS_UFS
@@ -78,6 +79,7 @@ def test_company_config_migrates_existing_root_config(monkeypatch, tmp_path):
     assert data["fretio"]["error_api_url"] == cc._DEFAULT_ERROR_API_URL
     assert data["fretio"]["usage_api_url"] == cc._DEFAULT_USAGE_API_URL
     assert data["fretio"]["quotation_jobs_api_url"] == cc._DEFAULT_QUOTATION_JOBS_API_URL
+    assert data["fretio"]["quotation_normalization_api_url"] == cc._DEFAULT_QUOTATION_NORMALIZATION_API_URL
 
 
 def test_company_config_migrates_root_config_without_license_api_url(monkeypatch, tmp_path):
@@ -100,6 +102,7 @@ def test_company_config_migrates_root_config_without_license_api_url(monkeypatch
     assert data["fretio"]["error_api_url"] == cc._DEFAULT_ERROR_API_URL
     assert data["fretio"]["usage_api_url"] == cc._DEFAULT_USAGE_API_URL
     assert data["fretio"]["quotation_jobs_api_url"] == cc._DEFAULT_QUOTATION_JOBS_API_URL
+    assert data["fretio"]["quotation_normalization_api_url"] == cc._DEFAULT_QUOTATION_NORMALIZATION_API_URL
 
 
 def test_company_config_rename_sanitizes_folder_and_updates_last_company(monkeypatch, tmp_path):
