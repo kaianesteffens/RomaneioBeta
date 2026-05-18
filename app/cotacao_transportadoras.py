@@ -50,11 +50,6 @@ except Exception:
     def update_quotation_job_result(*a, **kw): return {"updated": False}
 
 try:
-    from quotation_normalization_client import normalize_quotation_remote_shadow
-except Exception:
-    def normalize_quotation_remote_shadow(*a, **kw): return {"queued": False, "sent": False}
-
-try:
     from remote_permissions import (
         CARRIER_DISABLED_MESSAGE,
         KNOWN_CARRIERS,
@@ -706,27 +701,6 @@ def _finish_quotation_job_best_effort(
             _log_diag("Atualização do job de cotação não foi enfileirada")
     except Exception as exc:
         _log_diag(f"Falha ao atualizar job de cotação; app seguirá normalmente: {exc}")
-
-
-def _start_quotation_normalization_shadow(
-    source_type: str,
-    *,
-    dados: dict[str, Any] | None,
-    modo: str,
-    cep_origem: str = "",
-) -> None:
-    if not isinstance(dados, dict) or not dados:
-        return
-    try:
-        payload = dict(dados)
-        payload["modo"] = str(modo or "").strip()
-        if cep_origem:
-            payload["cep_origem"] = cep_origem
-        result = normalize_quotation_remote_shadow(source_type, payload=payload, wait=False)
-        if isinstance(result, dict) and result.get("queued"):
-            _log_diag("Normalizacao remota shadow enfileirada")
-    except Exception as exc:
-        _log_diag(f"Falha ao enfileirar normalizacao remota shadow: {exc}")
 
 
 def _config_template_path() -> Path | None:
@@ -1618,6 +1592,24 @@ class TransportadoraSession:
                     )
                 return
 
+            # Verifica Chrome uma única vez antes de iniciar qualquer prelogin.
+            # Se não encontrado, reporta um único erro e aborta sem tentar cada transportadora.
+            try:
+                from fretio.providers.base import find_chrome as _find_chrome_global
+                _find_chrome_global()
+            except FileNotFoundError as _chrome_err:
+                _chrome_msg = str(_chrome_err)
+                _log_diag(f"Chrome não encontrado — prelogin cancelado: {_chrome_msg}")
+                if callback:
+                    callback("Google Chrome não encontrado. Instale o Chrome para usar o Fretio.")
+                try:
+                    report_error_message(_chrome_msg, context="chrome_missing")
+                except Exception:
+                    pass
+                return
+            except Exception:
+                pass
+
             effective_config = dict(self.config) if isinstance(self.config, dict) else {}
             transportadoras_cfg = effective_config.get("transportadoras", {}) if isinstance(effective_config, dict) else {}
             if MODO_FOCO_TRANSPORTADORA:
@@ -1770,7 +1762,10 @@ class TransportadoraSession:
                                 await asyncio.sleep(wait)
                                 continue
                             _log_diag(f"Pre-login {nome} falhou: {e}")
-                            report_error_message(f"Pre-login {nome} falhou: {e}", context=f"prelogin_{nome}")
+                            # Chrome ausente já foi reportado globalmente com module="chrome_missing"
+                            _e_str = str(e)
+                            if "Google Chrome" not in _e_str and "chrome" not in _e_str.lower():
+                                report_error_message(f"Pre-login {nome} falhou: {_e_str}", context=f"prelogin_{nome}")
                             if login_status_callback:
                                 login_status_callback(nome, "fail")
                             return nome, False
@@ -2598,7 +2593,10 @@ async def _executar_cotacoes_com_dados(
             import traceback
             tb = ''.join(traceback.format_exception(type(erro), erro, erro.__traceback__))
             _log_diag(f"Erro em cotação {nome_task}: {type(erro).__name__}: {erro}\n{tb}")
-            report_error(type(erro), erro, erro.__traceback__, context=f"cotacao_{nome_task}")
+            # Falhas transitórias de provider (timeout, rede, browser fechado) são esperadas
+            # e não devem poluir a API de erros com ruído técnico.
+            if not _is_expected_transient_failure(erro):
+                report_error(type(erro), erro, erro.__traceback__, context=f"cotacao_{nome_task}")
             if falhas_para_retry is not None:
                 falhas_para_retry.append((nome_task, provider_task, kwargs_task))
                 _log_diag(f"{nome_task} enfileirada para retry após as demais completarem")
@@ -2689,7 +2687,12 @@ async def _executar_cotacoes_com_dados(
                 _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
                 return
 
-            report_error_message(f"{nome_task} retornou None: {detalhe}", context=f"cotacao_{nome_task}")
+            # Normaliza a mensagem removendo partes variáveis (ex: paths de diagnóstico TRD)
+            # para que o rate-limiter do error_reporter deduplique corretamente entre execuções.
+            detalhe_report = re.sub(r'\s*\(diagnóstico salvo em:[^)]*\)', '', str(detalhe or "")).strip()
+            if not detalhe_report:
+                detalhe_report = str(detalhe or "Sem resultado")
+            report_error_message(f"{nome_task} retornou None: {detalhe_report}", context=f"cotacao_{nome_task}")
             if falhas_para_retry is not None:
                 falhas_para_retry.append((nome_task, provider_task, kwargs_task))
                 _log_diag(f"{nome_task} enfileirada para retry após as demais completarem")
@@ -2733,8 +2736,36 @@ async def _executar_cotacoes_com_dados(
             "não cadastrada",
             "nao cadastrada",
             "rota:",
+            # Limitação estrutural Eucatur/SSW — não é erro técnico
+            "não suporta mais de 11 volumes",
+            "nao suporta mais de 11 volumes",
         )
         return any(p in d for p in patterns)
+
+    def _is_expected_transient_failure(erro: BaseException) -> bool:
+        """Detecta falhas transitórias esperadas de provider que NÃO devem ir para report_error.
+
+        Timeouts do provider e erros de rede/browser são falhas controladas — não bugs no código."""
+        if isinstance(erro, TimeoutError):
+            return True
+        err_str = str(erro).lower()
+        transient_patterns = (
+            "target page, context or browser has been closed",
+            "target closed",
+            "frame was detached",
+            "net::err_aborted",
+            "net::err_connection",
+            "net::err_name",
+            "net::err_timed_out",
+            "net::err_internet",
+            "net::err_network",
+            "formulário de cotação não carregou",
+            "formulario de cotacao nao carregou",
+            "page.goto",
+            "valor de frete nao encontrado",
+            "valor de frete não encontrado",
+        )
+        return any(p in err_str for p in transient_patterns)
 
     # ── Rodada 1: executa todas as cotações ──
     falhas_para_retry: list[tuple[str, Any, dict[str, Any]]] = []
@@ -2832,12 +2863,6 @@ async def cotar_transportadoras(
             _log_diag("Sem dados de envio para cotação")
             resultados = [ResultadoCotacao(transportadora="GERAL", status="erro", detalhes="Nenhum pedido disponível para cotação")]
             return resultados
-        _start_quotation_normalization_shadow(
-            "romaneio",
-            dados=dados,
-            modo="pdf",
-            cep_origem=cep_origem,
-        )
         resultados = await _executar_cotacoes_com_dados(
             config=config,
             dados=dados,
@@ -2914,12 +2939,6 @@ async def cotar_transportadoras_romaneio_colado(
         )
         return resultados
     try:
-        _start_quotation_normalization_shadow(
-            "manual",
-            dados=dados,
-            modo=modo,
-            cep_origem=cep_origem,
-        )
         resultados = await _executar_cotacoes_com_dados(
             config=config,
             dados=dados,
@@ -2972,12 +2991,6 @@ async def diagnosticar_transportadoras(
         "valor": float(valor),
         "volumes": int(volumes or 1),
     }
-    _start_quotation_normalization_shadow(
-        "manual",
-        dados=dados,
-        modo="diagnostico",
-        cep_origem=cep_origem,
-    )
     return await _executar_cotacoes_com_dados(
         config=config,
         dados=dados,

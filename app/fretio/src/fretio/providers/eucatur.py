@@ -594,7 +594,19 @@ class EucaturProvider(ProviderBase):
                     )
                     return None
                 volumes = soma
+
+                # Verifica limite de campos cuba1..cuba11 ANTES de iniciar o browser.
+                # Limitação estrutural do SSW — tratada como restrição conhecida, não erro técnico.
+                if soma > 11:
+                    self.last_error = "Eucatur não suporta mais de 11 volumes"
+                    logger.info(f"[{self.nome}] {self.last_error} ({soma} volumes)")
+                    return None
+
             elif volumes > 0 and comprimento_cm > 0 and largura_cm > 0 and altura_cm > 0:
+                if volumes > 11:
+                    self.last_error = "Eucatur não suporta mais de 11 volumes"
+                    logger.info(f"[{self.nome}] {self.last_error} ({volumes} volumes)")
+                    return None
                 cubagens_cm = [
                     {
                         "quantidade": int(volumes),
