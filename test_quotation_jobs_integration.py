@@ -75,6 +75,12 @@ def test_cotacao_continues_when_create_quotation_job_fails(monkeypatch):
     monkeypatch.setattr(ct, "report_quotation_started", lambda *args, **kwargs: {"sent": False})
     monkeypatch.setattr(ct, "report_quotation_finished", lambda *args, **kwargs: {"sent": False})
     monkeypatch.setattr(ct, "report_carrier_quotation_result", lambda *args, **kwargs: {"sent": False})
+    shadow_calls = []
+    monkeypatch.setattr(
+        ct,
+        "normalize_quotation_remote_shadow",
+        lambda *args, **kwargs: shadow_calls.append((args, kwargs)) or {"queued": True},
+    )
 
     async def fake_execute(**kwargs):
         return [
@@ -99,3 +105,6 @@ def test_cotacao_continues_when_create_quotation_job_fails(monkeypatch):
     assert resultados[0].status == "ok"
     assert resultados[0].valor_frete == 55.25
     assert updates == []
+    assert shadow_calls
+    assert shadow_calls[0][0][0] == "manual"
+    assert shadow_calls[0][1]["wait"] is False

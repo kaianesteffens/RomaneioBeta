@@ -100,6 +100,7 @@ from usage_reporter import (
     report_tracking_started,
 )
 from quotation_jobs_client import configure as _quotation_jobs_configure
+from quotation_normalization_client import configure as _quotation_normalization_configure
 from extrator_nfe import extrair_arquivo as extrair_nfe_arquivo, NotaFiscal, identificar_transportadora, formatar_nota_resumo, parsear_info_complementar
 from rastreamento import rastrear_multiplas, ResultadoRastreio, obter_link_rastreio
 from ui_components import (
@@ -307,6 +308,7 @@ def _migrate_appdata_fretebot_to_fretio() -> None:
                 "error_api_url",
                 "usage_api_url",
                 "quotation_jobs_api_url",
+                "quotation_normalization_api_url",
                 "error_gist_id",
                 "error_report_token",
             ):
@@ -847,6 +849,7 @@ class RomaneioWindow(QMainWindow):
         _er_configure(self._config_path)
         _usage_configure(self._config_path)
         _quotation_jobs_configure(self._config_path)
+        _quotation_normalization_configure(self._config_path)
         self._proxima_empresa: str | None = None
         self.extrator = ExtratorPedidos()
         self.pedidos = []

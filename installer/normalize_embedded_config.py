@@ -12,6 +12,7 @@ DEFAULT_LICENSE_URL = "https://gist.githubusercontent.com/kaianesteffens/4a327b3
 DEFAULT_ERROR_API_URL = "https://fretio.api.br/api/errors"
 DEFAULT_USAGE_API_URL = "https://fretio.api.br/api/usage/events"
 DEFAULT_QUOTATION_JOBS_API_URL = "https://fretio.api.br/api/quotations/jobs"
+DEFAULT_QUOTATION_NORMALIZATION_API_URL = "https://fretio.api.br/api/quotations/normalize"
 
 
 def _ensure_sections(data: dict) -> None:
@@ -34,6 +35,7 @@ def _ensure_sections(data: dict) -> None:
         "error_api_url": DEFAULT_ERROR_API_URL,
         "usage_api_url": DEFAULT_USAGE_API_URL,
         "quotation_jobs_api_url": DEFAULT_QUOTATION_JOBS_API_URL,
+        "quotation_normalization_api_url": DEFAULT_QUOTATION_NORMALIZATION_API_URL,
     }
     for key, default in required.items():
         fretio_value = str(fretio.get(key, "") or "").strip()
