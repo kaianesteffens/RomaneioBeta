@@ -469,3 +469,234 @@ def test_erros_fake_nao_aparecem_em_fluxo_producao():
     assert "Database connection failed" not in content
     assert "Sempre falha" not in content
     assert "Conectar ao banco de dados" not in content
+
+
+def test_rodonaves_transient_errors_viram_falha_controlada(monkeypatch):
+    """Erros transitórios da Rodonaves (timeout, page closed, frame detached, ERR_ABORTED)
+    capturados em last_error NÃO devem ser reportados à API e devem gerar retry."""
+    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    reportados = []
+    monkeypatch.setattr(ct, "report_error_message", lambda *a, **kw: reportados.append(a))
+    monkeypatch.setattr(ct, "report_error", lambda *a, **kw: reportados.append(a))
+
+    mensagens_transient = [
+        "Page.goto Timeout 15000ms para https://cliente.rte.com.br/?showLogin=true",
+        "net::ERR_ABORTED; maybe frame was detached",
+        "Target page, context or browser has been closed",
+        "Formulário de cotação não carregou",
+        "valor de frete nao encontrado no resultado",
+    ]
+
+    for msg_erro in mensagens_transient:
+        _captured_error = msg_erro
+
+        class FakeRodonavesProvider:
+            nome = "RODONAVES"
+            _passo_atual = "login"
+
+            @property
+            def last_error(self):
+                return _captured_error
+
+            async def coteir(self, **kwargs):
+                return None
+
+            async def cleanup(self):
+                pass
+
+        class FakeFactory:
+            def __init__(self, config):
+                pass
+
+            def is_available(self, nome):
+                return nome == "rodonaves"
+
+            def get_provider_config(self, nome):
+                if nome == "rodonaves":
+                    return {
+                        "habilitado": True,
+                        "dominio": "RTE",
+                        "usuario": "12345678000190",
+                        "senha": "pw",
+                        "cnpj_pagador": "12345678000190",
+                        "ufs_atendidas": ["SP"],
+                    }
+                return {"habilitado": False}
+
+            def create(self, nome, **kwargs):
+                if nome == "rodonaves":
+                    return FakeRodonavesProvider()
+                return None
+
+        monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+        reportados.clear()
+
+        config = {
+            "fretio": {},
+            "romaneio": {"cep_origem": "01310100"},
+            "transportadoras": {"rodonaves": {"habilitado": True}},
+        }
+        dados = {
+            "destino_cep": "01310200",
+            "uf_destino": "SP",
+            "cnpj_destinatario": "12345678000190",
+            "peso": 5.0,
+            "valor": 300.0,
+            "volumes": 1,
+            "cubagem_m3": 0.03,
+            "cubagens": [{"quantidade": 1, "comprimento_cm": 30, "largura_cm": 20, "altura_cm": 20}],
+            "descricoes_itens": [],
+        }
+
+        resultados = asyncio.run(
+            ct._executar_cotacoes_com_dados(config=config, dados=dados, cep_origem="01310100")
+        )
+
+        assert len(reportados) == 0, (
+            f"Erro transitório '{msg_erro[:60]}...' não deveria gerar report, mas gerou: {reportados}"
+        )
+        rod_results = [r for r in resultados if r.transportadora == "RODONAVES"]
+        assert len(rod_results) >= 1
+        assert rod_results[-1].status == "erro"
+
+
+def test_copex_timeout_aguardando_resultado_falha_controlada(monkeypatch):
+    """Timeout no passo aguardando_resultado da Copex vira falha controlada sem report_error."""
+    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    report_calls = []
+    monkeypatch.setattr(ct, "report_error", lambda *a, **kw: report_calls.append(a))
+    monkeypatch.setattr(ct, "report_error_message", lambda *a, **kw: report_calls.append(a))
+
+    class FakeCopexTimeout:
+        nome = "COOPEX"
+        _passo_atual = "aguardando_resultado"
+        last_error = "Timeout aguardando resultado da Copex"
+
+        async def coteir(self, **kwargs):
+            return None
+
+        async def cleanup(self):
+            pass
+
+    class FakeFactory:
+        def __init__(self, config):
+            pass
+
+        def is_available(self, nome):
+            return nome == "coopex"
+
+        def get_provider_config(self, nome):
+            if nome == "coopex":
+                return {
+                    "habilitado": True,
+                    "dominio": "DOM",
+                    "usuario": "usr",
+                    "senha": "pw",
+                    "ufs_atendidas": ["SP"],
+                }
+            return {"habilitado": False}
+
+        def create(self, nome, **kwargs):
+            if nome == "coopex":
+                return FakeCopexTimeout()
+            return None
+
+    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+
+    config = {
+        "fretio": {},
+        "romaneio": {"cep_origem": "01310100"},
+        "transportadoras": {"coopex": {"habilitado": True}},
+    }
+    dados = {
+        "destino_cep": "01310200",
+        "uf_destino": "SP",
+        "cnpj_destinatario": "12345678000190",
+        "peso": 5.0,
+        "valor": 300.0,
+        "volumes": 1,
+        "cubagem_m3": 0.03,
+        "cubagens": [{"quantidade": 1, "comprimento_cm": 30, "largura_cm": 20, "altura_cm": 20}],
+        "descricoes_itens": [],
+    }
+
+    resultados = asyncio.run(
+        ct._executar_cotacoes_com_dados(config=config, dados=dados, cep_origem="01310100")
+    )
+
+    assert len(report_calls) == 0, f"Timeout Copex não deveria gerar report, mas gerou: {report_calls}"
+    copex_results = [r for r in resultados if r.transportadora == "COOPEX"]
+    assert len(copex_results) >= 1
+    assert copex_results[-1].status == "erro"
+
+
+def test_quotation_jobs_client_falha_nao_altera_cotacao(monkeypatch):
+    """Falha em create_quotation_job não deve bloquear nem alterar a cotação."""
+    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+
+    def _raise(*a, **kw):
+        raise RuntimeError("Conexão com servidor de jobs falhou")
+
+    monkeypatch.setattr(ct, "create_quotation_job", _raise)
+
+    class FakeOKProvider:
+        nome = "TRD"
+        _passo_atual = "ok"
+        last_error = None
+
+        async def coteir(self, **kwargs):
+            from fretio.models import Cotacao
+            return Cotacao(transportadora="TRD", prazo_dias=3, valor_frete=450.0)
+
+        async def cleanup(self):
+            pass
+
+    class FakeFactory:
+        def __init__(self, config):
+            pass
+
+        def is_available(self, nome):
+            return False
+
+        def get_provider_config(self, nome):
+            if nome == "trd":
+                return {
+                    "habilitado": True,
+                    "email": "x@x.com",
+                    "senha": "pw",
+                    "ufs_atendidas": ["RS"],
+                }
+            return {"habilitado": False}
+
+        def create(self, nome, **kwargs):
+            if nome == "trd":
+                return FakeOKProvider()
+            return None
+
+    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+
+    config = {
+        "fretio": {},
+        "romaneio": {"cep_origem": "90000000"},
+        "transportadoras": {"trd": {"habilitado": True}},
+    }
+    dados = {
+        "destino_cep": "90010123",
+        "uf_destino": "RS",
+        "cnpj_destinatario": "12345678000190",
+        "peso": 3.3,
+        "valor": 150.0,
+        "volumes": 1,
+        "cubagem_m3": 0.044,
+        "cubagens": [{"quantidade": 1, "comprimento_cm": 45, "largura_cm": 31, "altura_cm": 31}],
+        "descricoes_itens": [],
+    }
+
+    resultados = asyncio.run(
+        ct._executar_cotacoes_com_dados(config=config, dados=dados, cep_origem="90000000")
+    )
+
+    trd_results = [r for r in resultados if r.transportadora == "TRD"]
+    assert len(trd_results) >= 1
+    assert trd_results[0].status == "ok"
+    assert trd_results[0].valor_frete == 450.0

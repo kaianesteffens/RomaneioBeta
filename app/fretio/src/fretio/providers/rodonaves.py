@@ -841,6 +841,34 @@ class RodonavesProvider(ProviderBase):
         self._chrome_proc = None
         self._active_user_data_dir = ""
 
+    async def _reset_page_for_retry(self, error: Exception) -> None:
+        """Recria a página (mas não o browser) para erros transitórios de frame/page."""
+        err_str = str(error).lower()
+        is_page_error = any(t in err_str for t in (
+            "frame was detached",
+            "target page, context or browser has been closed",
+            "target closed",
+            "net::err_aborted",
+            "net::err_connection",
+            "net::err_timed_out",
+            "timeout",
+        ))
+        if not is_page_error:
+            return
+        logger.info(f"[{self.nome}] Erro transitório de página, recriando page para retry...")
+        try:
+            if self._page and not self._page.is_closed():
+                await self._page.close()
+        except Exception:
+            pass
+        self._page = None
+        self._logged_in = False
+        if self._context:
+            try:
+                self._page = await self._context.new_page()
+            except Exception:
+                self._page = None
+
     # ── login ──────────────────────────────────────────────────────────
 
     async def _navegar_cotacao(self, _from_login: bool = False):
@@ -1648,7 +1676,6 @@ class RodonavesProvider(ProviderBase):
             if self._browser and not self._browser.is_connected():
                 browser_morto = True
             elif self._context and not self._browser and self._page:
-                # Persistent context sem Browser separado: verificar se página responde
                 try:
                     await self._page.evaluate("1")
                 except Exception:
@@ -1658,4 +1685,8 @@ class RodonavesProvider(ProviderBase):
                     await self.cleanup()
                 except Exception:
                     pass
+            else:
+                # Para erros transitórios de página/frame (sem matar o browser),
+                # recria a página para deixar o contexto limpo para o próximo retry.
+                await self._reset_page_for_retry(error)
             return None

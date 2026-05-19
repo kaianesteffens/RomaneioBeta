@@ -575,7 +575,7 @@ class CoopexProvider(ProviderBase):
                 logger.debug(f"[{self.nome}] Fallback texto completo falhou: {e}")
 
         if not vlr_frete_str or vlr_frete_str == '0,00':
-            # Log de diagnóstico: XMLs capturados para análise futura
+            # Log de diagnóstico: XMLs capturados para análise futura (uma única vez)
             if xml_responses:
                 for idx, xml in enumerate(xml_responses):
                     logger.warning(f"[{self.nome}] XML #{idx+1} capturado ({len(xml)} chars): {xml[:500]}")
@@ -585,7 +585,8 @@ class CoopexProvider(ProviderBase):
                     f"rota possivelmente sem precificação automática no SSW)"
                 )
             else:
-                self.last_error = f"Sem valor de frete retornado (campos DOM: vlr_frete={vlr_frete_str!r}, nro_cotacao={nro_cotacao!r}, prazo={prazo_str!r})"
+                # Sem prazo e sem valor: o SSW não respondeu a tempo — falha controlada
+                self.last_error = "Timeout aguardando resultado da Copex"
             logger.warning(f"[{self.nome}] {self.last_error}")
             return None
 
