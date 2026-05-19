@@ -579,10 +579,19 @@ class TRDProvider(ProviderBase):
                 if val is not None and 1 < val < 100000 and abs(val - float(valor_mercadoria or 0.0)) > 0.01:
                     return val
 
+        _V = r'([\d]{1,3}(?:\.\d{3})*[.,]\d{2}|[\d]+[.,]\d{2})'
         for pat in [
-            r'(?i)valor\s+(?:total\s+da\s+)?presta[çc][ãa]o\s*(?:R\$\s*)?([\d]{1,3}(?:\.\d{3})*[.,]\d{2}|[\d]+[.,]\d{2})',
-            r'(?i)valor\s+do\s+frete\s*(?:R\$\s*)?([\d]{1,3}(?:\.\d{3})*[.,]\d{2}|[\d]+[.,]\d{2})',
-            r'(?i)\bfrete\b[^\n\r]{0,90}?(?:R\$\s*)?([\d]{1,3}(?:\.\d{3})*[.,]\d{2}|[\d]+[.,]\d{2})',
+            rf'(?i)valor\s+(?:total\s+da\s+)?presta[çc][ãa]o\s*(?:R\$\s*)?{_V}',
+            rf'(?i)valor\s+do\s+frete\s*(?:R\$\s*)?{_V}',
+            # "Valor Frete:" / "Valor Frete R$" sem "do"
+            rf'(?i)valor\s+frete\s*[:\-]?\s*(?:R\$\s*)?{_V}',
+            # "Total Frete:" label
+            rf'(?i)total\s+frete\s*[:\-]?\s*(?:R\$\s*)?{_V}',
+            # "Valor total do frete"
+            rf'(?i)valor\s+total\s+(?:do\s+)?frete\s*[:\-]?\s*(?:R\$\s*)?{_V}',
+            rf'(?i)\bfrete\b[^\n\r]{{0,90}}?(?:R\$\s*)?{_V}',
+            # "Total: R$ ..." or "Valor total: R$ ..." — só quando R$ explícito (evita confusão)
+            rf'(?i)(?:valor\s+)?total\s*[:\-]\s*R\$\s*{_V}',
         ]:
             m = re.search(pat, txt)
             if not m:
@@ -592,6 +601,27 @@ class TRDProvider(ProviderBase):
                 continue
             if 1 < val < 100000 and abs(val - float(valor_mercadoria or 0.0)) > 0.01:
                 return val
+
+        def _score_janela(janela: str, *, has_rs: bool = False) -> int:
+            score = 0
+            if "presta" in janela:
+                score += 3 if not has_rs else 3
+            if "frete" in janela:
+                score += 2
+            if has_rs and "total" in janela and "frete" not in janela and "presta" not in janela:
+                score += 1
+            # Penaliza contextos irrelevantes para frete
+            if "mercadoria" in janela:
+                score -= 3
+            if "peso" in janela and "frete" not in janela:
+                score -= 2
+            if any(w in janela for w in ("volume", "cubagem")) and "frete" not in janela:
+                score -= 2
+            if any(w in janela for w in ("imposto", "icms", "ipi")):
+                score -= 3
+            if "prazo" in janela and "frete" not in janela:
+                score -= 2
+            return score
 
         candidatos: list[tuple[int, int, float]] = []
         for m in re.finditer(r'R\$\s*([\d.,]+)', txt, re.IGNORECASE):
@@ -605,13 +635,7 @@ class TRDProvider(ProviderBase):
             ini = max(0, m.start() - 90)
             fim = min(len(txt), m.end() + 90)
             janela = txt[ini:fim].lower()
-            score = 0
-            if "presta" in janela:
-                score += 3
-            if "frete" in janela:
-                score += 2
-            if "mercadoria" in janela:
-                score -= 3
+            score = _score_janela(janela, has_rs=True)
             candidatos.append((score, -m.start(), val))
 
         # Fallback sem "R$": procura números com duas casas em contexto de frete/prestação.
@@ -626,14 +650,10 @@ class TRDProvider(ProviderBase):
             ini = max(0, m.start() - 100)
             fim = min(len(txt), m.end() + 100)
             janela = txt[ini:fim].lower()
-            score = 0
-            if "presta" in janela:
-                score += 5
-            if "frete" in janela:
-                score += 4
+            score = _score_janela(janela)
             if "valor" in janela:
                 score += 2
-            if "mercadoria" in janela or "nota" in janela:
+            if "nota" in janela:
                 score -= 4
             if score <= 0:
                 continue

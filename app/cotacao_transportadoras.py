@@ -1349,6 +1349,9 @@ _TIMEOUT_COTACAO_S: dict[str, int] = {
     "TRD": 120,
     "RODONAVES": 120,
     "AGEX": 90,
+    # SSW providers: polling até 25s + fallbacks → dar margem para completar internamente
+    "COOPEX": 90,
+    "EUCATUR": 90,
 }
 _TIMEOUT_COTACAO_PADRAO_S = 45
 
@@ -2687,6 +2690,24 @@ async def _executar_cotacoes_com_dados(
                 _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
                 return
 
+            # Falhas transitórias de rede/browser capturadas internamente pelo provider
+            # (retornaram None em vez de levantar exceção) — não reportar à API,
+            # mas agendar retry exatamente como fazemos para exceções transitórias.
+            if _is_expected_transient_failure_str(detalhe or ""):
+                _log_diag(f"{nome_task} falha transitória (sem report): {detalhe}")
+                if falhas_para_retry is not None:
+                    falhas_para_retry.append((nome_task, provider_task, kwargs_task))
+                    _log_diag(f"{nome_task} enfileirada para retry (transitória)")
+                else:
+                    r = ResultadoCotacao(
+                        transportadora=nome_task, status="erro", detalhes=str(detalhe),
+                        duration_ms=duration_ms,
+                    )
+                    concluidas += 1
+                    resultados.append(r)
+                    _emitir_progresso(concluidas=concluidas, total=total_cotacoes, resultado=r)
+                return
+
             # Normaliza a mensagem removendo partes variáveis (ex: paths de diagnóstico TRD)
             # para que o rate-limiter do error_reporter deduplique corretamente entre execuções.
             detalhe_report = re.sub(r'\s*\(diagnóstico salvo em:[^)]*\)', '', str(detalhe or "")).strip()
@@ -2742,6 +2763,24 @@ async def _executar_cotacoes_com_dados(
         )
         return any(p in d for p in patterns)
 
+    _TRANSIENT_PATTERNS = (
+        "target page, context or browser has been closed",
+        "target closed",
+        "frame was detached",
+        "net::err_aborted",
+        "net::err_connection",
+        "net::err_name",
+        "net::err_timed_out",
+        "net::err_internet",
+        "net::err_network",
+        "formulário de cotação não carregou",
+        "formulario de cotacao nao carregou",
+        "page.goto",
+        "valor de frete nao encontrado",
+        "valor de frete não encontrado",
+        "timeout aguardando resultado",
+    )
+
     def _is_expected_transient_failure(erro: BaseException) -> bool:
         """Detecta falhas transitórias esperadas de provider que NÃO devem ir para report_error.
 
@@ -2749,23 +2788,18 @@ async def _executar_cotacoes_com_dados(
         if isinstance(erro, TimeoutError):
             return True
         err_str = str(erro).lower()
-        transient_patterns = (
-            "target page, context or browser has been closed",
-            "target closed",
-            "frame was detached",
-            "net::err_aborted",
-            "net::err_connection",
-            "net::err_name",
-            "net::err_timed_out",
-            "net::err_internet",
-            "net::err_network",
-            "formulário de cotação não carregou",
-            "formulario de cotacao nao carregou",
-            "page.goto",
-            "valor de frete nao encontrado",
-            "valor de frete não encontrado",
-        )
-        return any(p in err_str for p in transient_patterns)
+        return any(p in err_str for p in _TRANSIENT_PATTERNS)
+
+    def _is_expected_transient_failure_str(detail: str) -> bool:
+        """Mesmos critérios de _is_expected_transient_failure, mas para strings de last_error.
+
+        Usado quando o provider capturou a exceção internamente e retornou None."""
+        if not detail:
+            return False
+        d = detail.lower()
+        if "timeout" in d or "timed out" in d:
+            return True
+        return any(p in d for p in _TRANSIENT_PATTERNS)
 
     # ── Rodada 1: executa todas as cotações ──
     falhas_para_retry: list[tuple[str, Any, dict[str, Any]]] = []
