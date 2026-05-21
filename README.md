@@ -46,6 +46,8 @@ Principais secoes:
 Endpoints de apoio em `\[Fretio]`:
 `quotation_jobs_api_url` envia jobs de cotacao para o servidor.
 `quotation_normalization_api_url` e opcional/best-effort para normalizacao remota de payloads; falha nesse endpoint nao deve impedir a cotacao local.
+`quotation_normalization_shadow_enabled` e opcional e fica desligado por padrao. Quando ativo, envia apenas dados estruturados minimos para comparar a normalizacao remota com a local em log diagnostico.
+Falha remota ou divergencia do modo sombra nao altera a cotacao local.
 > `CONFIG.toml`, credenciais e licencas sao dados locais e nao devem ser versionados.
 Executando em desenvolvimento
 Recomendado em Windows 10/11 com Python 3.12.
