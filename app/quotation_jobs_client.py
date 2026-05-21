@@ -138,10 +138,7 @@ def _get_quotation_normalization_api_url() -> str:
         url = os.environ.get(env_name, "").strip()
         if url:
             return url.rstrip("/")
-    return (
-        _get_config_value("quotation_normalization_api_url")
-        or DEFAULT_QUOTATION_NORMALIZATION_API_URL
-    ).rstrip("/")
+    return (_get_config_value("quotation_normalization_api_url") or DEFAULT_QUOTATION_NORMALIZATION_API_URL).rstrip("/")
 
 
 def _get_app_version() -> str:
@@ -295,15 +292,12 @@ def _normalize_quotation_payload_now(
             return result
         body["source_type"] = str(source_type or "").strip().lower()[:80]
         body["payload"] = _sanitize_dict(payload or {})
-        status_code, data = _request_json(
-            _get_quotation_normalization_api_url(),
-            method="POST",
-            payload=body,
-        )
+        status_code, data = _request_json(_get_quotation_normalization_api_url(), method="POST", payload=body)
+        data_dict = data if isinstance(data, dict) else None
         result["status_code"] = status_code
         result["sent"] = status_code is not None and 200 <= int(status_code) < 300
-        result["normalized"] = bool(result["sent"])
-        result["data"] = data if isinstance(data, dict) else None
+        result["data"] = data_dict
+        result["normalized"] = bool(result["sent"] and data_dict is not None)
     except HTTPError as exc:
         result["status_code"] = int(getattr(exc, "code", 0) or 0) or None
     except (URLError, OSError, TimeoutError, json.JSONDecodeError) as exc:
