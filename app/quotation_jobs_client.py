@@ -22,6 +22,7 @@ except Exception:
 
 
 DEFAULT_QUOTATION_JOBS_API_URL = "https://fretio.api.br/api/quotations/jobs"
+DEFAULT_QUOTATION_NORMALIZATION_API_URL = "https://fretio.api.br/api/quotations/normalize"
 _HTTP_TIMEOUT = 8
 _CONFIG_SECTIONS = ("fretio", "fretebot", "romaneio")
 _CONFIG_PATH: Path | None = None
@@ -130,6 +131,17 @@ def _get_quotation_jobs_api_url() -> str:
         if url:
             return url.rstrip("/")
     return (_get_config_value("quotation_jobs_api_url") or DEFAULT_QUOTATION_JOBS_API_URL).rstrip("/")
+
+
+def _get_quotation_normalization_api_url() -> str:
+    for env_name in ("FRETIO_QUOTATION_NORMALIZATION_API_URL", "FRETEBOT_QUOTATION_NORMALIZATION_API_URL"):
+        url = os.environ.get(env_name, "").strip()
+        if url:
+            return url.rstrip("/")
+    return (
+        _get_config_value("quotation_normalization_api_url")
+        or DEFAULT_QUOTATION_NORMALIZATION_API_URL
+    ).rstrip("/")
 
 
 def _get_app_version() -> str:
@@ -265,6 +277,42 @@ def _create_quotation_job_now(
     return result
 
 
+def _normalize_quotation_payload_now(
+    source_type: str,
+    payload: dict[str, Any] | None = None,
+    app_version: str | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "sent": False,
+        "normalized": False,
+        "status_code": None,
+        "data": None,
+    }
+    try:
+        body = _identity_payload(app_version)
+        if not body["license_key"] or not body["machine_id"]:
+            result["skipped"] = True
+            return result
+        body["source_type"] = str(source_type or "").strip().lower()[:80]
+        body["payload"] = _sanitize_dict(payload or {})
+        status_code, data = _request_json(
+            _get_quotation_normalization_api_url(),
+            method="POST",
+            payload=body,
+        )
+        result["status_code"] = status_code
+        result["sent"] = status_code is not None and 200 <= int(status_code) < 300
+        result["normalized"] = bool(result["sent"])
+        result["data"] = data if isinstance(data, dict) else None
+    except HTTPError as exc:
+        result["status_code"] = int(getattr(exc, "code", 0) or 0) or None
+    except (URLError, OSError, TimeoutError, json.JSONDecodeError) as exc:
+        _LOGGER.info("Falha ao normalizar payload de cotacao: %s", exc)
+    except Exception as exc:
+        _LOGGER.info("Erro inesperado ao normalizar payload de cotacao: %s", exc)
+    return result
+
+
 def _get_quotation_job_now(job_id: Any) -> dict[str, Any]:
     result: dict[str, Any] = {
         "sent": False,
@@ -352,6 +400,18 @@ def create_quotation_job(
         return _create_quotation_job_now(source_type, payload, app_version)
     _run_in_background(_create_quotation_job_now, source_type, payload, app_version)
     return {"sent": False, "created": False, "status_code": None, "job_id": None, "queued": True}
+
+
+def normalize_quotation_payload(
+    source_type: str,
+    payload: dict[str, Any] | None = None,
+    app_version: str | None = None,
+    wait: bool = True,
+) -> dict[str, Any]:
+    if wait:
+        return _normalize_quotation_payload_now(source_type, payload, app_version)
+    _run_in_background(_normalize_quotation_payload_now, source_type, payload, app_version)
+    return {"sent": False, "normalized": False, "status_code": None, "data": None, "queued": True}
 
 
 def get_quotation_job(job_id: Any, wait: bool = True) -> dict[str, Any]:
