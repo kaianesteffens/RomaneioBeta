@@ -50,6 +50,11 @@ except Exception:
     def update_quotation_job_result(*a, **kw): return {"updated": False}
 
 try:
+    from quotation_normalization_shadow import run_shadow_normalization
+except Exception:
+    def run_shadow_normalization(*a, **kw): return None
+
+try:
     from remote_permissions import (
         CARRIER_DISABLED_MESSAGE,
         KNOWN_CARRIERS,
@@ -2897,6 +2902,14 @@ async def cotar_transportadoras(
             _log_diag("Sem dados de envio para cotação")
             resultados = [ResultadoCotacao(transportadora="GERAL", status="erro", detalhes="Nenhum pedido disponível para cotação")]
             return resultados
+        run_shadow_normalization(
+            "romaneio",
+            config,
+            dados,
+            cep_origem=cep_origem,
+            modo="pdf",
+            log_func=_log_diag,
+        )
         resultados = await _executar_cotacoes_com_dados(
             config=config,
             dados=dados,
@@ -2973,6 +2986,14 @@ async def cotar_transportadoras_romaneio_colado(
         )
         return resultados
     try:
+        run_shadow_normalization(
+            "manual",
+            config,
+            dados,
+            cep_origem=cep_origem,
+            modo=modo,
+            log_func=_log_diag,
+        )
         resultados = await _executar_cotacoes_com_dados(
             config=config,
             dados=dados,
