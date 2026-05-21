@@ -86,6 +86,167 @@ def test_quotation_jobs_url_can_come_from_config(monkeypatch, tmp_path):
     assert captured["url"] == "https://config.example.test/jobs"
 
 
+def test_normalize_quotation_payload_uses_fretio_env_url(monkeypatch):
+    _prepare_identity(monkeypatch)
+    captured = {}
+
+    def fake_urlopen(req, timeout=8, context=None):
+        captured["url"] = req.full_url
+        return FakeResponse({"cep_destino": "99740000", "peso_total_kg": 12.5}, status=200)
+
+    monkeypatch.setenv("FRETIO_QUOTATION_NORMALIZATION_API_URL", "https://normalize.example.test/api")
+    monkeypatch.setattr(qj, "urlopen", fake_urlopen)
+
+    result = qj.normalize_quotation_payload("manual", payload={"destino_cep": "99740-000"}, wait=True)
+
+    assert result["sent"] is True
+    assert result["normalized"] is True
+    assert result["status_code"] == 200
+    assert result["data"] == {"cep_destino": "99740000", "peso_total_kg": 12.5}
+    assert captured["url"] == "https://normalize.example.test/api"
+
+
+def test_normalization_url_can_come_from_config(monkeypatch, tmp_path):
+    _prepare_identity(monkeypatch)
+    monkeypatch.delenv("FRETIO_QUOTATION_NORMALIZATION_API_URL", raising=False)
+    monkeypatch.delenv("FRETEBOT_QUOTATION_NORMALIZATION_API_URL", raising=False)
+    config_path = tmp_path / "CONFIG.toml"
+    config_path.write_text(
+        "[fretio]\n"
+        'quotation_normalization_api_url = "https://config.example.test/normalize"\n',
+        encoding="utf-8",
+    )
+    qj.configure(config_path)
+    captured = {}
+
+    def fake_urlopen(req, timeout=8, context=None):
+        captured["url"] = req.full_url
+        return FakeResponse({"cep_destino": "99740000"}, status=200)
+
+    monkeypatch.setattr(qj, "urlopen", fake_urlopen)
+
+    result = qj.normalize_quotation_payload("romaneio", payload={}, wait=True)
+
+    assert result["normalized"] is True
+    assert captured["url"] == "https://config.example.test/normalize"
+
+
+def test_normalize_quotation_payload_builds_identity_payload(monkeypatch):
+    _prepare_identity(monkeypatch)
+    captured = {}
+
+    def fake_urlopen(req, timeout=8, context=None):
+        captured["payload"] = json.loads(req.data.decode("utf-8"))
+        return FakeResponse({"cep_destino": "99740000"}, status=200)
+
+    monkeypatch.setenv("FRETIO_QUOTATION_NORMALIZATION_API_URL", "https://normalize.example.test/api")
+    monkeypatch.setattr(qj, "urlopen", fake_urlopen)
+
+    result = qj.normalize_quotation_payload(
+        "Manual",
+        payload={
+            "destino_cep": "99740-000",
+            "peso": 12.5,
+            "senha": "segredo",
+            "cubagens": [{"altura": 10, "largura": 20, "comprimento": 30}],
+        },
+        app_version="2.29",
+        wait=True,
+    )
+
+    assert result["normalized"] is True
+    assert captured["payload"] == {
+        "license_key": "FBOT-ABCD-1234-EFGH-5678",
+        "machine_id": "machine-123",
+        "app_version": "2.29",
+        "source_type": "manual",
+        "payload": {
+            "destino_cep": "99740-000",
+            "peso": 12.5,
+            "cubagens": [{"altura": 10, "largura": 20, "comprimento": 30}],
+        },
+    }
+
+
+def test_normalize_without_identity_does_not_call_server(monkeypatch):
+    qj.configure(None)
+    called = False
+
+    def fake_urlopen(*args, **kwargs):
+        nonlocal called
+        called = True
+        return FakeResponse()
+
+    monkeypatch.setattr(qj, "urlopen", fake_urlopen)
+
+    monkeypatch.setattr(qj, "get_saved_license", lambda: "")
+    monkeypatch.setattr(qj, "get_machine_id", lambda: "machine-123")
+    result_without_license = qj.normalize_quotation_payload("manual", payload={}, wait=True)
+
+    monkeypatch.setattr(qj, "get_saved_license", lambda: "FBOT-ABCD-1234-EFGH-5678")
+    monkeypatch.setattr(qj, "get_machine_id", lambda: "")
+    result_without_machine = qj.normalize_quotation_payload("manual", payload={}, wait=True)
+
+    assert result_without_license["skipped"] is True
+    assert result_without_machine["skipped"] is True
+    assert called is False
+
+
+def test_normalize_network_failure_does_not_raise(monkeypatch):
+    _prepare_identity(monkeypatch)
+    monkeypatch.setenv("FRETIO_QUOTATION_NORMALIZATION_API_URL", "https://normalize.example.test/api")
+    monkeypatch.setattr(qj, "urlopen", lambda *a, **kw: (_ for _ in ()).throw(URLError("offline")))
+
+    result = qj.normalize_quotation_payload("manual", payload={}, wait=True)
+
+    assert result["sent"] is False
+    assert result["normalized"] is False
+    assert result["status_code"] is None
+    assert result["data"] is None
+
+
+def test_normalize_sensitive_fields_are_removed(monkeypatch):
+    _prepare_identity(monkeypatch)
+    captured = {}
+
+    def fake_urlopen(req, timeout=8, context=None):
+        captured["payload"] = json.loads(req.data.decode("utf-8"))
+        return FakeResponse({"cep_destino": "99740000"}, status=200)
+
+    monkeypatch.setenv("FRETIO_QUOTATION_NORMALIZATION_API_URL", "https://normalize.example.test/api")
+    monkeypatch.setattr(qj, "urlopen", fake_urlopen)
+
+    qj.normalize_quotation_payload(
+        "manual",
+        payload={
+            "modo": "romaneio_colado",
+            "cnpj": "12.345.678/0001-90",
+            "cpf": "123.456.789-00",
+            "login": "cliente@example.com",
+            "senha": "segredo",
+            "token": "secret-token",
+            "authorization": "Bearer abc",
+            "chave_nfe": "1" * 44,
+            "traceback": "Traceback (most recent call last): senha=segredo",
+            "nested": {"quantidade_linhas": 8, "authorization": "Bearer abc"},
+        },
+        wait=True,
+    )
+
+    serialized = json.dumps(captured["payload"], ensure_ascii=False)
+    assert captured["payload"]["payload"] == {
+        "modo": "romaneio_colado",
+        "nested": {"quantidade_linhas": 8},
+    }
+    assert "12.345.678/0001-90" not in serialized
+    assert "123.456.789-00" not in serialized
+    assert "cliente@example.com" not in serialized
+    assert "segredo" not in serialized
+    assert "secret-token" not in serialized
+    assert "Bearer abc" not in serialized
+    assert "Traceback" not in serialized
+
+
 def test_get_quotation_job_includes_identity_query(monkeypatch):
     _prepare_identity(monkeypatch)
     captured = {}
