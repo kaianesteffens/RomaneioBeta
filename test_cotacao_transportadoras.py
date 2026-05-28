@@ -704,6 +704,93 @@ def test_rodonaves_quotation_goto_timeout_envia_diagnostico_estruturado(monkeypa
     assert kwargs["browser_state_json"]["wait_until"] == "domcontentloaded"
 
 
+def test_rodonaves_quotation_goto_timeout_nao_reporta_se_retry_funcionar(monkeypatch):
+    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    reportados = []
+    monkeypatch.setattr(ct, "report_error", lambda *a, **kw: reportados.append((a, kw)))
+    monkeypatch.setattr(ct, "report_error_message", lambda *a, **kw: reportados.append((a, kw)))
+
+    class FakeRodonavesProvider:
+        nome = "RODONAVES"
+        _passo_atual = "navegando_cotacao"
+        _last_browser_state = {
+            "url": "https://cliente.rte.com.br/Quotation",
+            "timeout_ms": 30000,
+            "wait_until": "domcontentloaded",
+        }
+
+        def __init__(self):
+            self.calls = 0
+            self.last_error = ""
+
+        async def coteir(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                self.last_error = "Page.goto Timeout 30000ms ao navegar para https://cliente.rte.com.br/Quotation"
+                return None
+            from fretio.models import Cotacao
+
+            return Cotacao(transportadora="RODONAVES", prazo_dias=3, valor_frete=123.45)
+
+        async def cleanup(self):
+            pass
+
+    provider = FakeRodonavesProvider()
+
+    class FakeFactory:
+        def __init__(self, config):
+            pass
+
+        def is_available(self, nome):
+            return nome == "rodonaves"
+
+        def get_provider_config(self, nome):
+            if nome == "rodonaves":
+                return {
+                    "habilitado": True,
+                    "dominio": "RTE",
+                    "usuario": "12345678000190",
+                    "senha": "pw",
+                    "cnpj_pagador": "12345678000190",
+                    "ufs_atendidas": ["SP"],
+                }
+            return {"habilitado": False}
+
+        def create(self, nome, **kwargs):
+            if nome == "rodonaves":
+                return provider
+            return None
+
+    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+
+    config = {
+        "fretio": {},
+        "romaneio": {"cep_origem": "01310100"},
+        "transportadoras": {"rodonaves": {"habilitado": True}},
+    }
+    dados = {
+        "destino_cep": "01310200",
+        "uf_destino": "SP",
+        "cnpj_destinatario": "12345678000190",
+        "peso": 5.0,
+        "valor": 300.0,
+        "volumes": 1,
+        "cubagem_m3": 0.03,
+        "cubagens": [{"quantidade": 1, "comprimento_cm": 30, "largura_cm": 20, "altura_cm": 20}],
+        "descricoes_itens": [],
+    }
+
+    resultados = asyncio.run(
+        ct._executar_cotacoes_com_dados(config=config, dados=dados, cep_origem="01310100")
+    )
+
+    assert reportados == []
+    assert provider.calls == 2
+    rod_results = [r for r in resultados if r.transportadora == "RODONAVES"]
+    assert len(rod_results) == 1
+    assert rod_results[0].status == "ok"
+
+
 def test_copex_timeout_aguardando_resultado_falha_controlada(monkeypatch):
     """Timeout no passo aguardando_resultado da Copex vira falha controlada sem report_error."""
     monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))

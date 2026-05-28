@@ -2744,7 +2744,7 @@ async def _executar_cotacoes_com_dados(
             # Falhas transitórias de provider (timeout, rede, browser fechado) são esperadas
             # e não devem poluir a API de erros com ruído técnico.
             reported_structured = False
-            if _is_rodonaves_quotation_goto_timeout(nome_task, erro_str):
+            if falhas_para_retry is None and _is_rodonaves_quotation_goto_timeout(nome_task, erro_str):
                 _report_rodonaves_goto_timeout(
                     provider_task,
                     kwargs_task,
@@ -2850,7 +2850,7 @@ async def _executar_cotacoes_com_dados(
             # mas agendar retry exatamente como fazemos para exceções transitórias.
             if _is_expected_transient_failure_str(detalhe or ""):
                 _log_diag(f"{nome_task} falha transitória (sem report): {detalhe}")
-                if _is_rodonaves_quotation_goto_timeout(nome_task, detalhe):
+                if falhas_para_retry is None and _is_rodonaves_quotation_goto_timeout(nome_task, detalhe):
                     _report_rodonaves_goto_timeout(
                         provider_task,
                         kwargs_task,
