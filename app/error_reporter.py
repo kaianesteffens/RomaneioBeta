@@ -19,6 +19,7 @@ import traceback
 import threading
 from hashlib import sha256
 from pathlib import Path
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -48,6 +49,12 @@ _EMBEDDED_ERROR_REPORT_TOKEN: str = ""
 # ── Log de diagnóstico ────────────────────────────────────────────
 _LOG_MAX_BYTES = 100 * 1024  # 100 KB — rotaciona apagando metade quando ultrapassar
 _log_lock = threading.Lock()
+_SENSITIVE_JSON_KEY_RE = re.compile(
+    r"(senha|password|passwd|pwd|token|secret|cookie|authorization|auth|"
+    r"localstorage|sessionstorage|credential|credencial|login|usuario|user|"
+    r"cpf|cnpj|documento|cliente|customer|email|telefone|endereco|html|dom)",
+    re.IGNORECASE,
+)
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -137,6 +144,37 @@ def sanitize_error_payload(text: str) -> str:
         sanitized,
     )
     return sanitized
+
+
+def _sanitize_error_json(value: Any, *, depth: int = 0) -> Any:
+    """Remove dados sensíveis de metadados estruturados antes do envio."""
+    if value is None:
+        return None
+    if depth > 5:
+        return "[TRUNCATED]"
+    if isinstance(value, dict):
+        clean: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= 40:
+                clean["_truncated_items"] = True
+                break
+            safe_key = str(key or "").strip()[:80] or "value"
+            if _SENSITIVE_JSON_KEY_RE.search(safe_key):
+                clean[safe_key] = "[REDACTED]"
+            else:
+                clean[safe_key] = _sanitize_error_json(item, depth=depth + 1)
+        return clean
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+        clean_list = [_sanitize_error_json(item, depth=depth + 1) for item in items[:25]]
+        if len(items) > 25:
+            clean_list.append({"_truncated_items": True})
+        return clean_list
+    if isinstance(value, str):
+        return sanitize_error_payload(value)[:1000]
+    if isinstance(value, (int, float, bool)):
+        return value
+    return sanitize_error_payload(str(value))[:1000]
 
 
 def _log_path() -> Path:
@@ -577,19 +615,42 @@ def _build_error_api_payload(
     module: str,
     message: str,
     traceback_text: str,
-) -> dict[str, str]:
-    return {
+    provider: str = "",
+    stage: str | None = None,
+    event: str | None = None,
+    severity: str | None = None,
+    source: str | None = None,
+    carrier_enabled: bool | None = None,
+    context_json: dict[str, Any] | None = None,
+    browser_state_json: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "license_key": _get_saved_license_key(),
         "machine_id": _get_machine_id_for_report(),
         "app_version": _get_version(),
         "module": sanitize_error_payload(module or ""),
-        "provider": "",
+        "provider": sanitize_error_payload(provider or ""),
         "message": sanitize_error_payload(message or ""),
         "traceback": sanitize_error_payload(traceback_text or ""),
     }
+    if stage:
+        payload["stage"] = sanitize_error_payload(stage)
+    if event:
+        payload["event"] = sanitize_error_payload(event)
+    if severity:
+        payload["severity"] = sanitize_error_payload(severity)
+    if source:
+        payload["source"] = sanitize_error_payload(source)
+    if carrier_enabled is not None:
+        payload["carrier_enabled"] = bool(carrier_enabled)
+    if context_json is not None:
+        payload["context_json"] = _sanitize_error_json(context_json)
+    if browser_state_json is not None:
+        payload["browser_state_json"] = _sanitize_error_json(browser_state_json)
+    return payload
 
 
-def _send_to_error_api(payload: dict[str, str], label: str = "") -> bool:
+def _send_to_error_api(payload: dict[str, Any], label: str = "") -> bool:
     """Envia erro ao servidor próprio. Nunca propaga exceção."""
     if not _error_api_url:
         return False
@@ -618,7 +679,7 @@ def _send_to_error_api(payload: dict[str, str], label: str = "") -> bool:
         return False
 
 
-def _send_report(body: str, label: str = "", api_payload: dict[str, str] | None = None) -> bool:
+def _send_report(body: str, label: str = "", api_payload: dict[str, Any] | None = None) -> bool:
     """Prioriza API própria e usa Gist como fallback legado quando disponível."""
     if _error_api_url and api_payload is not None:
         if _send_to_error_api(api_payload, label=label):
@@ -635,6 +696,15 @@ def report_error(
     exc_tb=None,
     context: str = "",
     wait: bool = False,
+    module: str | None = None,
+    provider: str = "",
+    stage: str | None = None,
+    event: str | None = None,
+    severity: str | None = None,
+    source: str | None = None,
+    carrier_enabled: bool | None = None,
+    context_json: dict[str, Any] | None = None,
+    browser_state_json: dict[str, Any] | None = None,
 ) -> None:
     """
     Envia um erro para o servidor próprio ou fallback Gist.
@@ -721,7 +791,15 @@ def report_error(
             ]
         body = sanitize_error_payload("\n".join(body_parts))
         api_payload = _build_error_api_payload(
-            module=context or "",
+            module=module or context or "",
+            provider=provider or "",
+            stage=stage,
+            event=event,
+            severity=severity,
+            source=source,
+            carrier_enabled=carrier_enabled,
+            context_json=context_json,
+            browser_state_json=browser_state_json,
             message=f"{exc_type_name}: {exc_msg_full}",
             traceback_text=tb_text,
         )
@@ -737,7 +815,20 @@ def report_error(
         pass  # Falha silenciosa — error reporting NUNCA deve crashar o app
 
 
-def report_error_message(message: str, context: str = "", wait: bool = False) -> None:
+def report_error_message(
+    message: str,
+    context: str = "",
+    wait: bool = False,
+    module: str | None = None,
+    provider: str = "",
+    stage: str | None = None,
+    event: str | None = None,
+    severity: str | None = None,
+    source: str | None = None,
+    carrier_enabled: bool | None = None,
+    context_json: dict[str, Any] | None = None,
+    browser_state_json: dict[str, Any] | None = None,
+) -> None:
     """
     Envia uma mensagem de erro customizada (sem exceção Python).
     Útil para erros de lógica ou condições inesperadas.
@@ -792,7 +883,15 @@ def report_error_message(message: str, context: str = "", wait: bool = False) ->
             ]
         body = sanitize_error_payload("\n".join(body_parts))
         api_payload = _build_error_api_payload(
-            module=context or "",
+            module=module or context or "",
+            provider=provider or "",
+            stage=stage,
+            event=event,
+            severity=severity,
+            source=source,
+            carrier_enabled=carrier_enabled,
+            context_json=context_json,
+            browser_state_json=browser_state_json,
             message=f"message: {message}",
             traceback_text=caller_stack,
         )

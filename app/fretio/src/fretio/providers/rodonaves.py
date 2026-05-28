@@ -1,5 +1,5 @@
 """Provider Rodonaves (RTE) – seletores extraidos da gravação Playwright."""
-from typing import Optional
+from typing import Any, Optional
 import asyncio
 import json
 import os
@@ -73,6 +73,7 @@ class RodonavesProvider(ProviderBase):
         self._chrome_proc = None
         self._active_user_data_dir = ""
         self._passo_atual: str = "inicio"
+        self._last_browser_state: dict[str, Any] = {}
 
     @staticmethod
     def _is_retryable_navigation_error(error: BaseException | str) -> bool:
@@ -887,15 +888,47 @@ class RodonavesProvider(ProviderBase):
         logger.info(f"[{self.nome}] Navegando para /Quotation... URL atual: {page.url}""")
 
         # Navega direto via goto com retry para falhas transitórias de rede.
+        target_url = self.PORTAL_URL
+        wait_until = "domcontentloaded"
+        timeout_ms = 30000
         for _goto_attempt in range(3):
+            current_url_before = ""
+            try:
+                current_url_before = page.url
+            except Exception:
+                pass
             try:
                 await page.goto(
-                    "https://cliente.rte.com.br/Quotation",
-                    wait_until="domcontentloaded",
-                    timeout=30000,
+                    target_url,
+                    wait_until=wait_until,
+                    timeout=timeout_ms,
                 )
                 break
             except Exception as goto_err:
+                current_url_after = ""
+                page_closed = None
+                browser_connected = None
+                try:
+                    current_url_after = page.url
+                except Exception:
+                    pass
+                try:
+                    page_closed = bool(page.is_closed())
+                except Exception:
+                    pass
+                try:
+                    browser_connected = bool(self._browser and self._browser.is_connected())
+                except Exception:
+                    pass
+                self._last_browser_state = {
+                    "url": target_url,
+                    "timeout_ms": timeout_ms,
+                    "wait_until": wait_until,
+                    "current_url_before": current_url_before,
+                    "current_url_after": current_url_after,
+                    "page_closed": page_closed,
+                    "browser_connected": browser_connected,
+                }
                 if self._is_retryable_navigation_error(goto_err) and _goto_attempt < 2:
                     logger.warning(
                         f"[{self.nome}] goto /Quotation transitório, retry {_goto_attempt + 1}/3: {goto_err}"

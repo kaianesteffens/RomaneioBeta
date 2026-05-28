@@ -246,6 +246,79 @@ def test_report_error_posts_to_error_api_when_configured(monkeypatch):
     assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in serialized
 
 
+def test_report_error_message_posts_structured_diagnostics(monkeypatch):
+    requests = []
+
+    class _ImmediateThread:
+        def __init__(self, target, args=(), daemon=None):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            self._target(*self._args)
+
+        def join(self, timeout=None):
+            return None
+
+    class _Response:
+        status = 201
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(req, timeout=15, context=None):
+        requests.append(req)
+        return _Response()
+
+    er._error_api_url = "https://errors.example.test/api/errors"
+    er._initialized = True
+    er._recent_errors.clear()
+    monkeypatch.setattr(er.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(er, "urlopen", fake_urlopen)
+    monkeypatch.setattr(er, "_get_saved_license_key", lambda: "FBOT-ABCD-1234-EFGH-5678")
+    monkeypatch.setattr(er, "_get_machine_id_for_report", lambda: "machine-123")
+    monkeypatch.setattr(er, "_get_version", lambda: "9.9")
+
+    er.report_error_message(
+        "RODONAVES retornou None: Page.goto Timeout 30000ms",
+        context="cotacao_RODONAVES",
+        wait=True,
+        module="cotacao",
+        provider="rodonaves",
+        stage="cotacao",
+        event="rodonaves_quotation_goto_timeout",
+        severity="error",
+        source="cotacao_usuario",
+        carrier_enabled=True,
+        context_json={"volumes": 2, "senha": "segredo", "cnpj_destinatario": "12.345.678/0001-90"},
+        browser_state_json={
+            "current_url": "https://cliente.rte.com.br/Quotation",
+            "cookie": "sessionid=secret",
+            "timeout_ms": 30000,
+            "wait_until": "domcontentloaded",
+        },
+    )
+
+    assert len(requests) == 1
+    payload = json.loads(requests[0].data.decode("utf-8"))
+    assert payload["module"] == "cotacao"
+    assert payload["provider"] == "rodonaves"
+    assert payload["stage"] == "cotacao"
+    assert payload["event"] == "rodonaves_quotation_goto_timeout"
+    assert payload["severity"] == "error"
+    assert payload["source"] == "cotacao_usuario"
+    assert payload["carrier_enabled"] is True
+    assert payload["context_json"]["volumes"] == 2
+    assert payload["browser_state_json"]["timeout_ms"] == 30000
+    serialized = json.dumps(payload)
+    assert "segredo" not in serialized
+    assert "12.345.678/0001-90" not in serialized
+    assert "sessionid=secret" not in serialized
+
+
 def test_report_error_falls_back_to_gist_without_error_api_url(monkeypatch):
     sent = {}
 

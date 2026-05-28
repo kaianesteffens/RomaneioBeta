@@ -359,6 +359,117 @@ def _log_diag(msg: str) -> None:
         pass
 
 
+def _provider_browser_state(
+    provider: Any,
+    *,
+    timeout_ms: int | None = None,
+    wait_until: str | None = None,
+    url: str | None = None,
+) -> dict[str, Any]:
+    state = getattr(provider, "_last_browser_state", None)
+    browser_state: dict[str, Any] = dict(state) if isinstance(state, dict) else {}
+    page = getattr(provider, "_page", None)
+    browser = getattr(provider, "_browser", None)
+
+    if url:
+        browser_state.setdefault("url", url)
+    if timeout_ms is not None:
+        browser_state.setdefault("timeout_ms", timeout_ms)
+    if wait_until:
+        browser_state.setdefault("wait_until", wait_until)
+
+    try:
+        if page is not None:
+            browser_state.setdefault("current_url", str(page.url or ""))
+    except Exception:
+        pass
+    try:
+        if page is not None:
+            browser_state.setdefault("page_closed", bool(page.is_closed()))
+    except Exception:
+        pass
+    try:
+        if browser is not None:
+            browser_state.setdefault("browser_connected", bool(browser.is_connected()))
+    except Exception:
+        pass
+    return browser_state
+
+
+def _safe_cotacao_error_context(
+    nome: str,
+    kwargs: dict[str, Any] | None,
+    *,
+    duration_ms: int | None = None,
+    uf_destino: str | None = None,
+) -> dict[str, Any]:
+    data = kwargs if isinstance(kwargs, dict) else {}
+    cubagens = data.get("cubagens")
+    context: dict[str, Any] = {
+        "provider": normalize_carrier_name(nome),
+        "source": "cotacao_usuario",
+        "uf_destino": str(uf_destino or "").upper() or None,
+        "duration_ms": duration_ms,
+        "volumes": data.get("volumes"),
+        "cubagens_count": len(cubagens) if isinstance(cubagens, list) else 0,
+        "preencher_cep_origem": bool(data.get("preencher_cep_origem")),
+    }
+    for field, precision in (("peso", 3), ("valor", 2), ("cubagem_m3", 4)):
+        try:
+            value = data.get(field)
+            context[field] = round(float(value), precision) if value is not None else None
+        except Exception:
+            context[field] = None
+    return {key: value for key, value in context.items() if value is not None}
+
+
+def _is_rodonaves_quotation_goto_timeout(nome: str, detail: Any) -> bool:
+    if normalize_carrier_name(nome) != "rodonaves":
+        return False
+    text = str(detail or "").lower()
+    return (
+        "page.goto" in text
+        and "timeout" in text
+        and ("cliente.rte.com.br/quotation" in text or "/quotation" in text)
+    )
+
+
+def _report_rodonaves_goto_timeout(
+    provider: Any,
+    kwargs: dict[str, Any],
+    *,
+    detail: Any,
+    duration_ms: int | None,
+    uf_destino: str | None,
+) -> None:
+    try:
+        report_error_message(
+            f"RODONAVES retornou None: {detail}",
+            context="cotacao_RODONAVES",
+            module="cotacao",
+            provider="rodonaves",
+            stage="cotacao",
+            event="rodonaves_quotation_goto_timeout",
+            severity="error",
+            source="cotacao_usuario",
+            carrier_enabled=True,
+            context_json=_safe_cotacao_error_context(
+                "RODONAVES",
+                kwargs,
+                duration_ms=duration_ms,
+                uf_destino=uf_destino,
+            ),
+            browser_state_json=_provider_browser_state(
+                provider,
+                timeout_ms=30000,
+                wait_until="domcontentloaded",
+                url="https://cliente.rte.com.br/Quotation",
+            ),
+        )
+    except Exception:
+        pass
+
+
 def _remote_disabled_results_for_config(config: dict[str, Any], *, contexto: str) -> tuple[dict[str, Any], list[ResultadoCotacao]]:
     effective_config = dict(config) if isinstance(config, dict) else {}
     transportadoras_cfg = effective_config.get("transportadoras", {}) if isinstance(effective_config, dict) else {}
@@ -1729,6 +1840,15 @@ class TransportadoraSession:
             if callback:
                 callback(f"Fazendo login em {total_providers} transportadoras...")
 
+            def _carrier_enabled_for_report(nome_carrier: str) -> bool:
+                try:
+                    cfg = provider_factory.get_provider_config(normalize_carrier_name(nome_carrier))
+                    if isinstance(cfg, dict):
+                        return bool(cfg.get("habilitado", True))
+                except Exception:
+                    pass
+                return True
+
             async def _pre_login_one(nome, prov):
                 is_alfa = nome.lower() == "alfa"
                 timeout_s = _TIMEOUT_PRELOGIN_S.get(nome.upper(), _TIMEOUT_PRELOGIN_PADRAO_S)
@@ -1773,7 +1893,27 @@ class TransportadoraSession:
                             # Chrome ausente já foi reportado globalmente com module="chrome_missing"
                             _e_str = str(e)
                             if "Google Chrome" not in _e_str and "chrome" not in _e_str.lower():
-                                report_error_message(f"Pre-login {nome} falhou: {_e_str}", context=f"prelogin_{nome}")
+                                carrier_enabled = _carrier_enabled_for_report(nome)
+                                report_error_message(
+                                    f"Pre-login {nome} falhou: {_e_str}",
+                                    context=f"prelogin_{nome}",
+                                    module="prelogin",
+                                    provider=normalize_carrier_name(nome),
+                                    stage="prelogin",
+                                    event=f"{normalize_carrier_name(nome)}_prelogin_failed",
+                                    severity="error" if carrier_enabled else "warning",
+                                    source="prelogin_background",
+                                    carrier_enabled=carrier_enabled,
+                                    context_json={
+                                        "attempt": attempt + 1,
+                                        "timeout_s": timeout_s,
+                                        "max_retries": max_retries,
+                                    },
+                                    browser_state_json=_provider_browser_state(
+                                        prov,
+                                        timeout_ms=int(timeout_s * 1000),
+                                    ),
+                                )
                             if login_status_callback:
                                 login_status_callback(nome, "fail")
                             return nome, False
@@ -2603,7 +2743,17 @@ async def _executar_cotacoes_com_dados(
             _log_diag(f"Erro em cotação {nome_task}: {type(erro).__name__}: {erro}\n{tb}")
             # Falhas transitórias de provider (timeout, rede, browser fechado) são esperadas
             # e não devem poluir a API de erros com ruído técnico.
-            if not _is_expected_transient_failure(erro):
+            reported_structured = False
+            if _is_rodonaves_quotation_goto_timeout(nome_task, erro_str):
+                _report_rodonaves_goto_timeout(
+                    provider_task,
+                    kwargs_task,
+                    detail=erro_str,
+                    duration_ms=duration_ms,
+                    uf_destino=uf_destino,
+                )
+                reported_structured = True
+            if not reported_structured and not _is_expected_transient_failure(erro):
                 report_error(type(erro), erro, erro.__traceback__, context=f"cotacao_{nome_task}")
             if falhas_para_retry is not None:
                 falhas_para_retry.append((nome_task, provider_task, kwargs_task))
@@ -2700,6 +2850,14 @@ async def _executar_cotacoes_com_dados(
             # mas agendar retry exatamente como fazemos para exceções transitórias.
             if _is_expected_transient_failure_str(detalhe or ""):
                 _log_diag(f"{nome_task} falha transitória (sem report): {detalhe}")
+                if _is_rodonaves_quotation_goto_timeout(nome_task, detalhe):
+                    _report_rodonaves_goto_timeout(
+                        provider_task,
+                        kwargs_task,
+                        detail=detalhe,
+                        duration_ms=duration_ms,
+                        uf_destino=uf_destino,
+                    )
                 if falhas_para_retry is not None:
                     falhas_para_retry.append((nome_task, provider_task, kwargs_task))
                     _log_diag(f"{nome_task} enfileirada para retry (transitória)")

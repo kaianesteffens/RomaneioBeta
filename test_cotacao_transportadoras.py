@@ -215,6 +215,64 @@ def test_session_lazy_prelogin_runs_for_new_trd_provider(monkeypatch):
     assert provider.pre_login_calls == 1
 
 
+def test_prelogin_background_disabled_carrier_reports_warning(monkeypatch):
+    reports = []
+    monkeypatch.setattr(ct, "report_error_message", lambda *a, **kw: reports.append((a, kw)))
+    monkeypatch.setattr(ct, "_kill_orphan_Fretio_chromes", lambda: None)
+    monkeypatch.setattr(
+        ct,
+        "_carregar_config",
+        lambda config_path=None: {"transportadoras": {"trd": {"habilitado": False}}},
+    )
+
+    import fretio.providers.base as base_mod
+
+    monkeypatch.setattr(base_mod, "find_chrome", lambda: "/usr/bin/google-chrome")
+
+    class FakeProvider:
+        _logged_in = False
+        _passo_atual = "prelogin"
+
+        async def pre_login(self):
+            raise RuntimeError("Connection closed while reading from the driver")
+
+        async def cleanup(self):
+            pass
+
+    class FakeFactory:
+        def __init__(self, config):
+            pass
+
+        def preload(self):
+            pass
+
+        def is_available(self, nome):
+            return False
+
+        def get_provider_config(self, nome):
+            if nome == "trd":
+                return {"habilitado": False}
+            return {"habilitado": False}
+
+    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+
+    async def scenario():
+        session = ct.TransportadoraSession()
+        await session.registrar_provider("trd", FakeProvider())
+        await session.inicializar()
+
+    asyncio.run(scenario())
+
+    assert reports
+    _args, kwargs = reports[-1]
+    assert kwargs["module"] == "prelogin"
+    assert kwargs["provider"] == "trd"
+    assert kwargs["stage"] == "prelogin"
+    assert kwargs["source"] == "prelogin_background"
+    assert kwargs["carrier_enabled"] is False
+    assert kwargs["severity"] == "warning"
+
+
 # ── Testes de tratamento de erros reportados ──────────────────────────────────
 
 
@@ -558,6 +616,92 @@ def test_rodonaves_transient_errors_viram_falha_controlada(monkeypatch):
         rod_results = [r for r in resultados if r.transportadora == "RODONAVES"]
         assert len(rod_results) >= 1
         assert rod_results[-1].status == "erro"
+
+
+def test_rodonaves_quotation_goto_timeout_envia_diagnostico_estruturado(monkeypatch):
+    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    reportados = []
+    monkeypatch.setattr(ct, "report_error", lambda *a, **kw: None)
+    monkeypatch.setattr(ct, "report_error_message", lambda *a, **kw: reportados.append((a, kw)))
+
+    class FakeRodonavesProvider:
+        nome = "RODONAVES"
+        _passo_atual = "navegando_cotacao"
+        last_error = "Page.goto Timeout 30000ms ao navegar para https://cliente.rte.com.br/Quotation"
+        _last_browser_state = {
+            "url": "https://cliente.rte.com.br/Quotation",
+            "timeout_ms": 30000,
+            "wait_until": "domcontentloaded",
+            "current_url_before": "https://cliente.rte.com.br/",
+            "current_url_after": "https://cliente.rte.com.br/",
+            "page_closed": False,
+            "browser_connected": True,
+        }
+
+        async def coteir(self, **kwargs):
+            return None
+
+        async def cleanup(self):
+            pass
+
+    class FakeFactory:
+        def __init__(self, config):
+            pass
+
+        def is_available(self, nome):
+            return nome == "rodonaves"
+
+        def get_provider_config(self, nome):
+            if nome == "rodonaves":
+                return {
+                    "habilitado": True,
+                    "dominio": "RTE",
+                    "usuario": "12345678000190",
+                    "senha": "pw",
+                    "cnpj_pagador": "12345678000190",
+                    "ufs_atendidas": ["SP"],
+                }
+            return {"habilitado": False}
+
+        def create(self, nome, **kwargs):
+            if nome == "rodonaves":
+                return FakeRodonavesProvider()
+            return None
+
+    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+
+    config = {
+        "fretio": {},
+        "romaneio": {"cep_origem": "01310100"},
+        "transportadoras": {"rodonaves": {"habilitado": True}},
+    }
+    dados = {
+        "destino_cep": "01310200",
+        "uf_destino": "SP",
+        "cnpj_destinatario": "12345678000190",
+        "peso": 5.0,
+        "valor": 300.0,
+        "volumes": 1,
+        "cubagem_m3": 0.03,
+        "cubagens": [{"quantidade": 1, "comprimento_cm": 30, "largura_cm": 20, "altura_cm": 20}],
+        "descricoes_itens": [],
+    }
+
+    asyncio.run(ct._executar_cotacoes_com_dados(config=config, dados=dados, cep_origem="01310100"))
+
+    assert reportados
+    _args, kwargs = reportados[-1]
+    assert kwargs["module"] == "cotacao"
+    assert kwargs["provider"] == "rodonaves"
+    assert kwargs["stage"] == "cotacao"
+    assert kwargs["event"] == "rodonaves_quotation_goto_timeout"
+    assert kwargs["severity"] == "error"
+    assert kwargs["source"] == "cotacao_usuario"
+    assert kwargs["carrier_enabled"] is True
+    assert kwargs["context_json"]["uf_destino"] == "SP"
+    assert kwargs["context_json"]["cubagens_count"] == 1
+    assert kwargs["browser_state_json"]["timeout_ms"] == 30000
+    assert kwargs["browser_state_json"]["wait_until"] == "domcontentloaded"
 
 
 def test_copex_timeout_aguardando_resultado_falha_controlada(monkeypatch):
