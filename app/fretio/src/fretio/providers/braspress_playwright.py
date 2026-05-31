@@ -10,6 +10,7 @@ from fretio.providers.provider_utils import (
     _digits, _fmt_decimal, _parse_decimal_any, _parse_int_any
 )
 from fretio.models import Cotacao
+from fretio.quotation_contract import QuoteRequest, QuoteResponse
 from fretio.logging_conf import get_logger
 
 logger = get_logger(__name__)
@@ -184,7 +185,7 @@ class BraspressPlaywrightProvider(ProviderBase):
         self._context = None
         self._logged_in = False
 
-    async def cotar(
+    async def _coteir_legacy(
         self,
         origem: str,
         destino: str,
@@ -870,5 +871,35 @@ class BraspressPlaywrightProvider(ProviderBase):
             logger.error(f"[Braspress] Erro: {e}")
             return None
 
-    # Alias para compatibilidade
-    coteir = cotar
+    async def cotar(self, request: QuoteRequest) -> QuoteResponse:
+        return await super().cotar(request)
+
+    async def coteir(
+        self,
+        origem: str,
+        destino: str,
+        peso: float,
+        valor: float,
+        cnpj_destinatario: str | None = None,
+        volumes: int = 1,
+        comprimento_cm: int = 0,
+        largura_cm: int = 0,
+        altura_cm: int = 0,
+        cubagens: Optional[list[dict]] = None,
+        cnpj_remetente: str | None = None,
+        tipo_frete: str | None = None,
+    ) -> Optional[Cotacao]:
+        return await self._coteir_legacy(
+            origem=origem,
+            destino=destino,
+            peso=peso,
+            valor=valor,
+            cnpj_destinatario=cnpj_destinatario,
+            volumes=volumes,
+            comprimento_cm=comprimento_cm,
+            largura_cm=largura_cm,
+            altura_cm=altura_cm,
+            cubagens=cubagens,
+            cnpj_remetente=cnpj_remetente,
+            tipo_frete=tipo_frete,
+        )

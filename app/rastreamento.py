@@ -32,7 +32,7 @@ try:
         normalize_carrier_name,
     )
 except Exception:
-    CARRIER_DISABLED_MESSAGE = "Transportadora desabilitada pela configuração remota."
+    CARRIER_DISABLED_MESSAGE = "Esta transportadora foi desabilitada pela configuração da licença."
 
     def carrier_enabled_or_message(carrier):
         return True, ""

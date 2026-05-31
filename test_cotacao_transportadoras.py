@@ -33,6 +33,76 @@ def test_resolver_cep_origem_uses_expected_precedence():
     assert ct._resolver_cep_origem({}, "") == ct.CEP_ORIGEM_PADRAO
 
 
+def test_obter_cep_origem_default_applies_remote_override(monkeypatch):
+    monkeypatch.setattr(
+        ct,
+        "_carregar_config",
+        lambda config_path=None: {"romaneio": {"cep_origem": "11111111"}},
+    )
+    monkeypatch.setattr(
+        ct,
+        "apply_safe_runtime_overrides",
+        lambda config: {"romaneio": {"cep_origem": "99.740-000"}},
+    )
+
+    assert ct.obter_cep_origem_default() == "99740000"
+
+
+def test_remote_cep_origem_override_is_used_before_origin_validation(monkeypatch):
+    monkeypatch.setattr(ct, "_diag_log_enabled", lambda: False)
+    monkeypatch.setattr(
+        ct,
+        "apply_safe_runtime_overrides",
+        lambda config: {
+            "romaneio": {"cep_origem": "99740000"},
+            "fretio": {},
+            "transportadoras": {},
+        },
+    )
+
+    class FakeFactory:
+        def __init__(self, config):
+            self.config = config
+
+        def get_provider_config(self, nome):
+            return {"habilitado": False}
+
+        def is_available(self, nome):
+            return False
+
+    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+
+    dados = {
+        "destino_cep": "90010123",
+        "uf_destino": "RS",
+        "cnpj_destinatario": "12345678000190",
+        "peso": 3.3,
+        "valor": 150.99,
+        "volumes": 1,
+        "cubagem_m3": 0.044,
+        "cubagens": [
+            {
+                "quantidade": 1,
+                "comprimento_cm": 45,
+                "largura_cm": 31,
+                "altura_cm": 31,
+                "peso_por_volume_kg": 3.3,
+            }
+        ],
+        "descricoes_itens": [],
+    }
+
+    resultados = asyncio.run(
+        ct._executar_cotacoes_com_dados(
+            config={"romaneio": {"cep_origem": "000"}, "fretio": {}, "transportadoras": {}},
+            dados=dados,
+            cep_origem="",
+        )
+    )
+
+    assert resultados == []
+
+
 def test_text_normalization_and_dimension_parsing_are_stable():
     texto = "<p>Linha 1</p><br>Linha&nbsp;&nbsp;2\r\n<div>Linha 3</div>"
 
@@ -250,6 +320,7 @@ def test_eucatur_mais_de_11_volumes_vira_resultado_controlado(monkeypatch):
                     "dominio": "DOM",
                     "usuario": "usr",
                     "senha": "pw",
+                    "cnpj_pagador": "00000000000191",
                     "ufs_atendidas": ["AM"],
                 }
             return {"habilitado": False}
@@ -358,9 +429,9 @@ def test_timeout_provider_nao_chama_report_error(monkeypatch):
 
 
 def test_chrome_ausente_gera_no_maximo_um_report(monkeypatch):
-    """Chrome ausente deve gerar no máximo 1 report_error_message com module=chrome_missing."""
+    """Chrome ausente deve gerar no máximo 1 report estruturado com event=chrome_missing."""
     reports = []
-    monkeypatch.setattr(ct, "report_error_message", lambda msg, context="": reports.append(context))
+    monkeypatch.setattr(ct, "report_provider_error", lambda provider, stage, message, **kw: reports.append((provider, stage, kw)))
 
     import fretio.providers.base as base_mod
     monkeypatch.setattr(
@@ -375,9 +446,62 @@ def test_chrome_ausente_gera_no_maximo_um_report(monkeypatch):
     session = ct.TransportadoraSession()
     asyncio.run(session.inicializar(callback=lambda msg: messages_callback.append(msg)))
 
-    assert any("chrome_missing" in r for r in reports) or any("chrome" in r.lower() for r in reports)
+    assert any(r[0] == "chrome" and r[1] == "pre_login" and r[2].get("context", {}).get("event") == "chrome_missing" for r in reports)
     assert len(reports) <= 1
     assert any("Chrome" in m or "chrome" in m.lower() for m in messages_callback)
+
+
+def test_chrome_ausente_na_cotacao_reporta_uma_vez(monkeypatch):
+    reports = []
+    create_calls = []
+    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(ct, "report_provider_error", lambda provider, stage, message, **kw: reports.append((provider, stage, kw)))
+
+    class FakeFactory:
+        def __init__(self, config):
+            pass
+
+        def is_available(self, nome):
+            return False
+
+        def get_provider_config(self, nome):
+            if nome == "braspress":
+                return {"habilitado": True, "cnpj": "123", "senha": "pw", "ufs_atendidas": ["RS"]}
+            if nome == "trd":
+                return {"habilitado": True, "email": "x@y.com", "senha": "pw", "ufs_atendidas": ["RS"]}
+            return {"habilitado": False}
+
+        def create(self, nome, **kwargs):
+            create_calls.append(nome)
+            raise FileNotFoundError("Google Chrome nao encontrado. Instale o Chrome para usar o Fretio.")
+
+    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+
+    dados = {
+        "destino_cep": "90010123",
+        "uf_destino": "RS",
+        "cnpj_destinatario": "12345678000190",
+        "peso": 3.3,
+        "valor": 150.0,
+        "volumes": 1,
+        "cubagem_m3": 0.044,
+        "cubagens": [{"quantidade": 1, "comprimento_cm": 45, "largura_cm": 31, "altura_cm": 31}],
+        "descricoes_itens": [],
+    }
+
+    asyncio.run(
+        ct._executar_cotacoes_com_dados(
+            config={"romaneio": {"cep_origem": "90000000"}, "fretio": {}, "transportadoras": {}},
+            dados=dados,
+            cep_origem="90000000",
+        )
+    )
+
+    chrome_reports = [r for r in reports if r[0] == "chrome"]
+    assert len(chrome_reports) == 1
+    assert create_calls == ["braspress"]
+    assert chrome_reports[0][1] == "abrir_pagina"
+    assert chrome_reports[0][2].get("context", {}).get("event") == "chrome_missing"
 
 
 def test_trd_retornou_none_sem_diag_path_nao_reporta_duas_vezes(monkeypatch):
@@ -589,11 +713,12 @@ def test_copex_timeout_aguardando_resultado_falha_controlada(monkeypatch):
             if nome == "coopex":
                 return {
                     "habilitado": True,
-                    "dominio": "DOM",
-                    "usuario": "usr",
-                    "senha": "pw",
-                    "ufs_atendidas": ["SP"],
-                }
+                        "dominio": "DOM",
+                        "usuario": "usr",
+                        "senha": "pw",
+                        "cnpj_pagador": "00000000000191",
+                        "ufs_atendidas": ["SP"],
+                    }
             return {"habilitado": False}
 
         def create(self, nome, **kwargs):
@@ -700,3 +825,72 @@ def test_quotation_jobs_client_falha_nao_altera_cotacao(monkeypatch):
     assert len(trd_results) >= 1
     assert trd_results[0].status == "ok"
     assert trd_results[0].valor_frete == 450.0
+
+
+def test_orquestrador_faz_fallback_para_coteir_quando_cotar_request_falha(monkeypatch):
+    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+
+    class FakeFallbackProvider:
+        nome = "TRD"
+        _passo_atual = "inicio"
+        last_error = None
+
+        async def cotar(self, request):
+            raise TypeError("assinatura legada")
+
+        async def coteir(self, **kwargs):
+            from fretio.models import Cotacao
+            return Cotacao(transportadora="TRD", prazo_dias=4, valor_frete=333.0)
+
+        async def cleanup(self):
+            pass
+
+    class FakeFactory:
+        def __init__(self, config):
+            pass
+
+        def is_available(self, nome):
+            return False
+
+        def get_provider_config(self, nome):
+            if nome == "trd":
+                return {
+                    "habilitado": True,
+                    "email": "x@x.com",
+                    "senha": "pw",
+                    "ufs_atendidas": ["RS"],
+                }
+            return {"habilitado": False}
+
+        def create(self, nome, **kwargs):
+            if nome == "trd":
+                return FakeFallbackProvider()
+            return None
+
+    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+
+    config = {
+        "fretio": {},
+        "romaneio": {"cep_origem": "90000000"},
+        "transportadoras": {"trd": {"habilitado": True}},
+    }
+    dados = {
+        "destino_cep": "90010123",
+        "uf_destino": "RS",
+        "cnpj_destinatario": "12345678000190",
+        "peso": 3.3,
+        "valor": 150.0,
+        "volumes": 1,
+        "cubagem_m3": 0.044,
+        "cubagens": [{"quantidade": 1, "comprimento_cm": 45, "largura_cm": 31, "altura_cm": 31}],
+        "descricoes_itens": [],
+    }
+
+    resultados = asyncio.run(
+        ct._executar_cotacoes_com_dados(config=config, dados=dados, cep_origem="90000000")
+    )
+
+    trd_results = [r for r in resultados if r.transportadora == "TRD"]
+    assert len(trd_results) >= 1
+    assert trd_results[0].status == "ok"
+    assert trd_results[0].valor_frete == 333.0

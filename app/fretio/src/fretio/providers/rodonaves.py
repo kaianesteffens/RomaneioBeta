@@ -16,6 +16,7 @@ from fretio.providers._win_taskbar import (
 )
 from fretio.providers.provider_utils import _digits, get_stealth_script
 from fretio.models import Cotacao
+from fretio.quotation_contract import QuoteRequest, QuoteResponse
 from fretio.logging_conf import get_logger
 
 logger = get_logger(__name__)
@@ -1690,3 +1691,6 @@ class RodonavesProvider(ProviderBase):
                 # recria a página para deixar o contexto limpo para o próximo retry.
                 await self._reset_page_for_retry(error)
             return None
+
+    async def cotar(self, request: QuoteRequest) -> QuoteResponse:
+        return await super().cotar(request)

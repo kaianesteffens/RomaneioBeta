@@ -5,6 +5,7 @@ import re
 from playwright.async_api import async_playwright, Page
 from fretio.providers.base import ProviderBase
 from fretio.models import Cotacao
+from fretio.quotation_contract import QuoteRequest, QuoteResponse
 from fretio.logging_conf import get_logger
 
 logger = get_logger(__name__)
@@ -21,6 +22,7 @@ class CoopexProvider(ProviderBase):
         dominio: str,
         usuario: str,
         senha: str,
+        cnpj_pagador: str = "",
         usar_cache: bool = True,
         headless: bool = True,
     ):
@@ -28,6 +30,7 @@ class CoopexProvider(ProviderBase):
         self.dominio = dominio
         self.usuario = usuario
         self.senha = senha
+        self.cnpj_pagador = re.sub(r"\D", "", str(cnpj_pagador or ""))
         self.headless = headless
         self.last_error: str | None = None
         self._browser = None
@@ -173,7 +176,9 @@ class CoopexProvider(ProviderBase):
         """Preenche o formulário de cotação SSW via JavaScript."""
         self._passo_atual = "preenchendo_formulario"
         page = self._page
-        cnpj_pagador = (cnpj_pagador or "40223106000179").replace('.', '').replace('/', '').replace('-', '').strip()
+        cnpj_pagador = (cnpj_pagador or self.cnpj_pagador).replace('.', '').replace('/', '').replace('-', '').strip()
+        if len(cnpj_pagador) != 14:
+            raise ValueError("cnpj_pagador é obrigatório para cotação Coopex")
 
         # CNPJ pagador + trigger lookup
         await page.evaluate(f'''() => {{
@@ -683,3 +688,6 @@ class CoopexProvider(ProviderBase):
             self.last_error = f"Erro na cotação: {e}"
             logger.error(f"[{self.nome}] {self.last_error}")
             return None
+
+    async def cotar(self, request: QuoteRequest) -> QuoteResponse:
+        return await super().cotar(request)

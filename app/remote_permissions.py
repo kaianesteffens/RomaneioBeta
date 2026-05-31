@@ -20,13 +20,13 @@ KNOWN_CARRIERS = (
 )
 
 FEATURE_MESSAGES = {
-    "cotacao": "Cotação desabilitada para esta licença. Entre em contato com o administrador.",
-    "rastreio": "Rastreio desabilitado para esta licença. Entre em contato com o administrador.",
-    "nfe": "Leitura de NF-e desabilitada para esta licença.",
-    "romaneio": "Romaneio desabilitado para esta licença.",
+    "cotacao": "Este módulo foi desabilitado pela configuração da licença.",
+    "rastreio": "Este módulo foi desabilitado pela configuração da licença.",
+    "nfe": "Este módulo foi desabilitado pela configuração da licença.",
+    "romaneio": "Este módulo foi desabilitado pela configuração da licença.",
 }
 
-CARRIER_DISABLED_MESSAGE = "Transportadora desabilitada pela configuração remota."
+CARRIER_DISABLED_MESSAGE = "Esta transportadora foi desabilitada pela configuração da licença."
 
 _LOGGER = logging.getLogger("remote_permissions")
 
@@ -85,7 +85,7 @@ def feature_message(feature: str) -> str:
     feature_name = normalize_feature_name(feature)
     return FEATURE_MESSAGES.get(
         feature_name,
-        "Recurso desabilitado para esta licença. Entre em contato com o administrador.",
+        "Este módulo foi desabilitado pela configuração da licença.",
     )
 
 

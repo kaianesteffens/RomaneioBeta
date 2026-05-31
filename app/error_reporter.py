@@ -577,8 +577,9 @@ def _build_error_api_payload(
     module: str,
     message: str,
     traceback_text: str,
+    extra: dict | None = None,
 ) -> dict[str, str]:
-    return {
+    payload = {
         "license_key": _get_saved_license_key(),
         "machine_id": _get_machine_id_for_report(),
         "app_version": _get_version(),
@@ -587,6 +588,15 @@ def _build_error_api_payload(
         "message": sanitize_error_payload(message or ""),
         "traceback": sanitize_error_payload(traceback_text or ""),
     }
+    if isinstance(extra, dict):
+        for key, value in extra.items():
+            if key in {"license_key", "machine_id", "app_version"}:
+                payload[key] = value
+            elif isinstance(value, str):
+                payload[key] = sanitize_error_payload(value)
+            else:
+                payload[key] = value
+    return payload
 
 
 def _send_to_error_api(payload: dict[str, str], label: str = "") -> bool:
@@ -627,6 +637,79 @@ def _send_report(body: str, label: str = "", api_payload: dict[str, str] | None 
     if _gist_id and _token:
         return _send_to_gist(body, label=label)
     return False
+
+
+def report_error_payload(payload: dict, wait: bool = False) -> None:
+    """Envia payload de erro estruturado. Best-effort e sem propagar exceções."""
+    try:
+        if not isinstance(payload, dict):
+            return
+
+        module = str(payload.get("module") or "")
+        provider = str(payload.get("provider") or "")
+        stage = str(payload.get("stage") or "")
+        event = str(payload.get("event") or "")
+        message = str(payload.get("message") or "")
+        traceback_text = str(payload.get("traceback") or "")
+
+        _load_config()
+        if not _error_api_url and not (_gist_id and _token):
+            _diag("WARN", f"report_error_payload({module}/{provider}/{stage}): sem endpoint/credenciais — descartado")
+            return
+
+        fp_source = "|".join((module, provider, stage, event, message, traceback_text))
+        fp = sha256(fp_source.encode("utf-8", errors="replace")).hexdigest()[:16]
+        if _is_rate_limited(fp):
+            _diag("DEBUG", f"report_error_payload({module}/{provider}/{stage}): rate-limited (fp={fp})")
+            return
+
+        api_payload = _build_error_api_payload(
+            module=module,
+            message=message,
+            traceback_text=traceback_text,
+            extra=payload,
+        )
+        api_payload.setdefault("license_key", _get_saved_license_key())
+        api_payload.setdefault("machine_id", _get_machine_id_for_report())
+        api_payload.setdefault("app_version", _get_version())
+
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        body_parts = [
+            f"## {module or 'erro'} / {provider or '-'} / {stage or '-'}",
+            "",
+            "| Campo | Valor |",
+            "|-------|-------|",
+            f"| Versão | `{api_payload.get('app_version') or '?'}` |",
+            f"| Máquina | `{_get_machine_hash()}` |",
+            f"| Licença | `{_get_license_key()}` |",
+            f"| Provider | `{sanitize_error_payload(provider) or '-'}` |",
+            f"| Stage | `{sanitize_error_payload(stage) or '-'}` |",
+            f"| Event | `{sanitize_error_payload(event) or '-'}` |",
+            f"| Severity | `{sanitize_error_payload(str(payload.get('severity') or 'error'))}` |",
+            f"| Source | `{sanitize_error_payload(str(payload.get('source') or '')) or '-'}` |",
+            f"| Data/Hora | `{timestamp}` |",
+            f"| Fingerprint | `{fp}` |",
+            "",
+            "### Mensagem",
+            sanitize_error_payload(message),
+        ]
+        context_json = api_payload.get("context_json")
+        browser_state_json = api_payload.get("browser_state_json")
+        if context_json not in (None, "", {}, []):
+            body_parts += ["", "### Contexto", "```json", sanitize_error_payload(json.dumps(context_json, ensure_ascii=False, default=str)), "```"]
+        if browser_state_json not in (None, "", {}, []):
+            body_parts += ["", "### Browser", "```json", sanitize_error_payload(json.dumps(browser_state_json, ensure_ascii=False, default=str)), "```"]
+        if traceback_text:
+            body_parts += ["", "### Traceback", "```python", sanitize_error_payload(traceback_text.strip()), "```"]
+
+        body = sanitize_error_payload("\n".join(body_parts))
+        label = f"payload/{module or 'N/A'}/{provider or 'N/A'}/{stage or 'N/A'}"
+        t = threading.Thread(target=_send_report, args=(body, label, api_payload), daemon=True)
+        t.start()
+        if wait:
+            t.join(timeout=20)
+    except Exception:
+        pass
 
 
 def report_error(

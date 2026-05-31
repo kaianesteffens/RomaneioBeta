@@ -33,6 +33,84 @@ class ProviderSpec:
     builder: ProviderBuilder
 
 
+@dataclass(frozen=True)
+class ProviderConfigValidation:
+    provider: str
+    enabled: bool
+    valid: bool
+    missing_fields: tuple[str, ...] = ()
+
+    @property
+    def status(self) -> str:
+        if not self.enabled:
+            return "desabilitada"
+        return "ok" if self.valid else "Configuração incompleta"
+
+    @property
+    def user_message(self) -> str:
+        if self.valid:
+            return ""
+        labels = ", ".join(_REQUIRED_FIELD_LABELS.get(field, field) for field in self.missing_fields)
+        return f"Configuração incompleta. Preencha: {labels}."
+
+
+_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "braspress": ("cnpj", "senha"),
+    "bauer": ("cotacao_url", "cnpj_pagador", "cnpj_remetente", "cnpj_destinatario"),
+    "trd": ("email", "senha"),
+    "agex": ("email", "senha"),
+    "eucatur": ("dominio", "usuario", "senha", "cnpj_pagador"),
+    "rodonaves": ("dominio", "usuario", "senha", "cnpj_pagador"),
+    "alfa": ("login", "senha"),
+    "coopex": ("dominio", "usuario", "senha", "cnpj_pagador"),
+}
+
+_REQUIRED_FIELD_LABELS: dict[str, str] = {
+    "cnpj": "CNPJ",
+    "senha": "senha",
+    "cotacao_url": "URL de cotação",
+    "cnpj_pagador": "CNPJ pagador",
+    "cnpj_remetente": "CNPJ remetente",
+    "cnpj_destinatario": "CNPJ destinatário",
+    "email": "e-mail",
+    "dominio": "domínio",
+    "usuario": "usuário",
+    "login": "login",
+}
+
+
+def required_fields_for_provider(name: str) -> tuple[str, ...]:
+    return _REQUIRED_FIELDS.get(str(name or "").strip().lower(), ())
+
+
+def validate_provider_minimum_config(
+    name: str,
+    config: Mapping[str, Any] | None,
+    *,
+    enabled_default: bool = True,
+) -> ProviderConfigValidation:
+    provider_name = str(name or "").strip().lower()
+    cfg = dict(config) if isinstance(config, Mapping) else {}
+    enabled = bool(cfg.get("habilitado", enabled_default))
+    required = required_fields_for_provider(provider_name)
+    if not enabled or not required:
+        return ProviderConfigValidation(provider_name, enabled, True)
+
+    missing: list[str] = []
+    for field in required:
+        value = _text(cfg.get(field))
+        if provider_name == "agex" and field == "email" and not value:
+            legacy_login = _text(cfg.get("cnpj"))
+            if "@" in legacy_login:
+                value = legacy_login
+        if provider_name == "rodonaves" and field == "dominio" and not value:
+            value = "RTE"
+        if not value:
+            missing.append(field)
+
+    return ProviderConfigValidation(provider_name, enabled, not missing, tuple(missing))
+
+
 def _build_braspress(config: dict[str, Any]) -> dict[str, Any] | None:
     cnpj = _text(config.get("cnpj"))
     senha = _text(config.get("senha"))
@@ -118,12 +196,14 @@ def _build_eucatur(config: dict[str, Any]) -> dict[str, Any] | None:
     dominio = _text(config.get("dominio"))
     usuario = _text(config.get("usuario"))
     senha = _text(config.get("senha"))
-    if not dominio or not usuario or not senha:
+    cnpj_pagador = _text(config.get("cnpj_pagador"))
+    if not dominio or not usuario or not senha or not cnpj_pagador:
         return None
     return {
         "dominio": dominio,
         "usuario": usuario,
         "senha": senha,
+        "cnpj_pagador": cnpj_pagador,
         "headless": bool(config.get("headless", True)),
     }
 
@@ -164,12 +244,14 @@ def _build_coopex(config: dict[str, Any]) -> dict[str, Any] | None:
     dominio = _text(config.get("dominio"))
     usuario = _text(config.get("usuario"))
     senha = _text(config.get("senha"))
-    if not dominio or not usuario or not senha:
+    cnpj_pagador = _text(config.get("cnpj_pagador"))
+    if not dominio or not usuario or not senha or not cnpj_pagador:
         return None
     return {
         "dominio": dominio,
         "usuario": usuario,
         "senha": senha,
+        "cnpj_pagador": cnpj_pagador,
         "headless": bool(config.get("headless", True)),
     }
 
@@ -263,6 +345,9 @@ class ProviderFactory:
     def is_available(self, name: str) -> bool:
         return self.get_provider_class(name) is not None
 
+    def validate_minimum_config(self, name: str) -> ProviderConfigValidation:
+        return validate_provider_minimum_config(name, self.get_provider_config(name))
+
     def create(
         self,
         name: str,
@@ -299,6 +384,17 @@ class ProviderFactory:
 
         merged = dict(config)
         merged.update(overrides)
+        validation = validate_provider_minimum_config(
+            provider_name,
+            merged,
+            enabled_default=bool(config.get("habilitado", True)),
+        )
+        if not validation.valid:
+            bind_logger(logger, provider=provider_name, operation="create_provider").debug(
+                "Provider com configuração mínima incompleta: %s",
+                ",".join(validation.missing_fields),
+            )
+            return None
         kwargs = spec.builder(merged)
         if not kwargs:
             bind_logger(logger, provider=provider_name, operation="create_provider").debug(

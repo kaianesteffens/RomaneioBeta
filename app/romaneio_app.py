@@ -7,15 +7,18 @@ import os
 import sys
 import re
 import concurrent.futures
+import queue
 import time
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable
 
-from PySide6.QtCore import Qt, QEvent
+from PySide6.QtCore import Qt, QEvent, QUrl
 from PySide6.QtGui import (
+    QDesktopServices,
     QFont,
     QIcon,
+    QColor,
     QPixmap,
     QShortcut,
     QKeySequence,
@@ -43,6 +46,10 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QCheckBox,
     QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QAbstractItemView,
 )
 
 import asyncio
@@ -78,6 +85,8 @@ _add_fretio_src_to_path()
 
 from extrator_pedidos import ExtratorPedidos
 from cotacao_transportadoras import (
+    CHROME_DOWNLOAD_URL,
+    CHROME_MISSING_USER_MESSAGE,
     cotar_transportadoras_romaneio_colado,
     formatar_resultados_cotacao,
     setup_global_exception_handler,
@@ -88,6 +97,7 @@ from updater import check_for_update, apply_update, get_repo_from_config, needs_
 from license import get_saved_license, save_license, validate_license, get_machine_id, LicenseStatus
 from remote_config import fetch_remote_config, get_last_fetch_status
 from remote_permissions import ensure_feature_allowed, feature_allowed_or_default
+from version_policy import evaluate_minimum_version, parse_semantic_version
 from error_reporter import install_global_hooks, report_error, report_error_message, configure as _er_configure
 from usage_reporter import (
     configure as _usage_configure,
@@ -101,8 +111,11 @@ from usage_reporter import (
 )
 from quotation_jobs_client import configure as _quotation_jobs_configure
 from quotation_normalization_client import configure as _quotation_normalization_configure
+from async_worker import AsyncWorkerLoop
 from extrator_nfe import extrair_arquivo as extrair_nfe_arquivo, NotaFiscal, identificar_transportadora, formatar_nota_resumo, parsear_info_complementar
 from rastreamento import rastrear_multiplas, ResultadoRastreio, obter_link_rastreio
+from fretio.providers.base import find_chrome
+from fretio.providers.factory import validate_provider_minimum_config
 from ui_components import (
     CarrierDot,
     NAV_ICONS,
@@ -114,6 +127,8 @@ from ui_components import (
 from ui.events import (
     CotacaoProgressEvent,
     LoginStatusEvent,
+    NfeImportedEvent,
+    PdfProcessedEvent,
     RastreioFinishedEvent,
     RastreioResultEvent,
     StatusUpdateEvent,
@@ -129,6 +144,10 @@ from ui.formatting import (
 from ui.widgets import IndeterminateBar
 
 
+class MandatoryUpdateDeclined(RuntimeError):
+    pass
+
+
 def _resource_path(relative_path: str) -> Path:
     base = getattr(sys, '_MEIPASS', None)
     if base:
@@ -136,28 +155,271 @@ def _resource_path(relative_path: str) -> Path:
     return Path(__file__).resolve().parent / relative_path
 
 
-def _start_remote_config_fetch(startup_logger=None) -> None:
+def _fetch_remote_config_sync(startup_logger=None) -> dict[str, Any]:
+    status = "error"
+    payload: dict[str, Any] = {}
     try:
-        def _worker() -> None:
-            status = "error"
-            try:
-                fetch_remote_config(wait=True)
-                status = get_last_fetch_status() or "default"
-            except Exception:
-                status = "error"
-            try:
-                report_remote_config_fetched(status=status)
-            except Exception:
-                pass
-
-        threading.Thread(target=_worker, name="FretioRemoteConfigFetch", daemon=True).start()
+        fetched = fetch_remote_config(wait=True)
+        status = get_last_fetch_status() or "default"
+        if isinstance(fetched, dict):
+            payload = fetched
         if startup_logger is not None:
-            startup_logger.info("Busca de configuracao remota da licenca iniciada")
+            startup_logger.info("Configuracao remota carregada com status=%s", status)
     except Exception as exc:
         if startup_logger is not None:
-            startup_logger.warning("Falha ao iniciar busca de configuracao remota: %s", exc)
-        else:
-            print(f"[fretio] Falha ao iniciar configuracao remota: {exc}", file=sys.stderr, flush=True)
+            startup_logger.warning("Falha ao buscar configuracao remota: %s", exc)
+        status = "error"
+    try:
+        report_remote_config_fetched(status=status)
+    except Exception:
+        pass
+    return payload
+
+
+def _run_startup_update_flow(
+    repo: str,
+    current_version: str,
+    *,
+    startup_logger=None,
+    show_verification_error: bool = False,
+) -> bool:
+    if not repo:
+        if show_verification_error:
+            _show_startup_message(
+                QMessageBox.Warning,
+                "Atualizacao indisponivel",
+                (
+                    "Nao foi possivel verificar atualizacoes agora.\n"
+                    "Confira sua conexao e tente novamente em alguns minutos."
+                ),
+            )
+        return False
+
+    try:
+        update_info = check_for_update(repo, current_version)
+    except Exception as exc:
+        if startup_logger is not None:
+            startup_logger.warning("Falha ao consultar update no repo %s: %s", repo, exc)
+        if show_verification_error:
+            _show_startup_message(
+                QMessageBox.Warning,
+                "Atualizacao indisponivel",
+                (
+                    "Nao foi possivel verificar atualizacoes agora.\n"
+                    "Confira sua conexao e tente novamente em alguns minutos."
+                ),
+            )
+        return False
+
+    if not update_info:
+        if show_verification_error:
+            _show_startup_message(
+                QMessageBox.Warning,
+                "Atualizacao indisponivel",
+                (
+                    "Nao encontramos uma atualizacao automatica no momento.\n"
+                    "Tente novamente mais tarde ou contate o suporte."
+                ),
+            )
+        return False
+
+    notes = str(update_info.release_notes or "").strip()
+    message = (
+        f"Nova versao encontrada: v{update_info.version}.\n\n"
+        f"Versao atual: v{current_version}\n"
+    )
+    if update_info.mandatory:
+        message += "\nEsta atualizacao e obrigatoria para continuar usando o sistema."
+    else:
+        message += "\nVoce pode atualizar agora ou continuar com esta versao."
+    if notes:
+        message += f"\n\nNotas da versao:\n{notes[:2000]}"
+
+    prompt_icon = QMessageBox.Critical if update_info.mandatory else QMessageBox.Information
+    prompt_title = "Atualizacao obrigatoria" if update_info.mandatory else "Atualizacao disponivel"
+    dialog = QMessageBox(prompt_icon, prompt_title, message, QMessageBox.NoButton)
+    btn_update = dialog.addButton("Atualizar agora", QMessageBox.AcceptRole)
+    btn_close = None
+    if update_info.mandatory:
+        btn_close = dialog.addButton("Fechar aplicativo", QMessageBox.RejectRole)
+    else:
+        dialog.addButton("Continuar", QMessageBox.RejectRole)
+    dialog.setWindowModality(Qt.ApplicationModal)
+    dialog.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+    dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    dialog.exec()
+
+    if dialog.clickedButton() is not btn_update:
+        if update_info.mandatory and dialog.clickedButton() is btn_close:
+            raise MandatoryUpdateDeclined("Atualizacao obrigatoria recusada pelo usuario.")
+        return False
+
+    progress = QMessageBox(
+        QMessageBox.Information,
+        "Atualizacao Automatica",
+        (
+            f"Nova versao encontrada: v{update_info.version}.\n"
+            "Aplicando atualizacao automatica..."
+        ),
+        QMessageBox.NoButton,
+    )
+    progress.setWindowModality(Qt.ApplicationModal)
+    progress.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+    progress.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    progress.show()
+    progress.raise_()
+    progress.activateWindow()
+    QApplication.processEvents()
+
+    messages: queue.Queue[str] = queue.Queue()
+    done = threading.Event()
+    result: dict[str, Any] = {"ok": False, "exc": None}
+
+    def _update_cb(message: str) -> None:
+        messages.put(str(message or ""))
+
+    def _apply_worker() -> None:
+        try:
+            result["ok"] = apply_update(update_info, callback=_update_cb)
+        except Exception as exc:
+            result["exc"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=_apply_worker, name="FretioStartupUpdate", daemon=True).start()
+
+    while not done.is_set():
+        try:
+            while True:
+                message = messages.get_nowait()
+                if message:
+                    progress.setText(message)
+        except queue.Empty:
+            pass
+        QApplication.processEvents()
+        time.sleep(0.05)
+    try:
+        while True:
+            message = messages.get_nowait()
+            if message:
+                progress.setText(message)
+    except queue.Empty:
+        pass
+    QApplication.processEvents()
+
+    progress.close()
+    if result["exc"] is not None:
+        if startup_logger is not None:
+            startup_logger.warning("Falha ao aplicar update: %s", result["exc"])
+        ok = False
+    else:
+        ok = bool(result["ok"])
+
+    if ok:
+        _show_startup_message(
+            QMessageBox.Information,
+            "Atualizacao concluida",
+            (
+                f"Fretio foi atualizado para v{update_info.version}.\n"
+                "O aplicativo vai reiniciar automaticamente."
+            ),
+        )
+        restart_app()
+        return True
+
+    _show_startup_message(
+        QMessageBox.Warning,
+        "Atualizacao falhou",
+        (
+            "Nao foi possivel aplicar a atualizacao automatica agora.\n"
+            "Voce pode tentar novamente em alguns minutos."
+        ),
+    )
+    if update_info.mandatory:
+        raise MandatoryUpdateDeclined("Atualizacao obrigatoria nao foi aplicada.")
+    return False
+
+
+def _enforce_minimum_version_policy(
+    *,
+    remote_payload: dict[str, Any] | None,
+    current_version: str,
+    repo: str,
+    startup_logger=None,
+) -> bool:
+    config = (remote_payload or {}).get("config", {})
+    policy = evaluate_minimum_version(config, current_version)
+    if not policy.is_outdated:
+        return True
+
+    min_version = policy.min_app_version or "desconhecida"
+    if startup_logger is not None:
+        startup_logger.warning(
+            "Versao abaixo do minimo remoto: atual=%s minimo=%s force_update=%s",
+            policy.current_version,
+            min_version,
+            policy.force_update,
+        )
+
+    if policy.should_block:
+        while True:
+            dialog = QMessageBox(
+                QMessageBox.Critical,
+                "Atualizacao obrigatoria",
+                (
+                    "Sua versao do Fretio nao e compativel com o servidor.\n\n"
+                    f"Versao atual: v{policy.current_version}\n"
+                    f"Versao minima: v{min_version}\n\n"
+                    "Atualize agora para continuar usando o sistema."
+                ),
+                QMessageBox.NoButton,
+            )
+            btn_update = dialog.addButton("Atualizar agora", QMessageBox.AcceptRole)
+            btn_close = dialog.addButton("Fechar aplicativo", QMessageBox.RejectRole)
+            dialog.setWindowModality(Qt.ApplicationModal)
+            dialog.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+            dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+            dialog.exec()
+
+            if dialog.clickedButton() is btn_update:
+                if _run_startup_update_flow(
+                    repo,
+                    current_version,
+                    startup_logger=startup_logger,
+                    show_verification_error=True,
+                ):
+                    return False
+                continue
+
+            if dialog.clickedButton() is btn_close:
+                return False
+            return False
+
+    dialog = QMessageBox(
+        QMessageBox.Warning,
+        "Atualizacao recomendada",
+        (
+            "Existe uma versao minima recomendada para o sistema.\n\n"
+            f"Versao atual: v{policy.current_version}\n"
+            f"Versao minima: v{min_version}\n\n"
+            "Voce pode atualizar agora ou continuar com esta versao."
+        ),
+        QMessageBox.NoButton,
+    )
+    btn_update = dialog.addButton("Atualizar agora", QMessageBox.AcceptRole)
+    dialog.addButton("Continuar", QMessageBox.RejectRole)
+    dialog.setWindowModality(Qt.ApplicationModal)
+    dialog.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+    dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    dialog.exec()
+    if dialog.clickedButton() is btn_update:
+        _run_startup_update_flow(
+            repo,
+            current_version,
+            startup_logger=startup_logger,
+            show_verification_error=True,
+        )
+    return True
 
 
 def _carregar_versao_app() -> str:
@@ -169,11 +431,11 @@ def _carregar_versao_app() -> str:
         try:
             if caminho.exists():
                 versao = caminho.read_text(encoding="utf-8").strip()
-                if re.match(r"^\d+\.\d+$", versao):
-                    return versao
+                parse_semantic_version(versao)
+                return versao
         except Exception:
             pass
-    return "1.0"
+    return "1.0.0"
 
 
 def _show_startup_text_input(title: str, label: str, text: str = "") -> tuple[str, bool]:
@@ -210,8 +472,10 @@ def _show_startup_message(icon: QMessageBox.Icon, title: str, text: str) -> int:
 CAMPOS_CREDENCIAIS: dict[str, list[tuple[str, str, bool]]] = {
     "braspress": [("cnpj", "CNPJ", False), ("senha", "Senha", True)],
     "bauer": [
+        ("cotacao_url", "URL de cotação", False),
         ("cnpj_pagador", "CNPJ Pagador", False),
         ("cnpj_remetente", "CNPJ Remetente", False),
+        ("cnpj_destinatario", "CNPJ Destinatário", False),
     ],
     "trd": [("email", "Email", False), ("senha", "Senha", True)],
     "agex": [
@@ -304,6 +568,7 @@ def _migrate_appdata_fretebot_to_fretio() -> None:
                 "github_repo",
                 "license_api_url",
                 "license_config_api_url",
+                "version_api_url",
                 "license_url",
                 "error_api_url",
                 "usage_api_url",
@@ -515,6 +780,7 @@ class ConfiguracoesDialog(QDialog):
         self._ufs_cbs: dict[str, dict[str, QCheckBox]] = {}
         self._cred_fields: dict[str, dict[str, QLineEdit]] = {}
         self._hab_checks: dict[str, QCheckBox] = {}
+        self._cred_warnings: dict[str, QLabel] = {}
         self.setWindowTitle(f"Configurações — {empresa_nome}")
         self.setMinimumSize(720, 560)
         self._build_ui()
@@ -644,6 +910,11 @@ class ConfiguracoesDialog(QDialog):
             cb_hab.setChecked(bool(tcfg.get("habilitado", False)))
             form.addRow("", cb_hab)
             self._hab_checks[nome] = cb_hab
+            warning = QLabel("")
+            warning.setObjectName("ConfigWarning")
+            warning.setWordWrap(True)
+            form.addRow("", warning)
+            self._cred_warnings[nome] = warning
             fields: dict[str, QLineEdit] = {}
             for chave, label, eh_senha in campos:
                 le = QLineEdit()
@@ -659,6 +930,10 @@ class ConfiguracoesDialog(QDialog):
                 form.addRow(f"{label}:", le)
                 fields[chave] = le
             self._cred_fields[nome] = fields
+            cb_hab.toggled.connect(lambda _checked, n=nome: self._atualizar_aviso_credencial(n))
+            for le in fields.values():
+                le.textChanged.connect(lambda _text, n=nome: self._atualizar_aviso_credencial(n))
+            self._atualizar_aviso_credencial(nome)
             vbox.addWidget(group)
         vbox.addStretch(1)
         scroll.setWidget(content)
@@ -668,7 +943,42 @@ class ConfiguracoesDialog(QDialog):
         wl.addWidget(scroll)
         return wrapper
 
+    def _config_credencial_atual(self, nome: str) -> dict[str, Any]:
+        transp_cfg = self.config.get("transportadoras", {}) or {}
+        tcfg = dict(transp_cfg.get(nome, {}) or {})
+        cb = self._hab_checks.get(nome)
+        if cb is not None:
+            tcfg["habilitado"] = cb.isChecked()
+        for chave, le in self._cred_fields.get(nome, {}).items():
+            tcfg[chave] = le.text().strip()
+        return tcfg
+
+    def _atualizar_aviso_credencial(self, nome: str) -> None:
+        label = self._cred_warnings.get(nome)
+        if label is None:
+            return
+        validation = validate_provider_minimum_config(nome, self._config_credencial_atual(nome))
+        label.setVisible(not validation.valid)
+        label.setText(validation.user_message if not validation.valid else "")
+
+    def _validar_credenciais_antes_de_salvar(self) -> list[str]:
+        erros: list[str] = []
+        for nome in sorted(self._hab_checks):
+            validation = validate_provider_minimum_config(nome, self._config_credencial_atual(nome))
+            if not validation.valid:
+                erros.append(f"- {nome.upper()}: {validation.user_message}")
+        return erros
+
     def _salvar(self):
+        erros = self._validar_credenciais_antes_de_salvar()
+        if erros:
+            QMessageBox.warning(
+                self,
+                "Configuração incompleta",
+                "Preencha os campos obrigatórios das transportadoras habilitadas antes de salvar:\n\n"
+                + "\n".join(erros),
+            )
+            return
         transp_cfg = self.config.setdefault("transportadoras", {})
         cred_changed = False
         # UFs
@@ -713,6 +1023,9 @@ class ConfiguracoesDialog(QDialog):
             QGroupBox#SettingsGroup::title {{ subcontrol-origin: margin; height: 0px; width: 0px; padding: 0px; color: transparent; }}
             #TranspTitle {{ font-size: 17px; font-weight: 700; color: {c_ink};
                            padding: 6px 0 8px 0; }}
+            #ConfigWarning {{ color: #f59e0b; background: rgba(245, 158, 11, 0.12);
+                              border: 1px solid rgba(245, 158, 11, 0.45);
+                              border-radius: 6px; padding: 6px 8px; }}
             #CredField {{ border: 1px solid {c_border}; border-radius: 6px; padding: 5px 8px;
                          background: {c_panel2}; color: {c_ink}; }}
             QTabWidget#MainTabs::pane {{ border: 1px solid {c_border}; border-radius: 10px;
@@ -739,108 +1052,6 @@ class ConfiguracoesDialog(QDialog):
         """)
 
 
-class _AsyncLoopThread:
-    def __init__(self, *, name: str = "RomaneioAsyncLoop"):
-        self._loop = asyncio.new_event_loop()
-        self._state_lock = threading.Lock()
-        self._started = threading.Event()
-        self._closed = threading.Event()
-        self._closing = False
-        self._thread = threading.Thread(target=self._run, name=name, daemon=True)
-        self._thread.start()
-        self._started.wait(timeout=2)
-
-    def _run(self) -> None:
-        asyncio.set_event_loop(self._loop)
-        self._started.set()
-        try:
-            self._loop.run_forever()
-        finally:
-            pending = [task for task in asyncio.all_tasks(self._loop) if not task.done()]
-            for task in pending:
-                task.cancel()
-            if pending:
-                try:
-                    self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                except Exception:
-                    pass
-            try:
-                self._loop.run_until_complete(self._loop.shutdown_asyncgens())
-            except Exception:
-                pass
-            try:
-                self._loop.run_until_complete(self._loop.shutdown_default_executor())
-            except Exception:
-                pass
-            try:
-                self._loop.close()
-            except Exception:
-                pass
-            self._closed.set()
-
-    def submit(self, coro_factory: Callable[[], Any]) -> concurrent.futures.Future | None:
-        with self._state_lock:
-            if self._closing or self._closed.is_set() or self._loop.is_closed():
-                return None
-            loop = self._loop
-        try:
-            return asyncio.run_coroutine_threadsafe(coro_factory(), loop)
-        except RuntimeError:
-            return None
-
-    async def _cleanup_and_cancel(
-        self,
-        cleanup_coro_factory: Callable[[], Any] | None,
-    ) -> None:
-        if cleanup_coro_factory is not None:
-            try:
-                await cleanup_coro_factory()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                pass
-        current = asyncio.current_task()
-        pending = [
-            task for task in asyncio.all_tasks()
-            if task is not current and not task.done()
-        ]
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-
-    def shutdown(
-        self,
-        *,
-        cleanup_coro_factory: Callable[[], Any] | None = None,
-        timeout: float = 3.0,
-    ) -> None:
-        with self._state_lock:
-            if self._closing:
-                thread = self._thread
-                loop = self._loop
-            else:
-                self._closing = True
-                thread = self._thread
-                loop = self._loop
-        if self._closed.is_set():
-            return
-        try:
-            future = asyncio.run_coroutine_threadsafe(
-                self._cleanup_and_cancel(cleanup_coro_factory),
-                loop,
-            )
-            future.result(timeout=timeout)
-        except Exception:
-            pass
-        try:
-            loop.call_soon_threadsafe(loop.stop)
-        except Exception:
-            pass
-        if thread.is_alive():
-            thread.join(timeout)
-
-
 class RomaneioWindow(QMainWindow):
     def __init__(self, empresa_nome: str = "default"):
         super().__init__()
@@ -857,13 +1068,15 @@ class RomaneioWindow(QMainWindow):
         self._romaneio_colado = ""
         self._modo_cotacao = "pdf"
         self._sessao = TransportadoraSession(config_path=self._config_path)
-        self._async_loop = _AsyncLoopThread()
+        self._async_loop = AsyncWorkerLoop(name="RomaneioAsyncLoop")
         self._session_task_lock = threading.Lock()
         self._async_futures: set[concurrent.futures.Future] = set()
         self._async_futures_lock = threading.Lock()
         self._shutdown_started = threading.Event()
         self._cotacao_total = 0
         self._cotacao_concluidas = 0
+        self._cotacao_status_rows: dict[str, int] = {}
+        self._forn_cotacao_status_rows: dict[str, int] = {}
         self._cep_origem_override = ""
         self._romaneios_processados: list[dict] = []
         self._last_cotacao_results: list = []
@@ -1076,6 +1289,22 @@ class RomaneioWindow(QMainWindow):
         self.label_info = QLabel("Nenhum arquivo carregado")
         self.label_info.setObjectName("StatusLabel")
         header_layout.addWidget(self.label_info)
+
+        self._chrome_warning_frame = QFrame()
+        self._chrome_warning_frame.setObjectName("ChromeWarningFrame")
+        chrome_warning_layout = QHBoxLayout(self._chrome_warning_frame)
+        chrome_warning_layout.setContentsMargins(10, 8, 10, 8)
+        chrome_warning_layout.setSpacing(10)
+        self._chrome_warning_label = QLabel(CHROME_MISSING_USER_MESSAGE)
+        self._chrome_warning_label.setObjectName("ChromeWarningLabel")
+        self._chrome_warning_label.setWordWrap(True)
+        chrome_warning_layout.addWidget(self._chrome_warning_label, 1)
+        self.btn_instalar_chrome = QPushButton("Instalar Google Chrome")
+        self.btn_instalar_chrome.setObjectName("SecondaryButton")
+        self.btn_instalar_chrome.clicked.connect(self._abrir_instalacao_chrome)
+        chrome_warning_layout.addWidget(self.btn_instalar_chrome, 0, Qt.AlignRight)
+        self._chrome_warning_frame.setVisible(False)
+        header_layout.addWidget(self._chrome_warning_frame)
 
         # --- Painel de status de login das transportadoras (visível só na página Cotação) ---
         self._carrier_status_frame = QFrame()
@@ -1321,7 +1550,9 @@ class RomaneioWindow(QMainWindow):
         self.result_text.setReadOnly(True)
         self.result_text.setObjectName("ResultText")
         self.result_text.setPlainText("")
+        self.cotacao_status_table = self._criar_tabela_status_cotacao()
         right_layout.addLayout(result_header)
+        right_layout.addWidget(self.cotacao_status_table, 0)
         right_layout.addWidget(self.result_text, 1)
 
         tab_colado_layout.addWidget(left_card, 1)
@@ -1496,7 +1727,9 @@ class RomaneioWindow(QMainWindow):
         self.forn_result_text = QPlainTextEdit()
         self.forn_result_text.setReadOnly(True)
         self.forn_result_text.setObjectName("ResultText")
+        self.forn_cotacao_status_table = self._criar_tabela_status_cotacao()
         forn_right_layout.addLayout(forn_result_header)
+        forn_right_layout.addWidget(self.forn_cotacao_status_table, 0)
         forn_right_layout.addWidget(self.forn_result_text, 1)
 
         tab_forn_layout.addWidget(forn_left, 1)
@@ -1595,6 +1828,7 @@ class RomaneioWindow(QMainWindow):
         self._cfg_ufs_cbs: dict = {}
         self._cfg_hab_checks: dict = {}
         self._cfg_cred_fields: dict = {}
+        self._cfg_cred_warnings: dict = {}
         tabs = QTabWidget()
         tabs.setObjectName("MainTabs")
         tabs.addTab(self._build_tab_empresa_inline(), "Empresa")
@@ -1735,6 +1969,11 @@ class RomaneioWindow(QMainWindow):
             cb_hab.setChecked(bool(tcfg.get("habilitado", False)))
             form.addRow("", cb_hab)
             self._cfg_hab_checks[nome] = cb_hab
+            warning = QLabel("")
+            warning.setObjectName("ConfigWarning")
+            warning.setWordWrap(True)
+            form.addRow("", warning)
+            self._cfg_cred_warnings[nome] = warning
             fields: dict = {}
             for chave, label, eh_senha in campos:
                 le = QLineEdit()
@@ -1750,6 +1989,10 @@ class RomaneioWindow(QMainWindow):
                 form.addRow(f"{label}:", le)
                 fields[chave] = le
             self._cfg_cred_fields[nome] = fields
+            cb_hab.toggled.connect(lambda _checked, n=nome: self._atualizar_aviso_credencial_embutido(n))
+            for le in fields.values():
+                le.textChanged.connect(lambda _text, n=nome: self._atualizar_aviso_credencial_embutido(n))
+            self._atualizar_aviso_credencial_embutido(nome)
             vbox.addWidget(group)
         btn_salvar_cred = QPushButton("Salvar Credenciais")
         btn_salvar_cred.clicked.connect(self._salvar_credenciais_embutido)
@@ -1774,7 +2017,43 @@ class RomaneioWindow(QMainWindow):
         _escrever_config_toml(cfg, self._config_path)
         self.label_info.setText("UFs atendidas salvas.")
 
+    def _config_credencial_embutida_atual(self, nome: str) -> dict[str, Any]:
+        cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
+        transp_cfg = cfg.get("transportadoras", {}) or {}
+        tcfg = dict(transp_cfg.get(nome, {}) or {})
+        cb = self._cfg_hab_checks.get(nome)
+        if cb is not None:
+            tcfg["habilitado"] = cb.isChecked()
+        for chave, le in self._cfg_cred_fields.get(nome, {}).items():
+            tcfg[chave] = le.text().strip()
+        return tcfg
+
+    def _atualizar_aviso_credencial_embutido(self, nome: str) -> None:
+        label = self._cfg_cred_warnings.get(nome)
+        if label is None:
+            return
+        validation = validate_provider_minimum_config(nome, self._config_credencial_embutida_atual(nome))
+        label.setVisible(not validation.valid)
+        label.setText(validation.user_message if not validation.valid else "")
+
+    def _validar_credenciais_embutidas_antes_de_salvar(self) -> list[str]:
+        erros: list[str] = []
+        for nome in sorted(self._cfg_hab_checks):
+            validation = validate_provider_minimum_config(nome, self._config_credencial_embutida_atual(nome))
+            if not validation.valid:
+                erros.append(f"- {nome.upper()}: {validation.user_message}")
+        return erros
+
     def _salvar_credenciais_embutido(self):
+        erros = self._validar_credenciais_embutidas_antes_de_salvar()
+        if erros:
+            QMessageBox.warning(
+                self,
+                "Configuração incompleta",
+                "Preencha os campos obrigatórios das transportadoras habilitadas antes de salvar:\n\n"
+                + "\n".join(erros),
+            )
+            return
         cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
         transp_cfg = cfg.setdefault("transportadoras", {})
         cred_changed = False
@@ -1933,6 +2212,8 @@ class RomaneioWindow(QMainWindow):
             #CmdKKbd {{ font-family: 'JetBrains Mono'; font-size: 10px; padding: 1px 5px;
                         background: {c_panel3}; border: 1px solid {c_border}; border-radius: 3px; color: {c_faint}; }}
             #StatusLabel {{ color: {c_muted}; font-size: 12px; }}
+            #ChromeWarningFrame {{ background: {c_amber_dim}; border: 1px solid {c_amber}; border-radius: 8px; }}
+            #ChromeWarningLabel {{ color: {c_ink}; font-size: 12px; font-weight: 600; }}
             #FooterLabel {{ font-size: 11px; color: {c_muted}; }}
             #Card {{ background: {c_panel}; border: 1px solid {c_border}; border-radius: 8px; }}
             #SubtitleLabel {{ font-size: 12px; color: {c_muted}; }}
@@ -1949,6 +2230,9 @@ class RomaneioWindow(QMainWindow):
             #TableMono2 {{ font-family: 'JetBrains Mono'; font-size: 11px; color: {c_ink2}; }}
             #TableText {{ font-size: 12px; color: {c_muted}; }}
             #TableMonoBold {{ font-family: 'JetBrains Mono'; font-size: 13px; font-weight: 600; color: {c_ink}; }}
+            #CotacaoStatusTable {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 8px; gridline-color: {c_border_soft}; font-size: 11px; }}
+            #CotacaoStatusTable::item {{ padding: 4px; }}
+            #CotacaoStatusTable QHeaderView::section {{ background: {c_panel3}; color: {c_muted}; border: none; border-bottom: 1px solid {c_border}; padding: 5px 7px; font-size: 10px; font-weight: 700; }}
             #CarrierRowName {{ font-family: 'JetBrains Mono'; font-size: 12px; color: {c_ink2}; }}
             #TagGreen {{ background: {c_green_dim}; color: {c_green}; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }}
             #TagRed {{ background: {c_red_dim}; color: {c_red}; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }}
@@ -1994,6 +2278,8 @@ class RomaneioWindow(QMainWindow):
             QGroupBox#SettingsGroup {{ border: 1px solid {c_border}; background: {c_panel}; border-radius: 8px; margin-top: 0px; }}
             QGroupBox#SettingsGroup::title {{ subcontrol-origin: margin; height: 0px; width: 0px; padding: 0px; color: transparent; }}
             #TranspTitle {{ font-size: 17px; font-weight: 700; color: {c_ink}; padding: 6px 0 8px 0; }}
+            #ConfigWarning {{ color: {c_amber}; background: {c_amber_dim};
+                              border: 1px solid {c_amber}; border-radius: 6px; padding: 6px 8px; }}
             #CredField {{ border: 1px solid {c_border}; border-radius: 6px; padding: 5px 8px;
                          background: {c_panel2}; color: {c_ink}; }}
             QPushButton#MiniButton {{ background: {c_panel2}; color: {c_ink2};
@@ -2120,43 +2406,178 @@ class RomaneioWindow(QMainWindow):
     def _processar_pdf(self, arquivo: str):
         if not ensure_feature_allowed("romaneio", self):
             return
-        self.pedidos = self.extrator.extrair_arquivo(arquivo)
-        if not self.pedidos:
+        self.btn_select.setEnabled(False)
+        self.label_info.setText(f"Processando PDF: {Path(arquivo).name}...")
+        self.label_info.setStyleSheet("color: #1f6feb;")
+
+        def _worker():
+            extrator = ExtratorPedidos()
+            pedidos = extrator.extrair_arquivo(arquivo)
+            if not pedidos:
+                return PdfProcessedEvent(arquivo, [], "", "nenhum_pedido")
+            try:
+                if len(pedidos) == 1:
+                    html_result = extrator.formatar_pedido_html(pedidos[0])
+                else:
+                    html_result = extrator.formatar_pedidos_agrupados_html(pedidos)
+            except ValueError as exc:
+                return PdfProcessedEvent(arquivo, pedidos, "", str(exc))
+            return PdfProcessedEvent(arquivo, pedidos, html_result)
+
+        self._run_sync_worker(
+            _worker,
+            context="importacao_pdf",
+            log_label="Erro ao processar PDF",
+            on_success=self._post_event_safe,
+            ui_error_handler=lambda exc: self._post_event_safe(
+                PdfProcessedEvent(arquivo, [], "", str(exc))
+            ),
+        )
+
+    def _on_pdf_processed(self, event: PdfProcessedEvent) -> None:
+        self.btn_select.setEnabled(True)
+        if event.error == "nenhum_pedido":
             QMessageBox.warning(
                 self,
                 "Aviso",
-                "Nenhum pedido encontrado no arquivo selecionado.\n\nVerifique se o PDF tem o formato esperado."
+                "Nenhum pedido encontrado no arquivo selecionado.\n\nVerifique se o PDF tem o formato esperado.",
             )
+            report_romaneio_processed("error", metadata={"erro": "nenhum_pedido"})
+            return
+        if event.error:
+            QMessageBox.warning(self, "Erro de dados", event.error)
+            self.label_info.setText("Erro: verifique informações de volume")
+            self.label_info.setStyleSheet("color: #b42318;")
+            report_romaneio_processed("error", metadata={"erro": "processamento_pdf"})
             return
 
+        self.pedidos = event.pedidos
         if not self._validar_local_entrega(self.pedidos):
             self.label_info.setText("Locais de entrega diferentes - processamento interrompido")
             self.label_info.setStyleSheet("color: #b42318;")
+            report_romaneio_processed("error", metadata={"erro": "local_entrega_divergente"})
             return
 
-        try:
-            if len(self.pedidos) == 1:
-                html_result = self.extrator.formatar_pedido_html(self.pedidos[0])
-            else:
-                html_result = self.extrator.formatar_pedidos_agrupados_html(self.pedidos)
-        except ValueError as e:
-            QMessageBox.warning(self, "Erro de dados", str(e))
-            self.label_info.setText("Erro: verifique informações de volume")
-            self.label_info.setStyleSheet("color: #b42318;")
-            return
-
-        self.html_original = html_result
-        self.romaneio_calculado_text.setPlainText(html_result.replace('<br>', '\n'))
+        self.html_original = event.html_result
+        self.romaneio_calculado_text.setPlainText(event.html_result.replace('<br>', '\n'))
         self._show_page(1)
-        self.label_info.setText(f"OK: {len(self.pedidos)} pedido(s) extraido(s) de {Path(arquivo).name}")
+        self.label_info.setText(f"OK: {len(self.pedidos)} pedido(s) extraido(s) de {Path(event.arquivo).name}")
         self.label_info.setStyleSheet("color: #067647;")
-        self._registrar_romaneio(arquivo)
+        self._registrar_romaneio(event.arquivo)
         report_romaneio_processed("ok", metadata={"quantidade_pedidos": len(self.pedidos)})
         self._atualizar_dashboard()
 
     def _atualizar_estado_romaneio_colado(self):
         texto = (self.romaneio_colado_text.toPlainText() or "").strip()
         self.btn_quote_colado.setEnabled(bool(texto))
+
+    def _criar_tabela_status_cotacao(self) -> QTableWidget:
+        table = QTableWidget(0, 5)
+        table.setHorizontalHeaderLabels(["Transportadora", "Status", "Etapa", "Mensagem", "Tempo"])
+        table.setObjectName("CotacaoStatusTable")
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.NoSelection)
+        table.setFocusPolicy(Qt.NoFocus)
+        table.verticalHeader().setVisible(False)
+        table.setAlternatingRowColors(True)
+        table.setMinimumHeight(150)
+        table.setMaximumHeight(230)
+        header = table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        return table
+
+    def _resetar_tabela_status_cotacao(self, *, fornecedor: bool = False) -> None:
+        table = self.forn_cotacao_status_table if fornecedor else self.cotacao_status_table
+        rows = self._forn_cotacao_status_rows if fornecedor else self._cotacao_status_rows
+        rows.clear()
+        table.setRowCount(0)
+
+    def _atualizar_tabela_status_cotacao(self, payload: dict[str, Any], *, fornecedor: bool = False) -> None:
+        provider = str(payload.get("provider") or "").strip().upper()
+        if not provider:
+            resultado = payload.get("resultado")
+            provider = str(getattr(resultado, "transportadora", "") or "").strip().upper()
+        if not provider:
+            return
+
+        table = self.forn_cotacao_status_table if fornecedor else self.cotacao_status_table
+        rows = self._forn_cotacao_status_rows if fornecedor else self._cotacao_status_rows
+        row = rows.get(provider)
+        if row is None:
+            row = table.rowCount()
+            table.insertRow(row)
+            rows[provider] = row
+
+        status = str(payload.get("status") or "").strip()
+        stage = str(payload.get("stage") or "").strip()
+        mensagem = str(payload.get("mensagem") or "").strip()
+        duration_ms = payload.get("duration_ms")
+
+        resultado = payload.get("resultado")
+        if isinstance(resultado, ResultadoCotacao):
+            if not status:
+                status = resultado.status
+            if not mensagem:
+                mensagem = resultado.detalhes or ""
+            if duration_ms is None:
+                duration_ms = resultado.duration_ms
+
+        status_label = {
+            "aguardando": "Aguardando",
+            "login": "Login",
+            "cotando": "Cotando",
+            "finalizada": "Finalizada",
+            "erro": "Erro",
+            "desabilitada": "Desabilitada",
+            "nao_atendido": "Não atendida",
+        }.get(status, status or "Aguardando")
+        stage_label = {
+            "aguardando": "Aguardando",
+            "login": "Login",
+            "cotacao": "Cotação",
+            "resultado": "Resultado",
+            "finalizado": "Finalizada",
+            "validacao": "Validação",
+            "configuracao": "Configuração",
+            "licenca": "Licença",
+        }.get(stage, stage or "Aguardando")
+        if not mensagem:
+            mensagem = status_label
+        mensagem = re.sub(r"\s+", " ", mensagem).strip()
+        if len(mensagem) > 160:
+            mensagem = mensagem[:157] + "..."
+
+        tempo = ""
+        try:
+            if duration_ms is not None:
+                tempo = f"{int(duration_ms) / 1000:.1f}s"
+        except Exception:
+            tempo = ""
+
+        values = [provider, status_label, stage_label, mensagem, tempo]
+        status_colors = {
+            "aguardando": "#6b7280",
+            "login": "#1f6feb",
+            "cotando": "#1f6feb",
+            "finalizada": "#067647",
+            "erro": "#b42318",
+            "desabilitada": "#6b7280",
+            "nao_atendido": "#b54708",
+        }
+        color = status_colors.get(status, "#344054")
+        for col, value in enumerate(values):
+            item = table.item(row, col)
+            if item is None:
+                item = QTableWidgetItem()
+                table.setItem(row, col, item)
+            item.setText(value)
+            if col == 1:
+                item.setForeground(QColor(color))
 
     def _iniciar_cotacao(self, modo: str):
         if self._is_shutting_down():
@@ -2172,6 +2593,7 @@ class RomaneioWindow(QMainWindow):
         self.btn_cotar_fornecedor.setEnabled(False)
         self._cotacao_total = 0
         self._cotacao_concluidas = 0
+        self._resetar_tabela_status_cotacao(fornecedor=False)
         self.progress_bar.setVisible(True)
         self.progress_bar.start_anim()
         self.result_text.setPlainText("Iniciando cotações...\nAguardando primeiras respostas...")
@@ -2296,6 +2718,7 @@ class RomaneioWindow(QMainWindow):
         self.btn_cotar_fornecedor.setEnabled(False)
         self.btn_quote_colado.setEnabled(False)
         self.btn_select.setEnabled(False)
+        self._resetar_tabela_status_cotacao(fornecedor=True)
         self.forn_progress_bar.setVisible(True)
         self.forn_progress_bar.start_anim()
         self.forn_result_text.setPlainText("Iniciando cota\u00e7\u00f5es...\nAguardando primeiras respostas...")
@@ -2314,6 +2737,29 @@ class RomaneioWindow(QMainWindow):
         except Exception:
             pass
 
+    def _post_status(self, msg: str) -> None:
+        self._post_event_safe(StatusUpdateEvent(str(msg or "")))
+
+    def _post_login_status(self, nome: str, status: str) -> None:
+        self._post_event_safe(LoginStatusEvent(str(nome or ""), str(status or "")))
+
+    def _post_cotacao_progress(self, payload: dict[str, Any]) -> None:
+        self._post_event_safe(CotacaoProgressEvent(payload or {}))
+
+    def _post_rastreio_progress(self, indice: int, total: int, resultado: Any) -> None:
+        self._post_event_safe(RastreioResultEvent(indice, total, resultado))
+
+    def _mostrar_chrome_ausente(self) -> None:
+        self._chrome_warning_label.setText(CHROME_MISSING_USER_MESSAGE)
+        self._chrome_warning_frame.setVisible(True)
+        self.label_info.setText(CHROME_MISSING_USER_MESSAGE)
+        self.label_info.setStyleSheet("color: #b42318;")
+        for dot in getattr(self, "_login_status_dots", {}).values():
+            dot.set_status("fail")
+
+    def _abrir_instalacao_chrome(self) -> None:
+        QDesktopServices.openUrl(QUrl(CHROME_DOWNLOAD_URL))
+
     def _is_shutting_down(self) -> bool:
         return self._shutdown_started.is_set()
 
@@ -2322,6 +2768,30 @@ class RomaneioWindow(QMainWindow):
             return False
         threading.Thread(target=target, daemon=True).start()
         return True
+
+    def _run_sync_worker(
+        self,
+        target: Callable[[], Any],
+        *,
+        context: str,
+        log_label: str,
+        on_success: Callable[[Any], None] | None = None,
+        ui_error_handler: Callable[[BaseException], None] | None = None,
+    ) -> bool:
+        def _worker():
+            try:
+                result = target()
+                if on_success is not None and not self._is_shutting_down():
+                    on_success(result)
+            except Exception as exc:
+                self._handle_async_worker_failure(
+                    exc=exc,
+                    context=context,
+                    log_label=log_label,
+                    ui_error_handler=ui_error_handler,
+                )
+
+        return self._start_daemon_worker(_worker)
 
     def _track_async_future(self, future: concurrent.futures.Future) -> concurrent.futures.Future:
         with self._async_futures_lock:
@@ -2362,7 +2832,16 @@ class RomaneioWindow(QMainWindow):
         ui_error_handler: Callable[[BaseException], None] | None = None,
     ) -> None:
         report_error(*sys.exc_info(), context=context)
-        print(f"[fretio] {log_label}: {exc}", file=sys.stderr, flush=True)
+        print(
+            (
+                "[fretio] worker failed "
+                f"context={context} label={log_label} "
+                f"thread={threading.current_thread().name} "
+                f"exc={type(exc).__name__}: {exc}"
+            ),
+            file=sys.stderr,
+            flush=True,
+        )
         if ui_error_handler is not None and not self._is_shutting_down():
             ui_error_handler(exc)
 
@@ -2403,18 +2882,16 @@ class RomaneioWindow(QMainWindow):
         """Faz pre-login de todas as transportadoras em background."""
         if self._is_shutting_down():
             return
-        def _status_callback(msg):
-            self._post_event_safe(StatusUpdateEvent(msg))
-        def _login_status_callback(nome, status):
-            self._post_event_safe(LoginStatusEvent(nome, status))
         self._run_async_worker(
             lambda: self._sessao.inicializar(
-                callback=_status_callback,
-                login_status_callback=_login_status_callback,
+                callback=self._post_status,
+                login_status_callback=self._post_login_status,
             ),
             context="pre_login",
             log_label="Erro no pre-login",
             sync_lock=self._session_task_lock,
+            on_success=lambda _result: self._post_event_safe(StatusUpdateEvent(CHROME_MISSING_USER_MESSAGE))
+            if self._sessao.chrome_missing else None,
         )
 
     def _run_async_cotacao(self):
@@ -2426,29 +2903,29 @@ class RomaneioWindow(QMainWindow):
             log_label="Erro na cotação",
             sync_lock=self._session_task_lock,
             ui_error_handler=lambda exc: (
-                self._post_event_safe(UpdateResultEvent(f"Erro ao cotar: {exc}")),
+                self._post_event_safe(UpdateResultEvent("Erro ao cotar transportadoras. Tente novamente em alguns minutos.")),
                 self._post_event_safe(UpdateFinishedEvent()),
             ),
         )
 
     async def _cotar_transportadoras_async(self):
         try:
-            def _progresso_callback(payload: dict[str, Any]) -> None:
-                self._post_event_safe(CotacaoProgressEvent(payload))
-
             if not self._sessao.pronto:
-                self._post_event_safe(StatusUpdateEvent("Executando pre-login antes da cotação..."))
+                self._post_status("Executando pre-login antes da cotação...")
                 await self._sessao.inicializar(
-                    callback=lambda msg: self._post_event_safe(StatusUpdateEvent(msg)),
-                    login_status_callback=lambda nome, status: self._post_event_safe(LoginStatusEvent(nome, status)),
+                    callback=self._post_status,
+                    login_status_callback=self._post_login_status,
                 )
                 self._pre_login_done = True
+                if self._sessao.chrome_missing:
+                    self._post_event_safe(UpdateResultEvent(CHROME_MISSING_USER_MESSAGE))
+                    return
 
             _cotar_kwargs = dict(
                 romaneio_colado=self._romaneio_colado,
                 cep_origem=self._cep_origem_override,
                 sessao=self._sessao,
-                progresso_callback=_progresso_callback,
+                progresso_callback=self._post_cotacao_progress,
             )
             if getattr(self, "_modo_cotacao", "") == "fornecedor" and getattr(self, "_cnpj_fornecedor", ""):
                 _cotar_kwargs["cnpj_remetente"] = self._cnpj_fornecedor
@@ -2462,7 +2939,7 @@ class RomaneioWindow(QMainWindow):
 
         except Exception as e:
             report_error(*sys.exc_info(), context="cotar_async")
-            self._post_event_safe(UpdateResultEvent(f"Erro ao cotar transportadoras: {e}"))
+            self._post_event_safe(UpdateResultEvent("Erro ao cotar transportadoras. Tente novamente em alguns minutos."))
         finally:
             self._post_event_safe(UpdateFinishedEvent())
 
@@ -2484,6 +2961,12 @@ class RomaneioWindow(QMainWindow):
         )
 
     def customEvent(self, event):
+        if isinstance(event, PdfProcessedEvent):
+            self._on_pdf_processed(event)
+            return
+        if isinstance(event, NfeImportedEvent):
+            self._on_nfe_imported(event)
+            return
         # --- Rastreio events ---
         if isinstance(event, RastreioResultEvent):
             self._on_rastreio_result(event.indice, event.total, event.resultado)
@@ -2500,17 +2983,22 @@ class RomaneioWindow(QMainWindow):
             _result.setPlainText(event.result)
             if not is_forn:
                 self._show_page(2)
-            self.label_info.setText("Cota\u00e7\u00f5es finalizadas")
-            self.label_info.setStyleSheet("color: #067647;")
+            if event.result == CHROME_MISSING_USER_MESSAGE:
+                self._mostrar_chrome_ausente()
+            else:
+                self.label_info.setText("Cota\u00e7\u00f5es finalizadas")
+                self.label_info.setStyleSheet("color: #067647;")
             self._verificar_erro_divergencia_uf(event.result)
         elif isinstance(event, CotacaoProgressEvent):
             payload = event.payload or {}
             total = int(payload.get("total", 0) or 0)
             concluidas = int(payload.get("concluidas", 0) or 0)
             resultado = payload.get("resultado")
+            self._atualizar_tabela_status_cotacao(payload, fornecedor=is_forn)
 
-            self._cotacao_total = total
-            self._cotacao_concluidas = concluidas
+            if total > 0:
+                self._cotacao_total = total
+                self._cotacao_concluidas = concluidas
             if total > 0:
                 if concluidas < total:
                     self.label_info.setText(f"Cotando transportadoras... {concluidas}/{total}")
@@ -2531,6 +3019,9 @@ class RomaneioWindow(QMainWindow):
             self._atualizar_estado_romaneio_colado()
             self._atualizar_dashboard()
         elif isinstance(event, StatusUpdateEvent):
+            if event.msg == CHROME_MISSING_USER_MESSAGE:
+                self._mostrar_chrome_ausente()
+                return
             self.label_info.setText(event.msg)
             self.label_info.setStyleSheet("color: #1f6feb;")
         elif isinstance(event, LoginStatusEvent):
@@ -2644,10 +3135,23 @@ class RomaneioWindow(QMainWindow):
 
         detalhe = (resultado.detalhes or resultado.status or "Sem detalhe")
         detalhe = re.sub(r"\s+", " ", str(detalhe)).strip()
+        detalhe_lower = detalhe.lower()
+        if resultado.status == "desabilitada":
+            detalhe = "Transportadora desabilitada pela licença"
+        elif resultado.status == "nao_atendido":
+            detalhe = "UF não atendida"
+        elif "configura" in detalhe_lower:
+            detalhe = "Configuração incompleta"
+        elif "timeout" in detalhe_lower:
+            detalhe = "Tempo limite aguardando resultado"
+        elif "sem resultado" in detalhe_lower or "sem cot" in detalhe_lower:
+            detalhe = "Sem cotação retornada"
         if len(detalhe) > 140:
             detalhe = detalhe[:137] + "..."
         if resultado.status == "desabilitada":
             return f"- {nome} ignorada: {detalhe}"
+        if resultado.status == "nao_atendido":
+            return f"- {nome} não atendida: {detalhe}"
         return f"- {nome} falhou: {detalhe}"
 
     def closeEvent(self, event):
@@ -2666,7 +3170,8 @@ class RomaneioWindow(QMainWindow):
 
         def _cleanup_background():
             self._async_loop.shutdown(
-                cleanup_coro_factory=lambda: asyncio.wait_for(self._sessao.cleanup(), timeout=2)
+                cleanup_coro_factory=lambda: asyncio.wait_for(self._sessao.cleanup(), timeout=2),
+                cancel_first=True,
             )
 
         t = threading.Thread(target=_cleanup_background, name="RomaneioShutdownCleanup")
@@ -2687,25 +3192,50 @@ class RomaneioWindow(QMainWindow):
         if not arquivos:
             return
 
-        erros = []
-        novas_notas = []
         card_offset = len(self._rastreio_card_widgets)
-        for arq in arquivos:
-            try:
-                notas = extrair_nfe_arquivo(arq)
-                if not notas:
-                    erros.append(f"{Path(arq).name}: nenhuma NF-e encontrada")
-                    continue
-                for nf in notas:
-                    if nf.chave_acesso and any(
-                        n.chave_acesso == nf.chave_acesso for n in self._notas_rastreio
-                    ):
-                        continue
-                    self._notas_rastreio.append(nf)
-                    novas_notas.append(nf)
-            except Exception as e:
-                erros.append(f"{Path(arq).name}: {e}")
+        existing_keys = {
+            n.chave_acesso
+            for n in self._notas_rastreio
+            if getattr(n, "chave_acesso", "")
+        }
+        self.btn_select_nfe.setEnabled(False)
+        self.label_info.setText("Importando XML/DANFE...")
+        self.label_info.setStyleSheet("color: #1f6feb;")
 
+        def _worker():
+            erros: list[str] = []
+            novas_notas: list[NotaFiscal] = []
+            seen_keys = set(existing_keys)
+            for arq in arquivos:
+                try:
+                    notas = extrair_nfe_arquivo(arq)
+                    if not notas:
+                        erros.append(f"{Path(arq).name}: nenhuma NF-e encontrada")
+                        continue
+                    for nf in notas:
+                        if nf.chave_acesso and nf.chave_acesso in seen_keys:
+                            continue
+                        if nf.chave_acesso:
+                            seen_keys.add(nf.chave_acesso)
+                        novas_notas.append(nf)
+                except Exception as e:
+                    erros.append(f"{Path(arq).name}: {e}")
+            return NfeImportedEvent(list(arquivos), novas_notas, erros, card_offset)
+
+        self._run_sync_worker(
+            _worker,
+            context="importacao_nfe",
+            log_label="Erro ao importar XML/DANFE",
+            on_success=self._post_event_safe,
+            ui_error_handler=lambda exc: self._post_event_safe(
+                NfeImportedEvent(list(arquivos), [], [str(exc)], card_offset)
+            ),
+        )
+
+    def _on_nfe_imported(self, event: NfeImportedEvent) -> None:
+        self.btn_select_nfe.setEnabled(True)
+        erros = event.erros
+        novas_notas = event.novas_notas
         if erros:
             QMessageBox.warning(
                 self, "Aviso",
@@ -2717,15 +3247,16 @@ class RomaneioWindow(QMainWindow):
                 "ok" if novas_notas else "error",
                 metadata={
                     "quantidade": len(novas_notas),
-                    "arquivos_processados": len(arquivos),
+                    "arquivos_processados": len(event.arquivos),
                     "erros": len(erros),
                 },
             )
 
         if novas_notas:
+            self._notas_rastreio.extend(novas_notas)
             self._inserir_cards_novas_notas(novas_notas)
             self._rastreio_notas_subset = list(novas_notas)
-            self._rastreio_card_offset = card_offset
+            self._rastreio_card_offset = event.card_offset
             self.label_info.setText(f"{len(novas_notas)} XML(s) carregado(s) — iniciando rastreamento...")
             self.label_info.setStyleSheet("color: #1f6feb;")
             self._iniciar_rastreamento()
@@ -3033,6 +3564,15 @@ class RomaneioWindow(QMainWindow):
             return
         if not ensure_feature_allowed("rastreio", self):
             return
+        try:
+            find_chrome()
+        except FileNotFoundError as exc:
+            try:
+                self._sessao._marcar_chrome_ausente(exc, source="rastreamento_usuario")
+            except Exception:
+                pass
+            self._mostrar_chrome_ausente()
+            return
         notas_a_rastrear = self._rastreio_notas_subset if self._rastreio_notas_subset else self._notas_rastreio
         if not notas_a_rastrear:
             QMessageBox.warning(self, "Aviso", "Nenhuma NF-e carregada para rastrear")
@@ -3072,9 +3612,7 @@ class RomaneioWindow(QMainWindow):
                 "cnpj_emitente": nf.emitente_cnpj,
                 "chave_acesso": nf.chave_acesso,
             })
-        def _progress_callback(indice, total, resultado):
-            self._post_event_safe(RastreioResultEvent(indice, total, resultado))
-        resultados = await rastrear_multiplas(notas_para_rastrear, callback=_progress_callback)
+        resultados = await rastrear_multiplas(notas_para_rastrear, callback=self._post_rastreio_progress)
         return resultados
 
     def _on_rastreio_result(self, indice, total, resultado):
@@ -3549,6 +4087,7 @@ def main():
         if _startup_logger is not None:
             _startup_logger.info("QApplication criada com sucesso")
         report_app_started()
+        _license_validated = False
 
         # ── Verificação de licença ──
         try:
@@ -3578,7 +4117,7 @@ def main():
                         if _startup_logger is not None:
                             _startup_logger.info("Licença validada com sucesso")
                         report_license_validated("ok")
-                        _start_remote_config_fetch(_startup_logger)
+                        _license_validated = True
                         break
                     else:
                         if _startup_logger is not None:
@@ -3612,7 +4151,7 @@ def main():
                             if _startup_logger is not None:
                                 _startup_logger.info("Nova licença validada após revogação")
                             report_license_validated("ok")
-                            _start_remote_config_fetch(_startup_logger)
+                            _license_validated = True
                         else:
                             if _startup_logger is not None:
                                 _startup_logger.warning("Nova licença inválida após revogação: %s", _lic_status2.message or "chave não reconhecida")
@@ -3628,54 +4167,37 @@ def main():
                         sys.exit(1)
                 else:
                     report_license_validated("ok")
-                    _start_remote_config_fetch(_startup_logger)
+                    _license_validated = True
         except SystemExit:
             raise
         except Exception as _lic_err:
             report_error(context="verificacao_licenca")
             print(f"[fretio] Verificação de licença falhou: {_lic_err}", file=sys.stderr, flush=True)
 
-        # ── Verificação de atualização via GitHub ──
+        _repo = get_repo_from_config()
+        _cur_ver = _carregar_versao_app()
+
+        # ── Política de versão mínima via remote config ──
+        if _license_validated:
+            _remote_payload = _fetch_remote_config_sync(_startup_logger)
+            if not _enforce_minimum_version_policy(
+                remote_payload=_remote_payload,
+                current_version=_cur_ver,
+                repo=_repo,
+                startup_logger=_startup_logger,
+            ):
+                sys.exit(0)
+
+        # ── Verificação de atualização via servidor/GitHub ──
         try:
-            _repo = get_repo_from_config()
-            _cur_ver = _carregar_versao_app()
-            if _repo:
-                _update_info = check_for_update(_repo, _cur_ver)
-                if _update_info:
-                    _progress_dlg = QMessageBox(
-                        QMessageBox.Information,
-                        "Atualização Automática",
-                        (
-                            f"Nova versão encontrada: v{_update_info.version}.\n"
-                            "Aplicando atualização automática..."
-                        ),
-                        QMessageBox.NoButton,
-                    )
-                    _progress_dlg.show()
-                    QApplication.processEvents()
-
-                    def _update_cb(msg: str):
-                        _progress_dlg.setText(msg)
-                        QApplication.processEvents()
-
-                    _ok = apply_update(_update_info, callback=_update_cb)
-                    _progress_dlg.close()
-
-                    if _ok:
-                        QMessageBox.information(
-                            None,
-                            "Atualização Concluída",
-                            f"Fretio foi atualizado para v{_update_info.version}.\n"
-                            "O aplicativo vai reiniciar automaticamente.",
-                        )
-                        restart_app()  # Lança o .bat e fecha o app
-                    else:
-                        QMessageBox.warning(
-                            None,
-                            "Atualização Falhou",
-                            "Não foi possível aplicar a atualização automática.\n"
-                            "O aplicativo continuará com a versão atual.",
-                        )
+            _run_startup_update_flow(
+                _repo,
+                _cur_ver,
+                startup_logger=_startup_logger,
+                show_verification_error=False,
+            )
+        except MandatoryUpdateDeclined:
+            sys.exit(0)
         except Exception as _upd_err:
             report_error(context="verificacao_atualizacao")
             print(f"[fretio] Verificação de atualização falhou: {_upd_err}", file=sys.stderr, flush=True)

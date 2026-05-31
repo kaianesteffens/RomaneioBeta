@@ -75,3 +75,35 @@ class RastreioFinishedEvent(QEvent):
     def __init__(self, resultados: list[Any]):
         super().__init__(self.EventType)
         self.resultados = resultados
+
+
+class PdfProcessedEvent(QEvent):
+    """Evento para entregar o resultado da importação de PDF à UI."""
+
+    EventType = QEvent.Type(QEvent.registerEventType())
+
+    def __init__(self, arquivo: str, pedidos: list[Any], html_result: str, error: str = ""):
+        super().__init__(self.EventType)
+        self.arquivo = arquivo
+        self.pedidos = pedidos
+        self.html_result = html_result
+        self.error = error
+
+
+class NfeImportedEvent(QEvent):
+    """Evento para entregar o resultado da importação de XML/DANFE à UI."""
+
+    EventType = QEvent.Type(QEvent.registerEventType())
+
+    def __init__(
+        self,
+        arquivos: list[str],
+        novas_notas: list[Any],
+        erros: list[str],
+        card_offset: int,
+    ):
+        super().__init__(self.EventType)
+        self.arquivos = arquivos
+        self.novas_notas = novas_notas
+        self.erros = erros
+        self.card_offset = card_offset

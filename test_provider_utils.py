@@ -1,6 +1,9 @@
 import asyncio
+import inspect
 import sys
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).parent
@@ -10,9 +13,12 @@ from fretio.providers.agex import AGEXProvider
 from fretio.providers.alfa import AlfaProvider
 from fretio.providers.braspress_playwright import BraspressPlaywrightProvider
 from fretio.providers.coopex import CoopexProvider
+from fretio.providers.eucatur import EucaturProvider
 from fretio.providers.rodonaves import RodonavesProvider
 from fretio.providers.trd import TRDProvider
 from fretio.providers import provider_utils as pu
+from fretio.models import Cotacao
+from fretio.quotation_contract import QuoteRequest, QuoteResponse
 
 
 def test_parse_helpers_handle_multiple_input_formats():
@@ -62,7 +68,7 @@ def test_provider_classes_keep_backward_compatible_helper_aliases():
     assert AlfaProvider._fmt_decimal(12.3456) == "12,35"
     assert BraspressPlaywrightProvider._parse_int_any("Prazo 7 dias") == 7
     assert RodonavesProvider._digits("85.955-191") == "85955191"
-    assert TRDProvider._digits("40.223.106/0001-79") == "40223106000179"
+    assert TRDProvider._digits("00.000.000/0001-91") == "00000000000191"
 
 
 def test_trd_login_context_falls_back_to_page_when_frame_is_none():
@@ -95,10 +101,10 @@ def test_rodonaves_allows_grace_when_launcher_exits_cleanly():
 
 
 def test_trd_document_helpers_cover_formatted_cnpj_and_ng_model_selectors():
-    values = TRDProvider._document_candidate_values("03770979000175")
+    values = TRDProvider._document_candidate_values("00000000000191")
     selectors = TRDProvider._etapa1_document_selectors("destinatario")
 
-    assert "03.770.979/0001-75" in values
+    assert "00.000.000/0001-91" in values
     assert "input[ng-model*='destinatario' i][ng-model*='cnpj' i]" in selectors
     assert "input[name*='document' i]" in selectors
 
@@ -108,7 +114,7 @@ def test_rodonaves_detects_live_browser_session_even_if_launcher_exited():
         def is_connected(self):
             return True
 
-    provider = RodonavesProvider(dominio="RTE", usuario="u", senha="s", cnpj_pagador="40223106000179")
+    provider = RodonavesProvider(dominio="RTE", usuario="u", senha="s", cnpj_pagador="00000000000191")
     provider._context = object()
     provider._browser = _Browser()
 
@@ -116,19 +122,19 @@ def test_rodonaves_detects_live_browser_session_even_if_launcher_exited():
 
 
 def test_rodonaves_captcha_window_bounds_center_screen():
-    provider = RodonavesProvider(dominio="RTE", usuario="u", senha="s", cnpj_pagador="40223106000179")
+    provider = RodonavesProvider(dominio="RTE", usuario="u", senha="s", cnpj_pagador="00000000000191")
 
     assert provider._captcha_window_bounds(1920, 1080) == (550, 180, 820, 720)
 
 
 def test_rodonaves_prefers_portal_page_over_new_tab():
-    provider = RodonavesProvider(dominio="RTE", usuario="u", senha="s", cnpj_pagador="40223106000179")
+    provider = RodonavesProvider(dominio="RTE", usuario="u", senha="s", cnpj_pagador="00000000000191")
 
     assert provider._score_page_url("https://cliente.rte.com.br/Quotation") < provider._score_page_url("chrome://newtab/")
 
 
 def test_rodonaves_navigation_retry_classifies_connection_resets_as_transient():
-    provider = RodonavesProvider(dominio="RTE", usuario="u", senha="s", cnpj_pagador="40223106000179")
+    provider = RodonavesProvider(dominio="RTE", usuario="u", senha="s", cnpj_pagador="00000000000191")
 
     assert provider._is_retryable_navigation_error("Page.goto: net::ERR_CONNECTION_RESET at https://cliente.rte.com.br/") is True
     assert provider._is_retryable_navigation_error("Page.goto: net::ERR_ABORTED at https://cliente.rte.com.br/") is True
@@ -146,7 +152,7 @@ def test_rodonaves_window_fallback_uses_pid(monkeypatch):
         calls.append(("pid", pid, kwargs))
         return True
 
-    provider = RodonavesProvider(dominio="RTE", usuario="u", senha="s", cnpj_pagador="40223106000179")
+    provider = RodonavesProvider(dominio="RTE", usuario="u", senha="s", cnpj_pagador="00000000000191")
     provider._page = object()
 
     class _Proc:
@@ -239,7 +245,7 @@ def test_coopex_coteir_updates_current_step_before_each_phase():
 
 
 def test_rodonaves_candidate_window_pids_include_profile_processes(monkeypatch):
-    provider = RodonavesProvider(dominio="RTE", usuario="u", senha="s", cnpj_pagador="40223106000179")
+    provider = RodonavesProvider(dominio="RTE", usuario="u", senha="s", cnpj_pagador="00000000000191")
     provider._active_user_data_dir = r"C:\tmp\profile"
 
     class _Proc:
@@ -266,3 +272,120 @@ def test_agex_extracts_previsao_and_quote_number_from_text():
 def test_agex_detects_pending_confirmation_screen():
     assert AGEXProvider._tem_confirmacao_resultado_pendente("Confirmar e ver resultado") is True
     assert AGEXProvider._tem_confirmacao_resultado_pendente("Resumo da cotação") is False
+
+
+def _quote_request_sample() -> QuoteRequest:
+    return QuoteRequest(
+        origem_cep="99740000",
+        destino_cep="01310100",
+        uf_destino="SP",
+        cnpj_destinatario="12345678000190",
+        peso_total_kg=12.5,
+        valor_nf=750.0,
+        volumes=1,
+        cubagem_m3=0.024,
+        cubagens=[
+            {
+                "quantidade": 1,
+                "comprimento_cm": 40,
+                "largura_cm": 30,
+                "altura_cm": 20,
+            }
+        ],
+    )
+
+
+def _target_provider_factories():
+    return [
+        ("braspress", lambda: BraspressPlaywrightProvider(cnpj="00000000000191", senha="secret", headless=True)),
+        ("trd", lambda: TRDProvider(email="test@example.com", senha="secret", headless=True)),
+        ("agex", lambda: AGEXProvider(email="test@example.com", senha="secret", cnpj="00000000000191", headless=True)),
+        ("eucatur", lambda: EucaturProvider(dominio="DOM", usuario="usr", senha="secret", cnpj_pagador="00000000000191", headless=True)),
+        (
+            "rodonaves",
+            lambda: RodonavesProvider(
+                dominio="RTE",
+                usuario="usr",
+                senha="secret",
+                cnpj_pagador="00000000000191",
+                headless=True,
+            ),
+        ),
+        ("alfa", lambda: AlfaProvider(login="usr", senha="secret", headless=True)),
+        ("coopex", lambda: CoopexProvider(dominio="DOM", usuario="usr", senha="secret", cnpj_pagador="00000000000191", headless=True)),
+    ]
+
+
+@pytest.mark.parametrize("provider_name, provider_factory", _target_provider_factories())
+def test_target_providers_implement_quote_request_contract(provider_name, provider_factory):
+    provider = provider_factory()
+    assert "cotar" in type(provider).__dict__
+    assert callable(provider.coteir)
+    signature = inspect.signature(provider.cotar)
+    params = list(signature.parameters.values())
+    assert params and params[0].name == "request"
+
+
+@pytest.mark.parametrize("provider_name, provider_factory", _target_provider_factories())
+def test_target_providers_cotar_retornam_quote_response_ok(provider_name, provider_factory, monkeypatch):
+    provider = provider_factory()
+    request = _quote_request_sample()
+    provider._passo_atual = "teste"
+
+    async def _fake_coteir(**kwargs):
+        return Cotacao(
+            transportadora=provider.nome,
+            prazo_dias=3,
+            valor_frete=123.45,
+            restricoes="Cotação fake",
+        )
+
+    monkeypatch.setattr(provider, "coteir", _fake_coteir)
+    response = asyncio.run(provider.cotar(request))
+
+    assert isinstance(response, QuoteResponse)
+    assert response.status == "ok"
+    assert response.provider == provider.nome
+    assert response.valor_frete == 123.45
+    assert response.prazo_dias == 3
+    assert response.duration_ms is not None
+    assert response.stage == "teste"
+
+
+@pytest.mark.parametrize("provider_name, provider_factory", _target_provider_factories())
+def test_target_providers_cotar_nao_atendido_quando_rota_nao_suportada(provider_name, provider_factory, monkeypatch):
+    provider = provider_factory()
+    request = _quote_request_sample()
+    provider._passo_atual = "validacao"
+
+    async def _fake_coteir(**kwargs):
+        provider.last_error = "Rota não atendida pelo SSW"
+        return None
+
+    monkeypatch.setattr(provider, "coteir", _fake_coteir)
+    response = asyncio.run(provider.cotar(request))
+
+    assert isinstance(response, QuoteResponse)
+    assert response.status == "nao_atendido"
+    assert response.error_code == "nao_atendido"
+    assert response.stage == "validacao"
+    assert response.duration_ms is not None
+
+
+@pytest.mark.parametrize("provider_name, provider_factory", _target_provider_factories())
+def test_target_providers_cotar_timeout_vira_erro(provider_name, provider_factory, monkeypatch):
+    provider = provider_factory()
+    request = _quote_request_sample()
+    provider._passo_atual = "aguardando_resultado"
+
+    async def _fake_coteir(**kwargs):
+        raise TimeoutError("Timeout aguardando resultado do portal")
+
+    monkeypatch.setattr(provider, "coteir", _fake_coteir)
+    response = asyncio.run(provider.cotar(request))
+
+    assert isinstance(response, QuoteResponse)
+    assert response.status == "erro"
+    assert response.error_code == "timeout"
+    assert response.stage == "aguardando_resultado"
+    assert response.duration_ms is not None
