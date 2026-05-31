@@ -62,6 +62,7 @@ dev.log
 
 # Configs com credenciais (NÃO commitar!)
 app/CONFIG.toml
+app/**/CONFIG.toml
 app/Fretio/CONFIG.toml
 
 # Licenças admin (dados sensíveis)
