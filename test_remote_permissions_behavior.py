@@ -15,18 +15,14 @@ def test_allow_cotacao_false_blocks_cotacao(monkeypatch):
     monkeypatch.setattr(rp, "is_feature_allowed", lambda feature: feature != "cotacao")
 
     assert rp.ensure_feature_allowed("cotacao") is False
-    assert rp.feature_message("cotacao") == (
-        "Cotação desabilitada para esta licença. Entre em contato com o administrador."
-    )
+    assert rp.feature_message("cotacao") == "Este módulo foi desabilitado pela configuração da licença."
 
 
 def test_allow_rastreio_false_blocks_rastreio(monkeypatch):
     monkeypatch.setattr(rp, "is_feature_allowed", lambda feature: feature != "rastreio")
 
     assert rp.ensure_feature_allowed("rastreio") is False
-    assert rp.feature_message("rastreio") == (
-        "Rastreio desabilitado para esta licença. Entre em contato com o administrador."
-    )
+    assert rp.feature_message("rastreio") == "Este módulo foi desabilitado pela configuração da licença."
 
 
 def test_without_remote_cache_allows_everything(monkeypatch, tmp_path):

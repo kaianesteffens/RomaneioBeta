@@ -7,6 +7,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 from fretio.providers.base import ProviderBase
 from fretio.providers.provider_utils import _digits, _parse_brl, _format_decimal_br_2
 from fretio.models import Cotacao
+from fretio.quotation_contract import QuoteRequest, QuoteResponse
 from fretio.logging_conf import get_logger
 
 logger = get_logger(__name__)
@@ -1035,6 +1036,9 @@ class AGEXProvider(ProviderBase):
             self.last_error = str(e)
             logger.error(f"[{self.nome}] Erro na cotação: {e}")
             return None
+
+    async def cotar(self, request: QuoteRequest) -> QuoteResponse:
+        return await super().cotar(request)
 
     async def cotear(
         self, origem: str, destino: str, peso: float, valor: float

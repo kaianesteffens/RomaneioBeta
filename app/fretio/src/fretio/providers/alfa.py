@@ -22,6 +22,7 @@ from fretio.providers.provider_utils import (
     _digits, _fmt_decimal, _parse_decimal_any, _parse_int_any
 )
 from fretio.models import Cotacao
+from fretio.quotation_contract import QuoteRequest, QuoteResponse
 from fretio.logging_conf import get_logger
 
 logger = get_logger(__name__)
@@ -1365,3 +1366,6 @@ class AlfaProvider(ProviderBase):
             self.last_error = str(e)
             logger.error(f"[ALFA] Erro na cotacao: {e}")
             return None
+
+    async def cotar(self, request: QuoteRequest) -> QuoteResponse:
+        return await super().cotar(request)

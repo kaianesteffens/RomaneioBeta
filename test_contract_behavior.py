@@ -175,7 +175,7 @@ def test_contract_validate_license_accepts_free_mode_when_no_url(monkeypatch):
     )
 
 
-def test_contract_validate_license_online_active_registers_machine(monkeypatch, tmp_path):
+def test_contract_validate_license_online_active_legacy_gist_is_read_only(monkeypatch, tmp_path):
     _clear_license_api_env(monkeypatch)
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
     monkeypatch.setattr(lic, "_get_gist_url", lambda: "https://example.test/licenses.json")
@@ -206,7 +206,7 @@ def test_contract_validate_license_online_active_registers_machine(monkeypatch, 
         owner="Cliente Teste",
         message="Licença válida.",
     )
-    assert registered == [("FBOT-OK", "MAQ-1", "https://example.test/licenses.json")]
+    assert registered == []
 
 
 def test_contract_validate_license_offline_uses_valid_cache(monkeypatch, tmp_path):
@@ -236,7 +236,7 @@ def test_contract_validate_license_offline_uses_valid_cache(monkeypatch, tmp_pat
     assert status == lic.LicenseStatus(
         valid=True,
         owner="Cliente Cache",
-        message="Validado offline (sem conexão).",
+        message="Servidor indisponível, usando validação offline.",
         offline=True,
     )
 

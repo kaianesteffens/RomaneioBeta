@@ -11,6 +11,7 @@ from playwright.async_api import async_playwright, Frame
 from fretio.providers.base import ProviderBase
 from fretio.providers.provider_utils import _digits, _fmt_peso, get_stealth_script
 from fretio.models import Cotacao
+from fretio.quotation_contract import QuoteRequest, QuoteResponse
 from fretio.logging_conf import get_logger
 
 logger = get_logger(__name__)
@@ -2040,3 +2041,6 @@ class TRDProvider(ProviderBase):
         )
 
         return resultado
+
+    async def cotar(self, request: QuoteRequest) -> QuoteResponse:
+        return await super().cotar(request)
