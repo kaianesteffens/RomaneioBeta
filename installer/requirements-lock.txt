@@ -1,6 +1,7 @@
 # Locked build dependencies for Python 3.12.8.
+# Release builds install this file with --no-deps. Do not hand-edit pins.
 # Regenerate with:
-#   installer\python-3.12\python.exe -m pip install -r installer\requirements.txt pyinstaller==6.20.0
+#   installer\python-3.12\python.exe -m pip install -r installer\requirements.in
 #   installer\python-3.12\python.exe -m pip freeze > installer\requirements-lock.txt
 
 altgraph==0.17.5

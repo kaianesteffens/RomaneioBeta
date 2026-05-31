@@ -364,69 +364,70 @@ def _launch_app(app_exe: Path) -> None:
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 
-class _Window(tk.Tk):
-    def __init__(self) -> None:
-        super().__init__()
-        self.title("Fretio")
-        self.geometry("400x148")
-        self.resizable(False, False)
-        self.configure(bg="#1e1e2e")
+if _HAS_TK:
+    class _Window(tk.Tk):
+        def __init__(self) -> None:
+            super().__init__()
+            self.title("Fretio")
+            self.geometry("400x148")
+            self.resizable(False, False)
+            self.configure(bg="#1e1e2e")
 
-        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        self.geometry(f"+{(sw - 400)//2}+{(sh - 148)//2}")
+            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+            self.geometry(f"+{(sw - 400)//2}+{(sh - 148)//2}")
 
-        self._lbl = tk.Label(
-            self, text="Iniciando Fretio...",
-            bg="#1e1e2e", fg="#cdd6f4", font=("Segoe UI", 11),
-        )
-        self._lbl.pack(pady=(22, 6))
+            self._lbl = tk.Label(
+                self, text="Iniciando Fretio...",
+                bg="#1e1e2e", fg="#cdd6f4", font=("Segoe UI", 11),
+            )
+            self._lbl.pack(pady=(22, 6))
 
-        style = ttk.Style(self)
-        style.theme_use("default")
-        style.configure(
-            "L.Horizontal.TProgressbar",
-            troughcolor="#313244", background="#89b4fa",
-        )
-        self._pb = ttk.Progressbar(
-            self, orient="horizontal", length=340,
-            mode="indeterminate", style="L.Horizontal.TProgressbar",
-        )
-        self._pb.pack(pady=4)
-        self._pb.start(10)
+            style = ttk.Style(self)
+            style.theme_use("default")
+            style.configure(
+                "L.Horizontal.TProgressbar",
+                troughcolor="#313244", background="#89b4fa",
+            )
+            self._pb = ttk.Progressbar(
+                self, orient="horizontal", length=340,
+                mode="indeterminate", style="L.Horizontal.TProgressbar",
+            )
+            self._pb.pack(pady=4)
+            self._pb.start(10)
 
-        self._sub = tk.Label(
-            self, text="", bg="#1e1e2e", fg="#a6adc8",
-            font=("Segoe UI", 8),
-        )
-        self._sub.pack(pady=6)
+            self._sub = tk.Label(
+                self, text="", bg="#1e1e2e", fg="#a6adc8",
+                font=("Segoe UI", 8),
+            )
+            self._sub.pack(pady=6)
 
-        self._closable = False
-        self.protocol("WM_DELETE_WINDOW", self._guard_close)
+            self._closable = False
+            self.protocol("WM_DELETE_WINDOW", self._guard_close)
 
-    def _guard_close(self) -> None:
-        if self._closable:
-            self.destroy()
+        def _guard_close(self) -> None:
+            if self._closable:
+                self.destroy()
 
-    def set_label(self, text: str) -> None:
-        self.after(0, lambda: self._lbl.configure(text=text))
+        def set_label(self, text: str) -> None:
+            self.after(0, lambda: self._lbl.configure(text=text))
 
-    def set_status(self, text: str) -> None:
-        self.after(0, lambda: self._sub.configure(text=text))
+        def set_status(self, text: str) -> None:
+            self.after(0, lambda: self._sub.configure(text=text))
 
-    def set_progress(self, pct: float) -> None:
-        def _apply():
-            self._pb.stop()
-            self._pb.configure(mode="determinate", value=pct, maximum=100)
-        self.after(0, _apply)
+        def set_progress(self, pct: float) -> None:
+            def _apply():
+                self._pb.stop()
+                self._pb.configure(mode="determinate", value=pct, maximum=100)
+            self.after(0, _apply)
 
-    def close(self) -> None:
-        self._closable = True
-        self.after(0, self.destroy)
+        def close(self) -> None:
+            self._closable = True
+            self.after(0, self.destroy)
 
-    def error(self, msg: str) -> None:
-        self._closable = True
-        self.after(0, lambda: messagebox.showerror("Romaneio – Erro", msg))
-        self.after(200, self.destroy)
+        def error(self, msg: str) -> None:
+            self._closable = True
+            self.after(0, lambda: messagebox.showerror("Romaneio – Erro", msg))
+            self.after(200, self.destroy)
 
 
 # ── core logic ────────────────────────────────────────────────────────────────

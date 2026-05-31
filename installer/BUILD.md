@@ -17,10 +17,9 @@ build.bat
 
 O script faz tudo automaticamente:
 1. Instala dependências Python pelo lockfile (`requirements-lock.txt`)
-2. Usa `requirements.txt` como fallback se o lockfile não existir
-3. Instala Chromium via Playwright
-4. Gera o executável com PyInstaller (pasta `dist\Fretio\`)
-5. Compila o instalador com Inno Setup (`installer\Fretio-Setup.exe`)
+2. Falha se o lockfile não existir, para evitar build com dependências soltas
+3. Gera o executável com PyInstaller usando o ambiente instalado pelo lock (pasta `dist\Fretio\`)
+4. Compila o instalador com Inno Setup (`installer\Fretio-Setup.exe`)
 
 ## Build Manual (passo a passo)
 
@@ -29,7 +28,6 @@ O script faz tudo automaticamente:
 ```cmd
 cd _release_stage\app
 pip install --no-deps -r requirements-lock.txt
-python -m playwright install chromium
 ```
 
 ### 2. Gerar executável
@@ -88,8 +86,9 @@ Fretio-Setup.exe
 | `Fretio-installer.iss` | Script Inno Setup (instalador Windows) |
 | `build.bat` | Script automatizado de build |
 | `instalar_navegador.bat` | Instala Chromium após instalação |
-| `requirements.txt` | Dependências Python diretas/fallback |
-| `requirements-lock.txt` | Dependências Python congeladas para build reproduzível |
+| `requirements.in` | Dependências diretas mantidas por humanos |
+| `requirements.txt` | Alias de compatibilidade para instalações locais (`-r requirements.in`) |
+| `requirements-lock.txt` | Dependências Python congeladas consumidas pelo build reproduzível |
 
 ## Notas
 
@@ -101,13 +100,15 @@ Fretio-Setup.exe
 ## Atualizar o lockfile de dependências
 
 Atualize o lockfile somente quando for intencional atualizar dependências do build.
+O build oficial não regenera o lock e não usa `requirements.in` nem `requirements.txt`.
 
 ```cmd
 cd installer
-python-3.12\python.exe -m pip install -r requirements.txt pyinstaller==6.20.0
+python-3.12\python.exe -m pip install -r requirements.in
 python-3.12\python.exe -m pip freeze > requirements-lock.txt
 python-3.12\python.exe -m pip install --no-deps -r requirements-lock.txt
 build.bat
 ```
 
-Depois confira no diff se `playwright==1.58.0`, `greenlet==3.1.1` e `pyinstaller==6.20.0` só mudaram quando essa atualização foi deliberada.
+Depois confira no diff se `playwright==1.58.0`, `greenlet==3.1.1`, `cryptography==48.0.0` e `pyinstaller==6.20.0` só mudaram quando essa atualização foi deliberada.
+Antes de publicar, teste um build limpo removendo `installer\python-3.12` e `installer\dist` para confirmar que o lockfile sozinho recria o ambiente.

@@ -1,10 +1,4 @@
-pdfplumber
-PySide6
-Pillow
-greenlet==3.1.1
-playwright==1.58.0
-toml
-beautifulsoup4
-certifi
-httpx
-cryptography==48.0.0
+# Compatibility alias for local/dev installs.
+# Edit installer/requirements.in, then regenerate installer/requirements-lock.txt.
+# Release builds must install from installer/requirements-lock.txt.
+-r requirements.in
