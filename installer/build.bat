@@ -82,17 +82,15 @@ if %ERRORLEVEL% neq 0 (
 )
 echo [OK] Dependencias instaladas
 
-REM ── 2.5. Definir versão do build (1.0, 1.1, 1.2, ...) ───────
+REM ── 2.5. Definir versão do build (usa app\version.txt sem incrementar) ───────
 set "VERSION_FILE=%~dp0..\app\version.txt"
 for /f "usebackq tokens=*" %%v in ("%VERSION_FILE%") do set "CUR_VER=%%v"
-if not defined CUR_VER set "CUR_VER=1.0"
-for /f %%v in ('powershell -NoProfile -Command "$v='%CUR_VER%'.Trim(); $parts=$v.Split('.'); $major=$parts[0]; $minor=[int]$parts[1]+1; Write-Output \"$major.$minor\""') do set APP_VERSION=%%v
+for /f %%v in ('powershell -NoProfile -Command "$v='%CUR_VER%'.Trim(); if (-not $v) { throw 'version.txt vazio' }; Write-Output $v"') do set APP_VERSION=%%v
 if not defined APP_VERSION (
-    echo ERRO: Falha ao calcular a versão do build.
+    echo ERRO: Falha ao ler a versao do build em app\version.txt.
     %FB_PAUSE_CMD%
     exit /b 1
 )
->"%VERSION_FILE%" echo !APP_VERSION!
 set "APP_NAME=Fretio"
 set "OUTPUT_BASENAME=Fretio-Setup-!APP_VERSION!"
 echo [OK] Versao deste build: !APP_VERSION!
