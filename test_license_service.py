@@ -29,6 +29,7 @@ class FakeResponse:
 def test_license_service_backend_valid_response_is_mapped_and_cached(monkeypatch):
     requests = []
     saved = []
+    remote_sync = []
 
     def fake_urlopen(req, timeout, context=None):
         assert isinstance(context, ssl.SSLContext)
@@ -46,6 +47,11 @@ def test_license_service_backend_valid_response_is_mapped_and_cached(monkeypatch
     monkeypatch.setattr(lic, "_get_license_api_url", lambda: "https://licenses.example.test/validate")
     monkeypatch.setattr(lic, "urlopen", fake_urlopen)
     monkeypatch.setattr(lic, "_save_validation_cache", lambda key, status: saved.append((key, status)))
+    monkeypatch.setattr(
+        lic,
+        "_fetch_remote_config_after_validation",
+        lambda **kwargs: remote_sync.append(kwargs),
+    )
 
     status = lic.validate_license("fbot-ok", machine_id="MAQ-1")
 
@@ -64,6 +70,13 @@ def test_license_service_backend_valid_response_is_mapped_and_cached(monkeypatch
     }
     assert requests[0].get_header("Authorization") is None
     assert saved == [("FBOT-OK", status)]
+    assert remote_sync == [
+        {
+            "key": "FBOT-OK",
+            "machine_id": "MAQ-1",
+            "validate_api_url": "https://licenses.example.test/validate",
+        }
+    ]
 
 
 def test_license_service_backend_invalid_response_is_not_cached(monkeypatch):
@@ -81,6 +94,7 @@ def test_license_service_backend_invalid_response_is_not_cached(monkeypatch):
     monkeypatch.setattr(lic, "_get_license_api_url", lambda: "https://licenses.example.test/validate")
     monkeypatch.setattr(lic, "urlopen", fake_urlopen)
     monkeypatch.setattr(lic, "_save_validation_cache", lambda key, status: saved.append((key, status)))
+    monkeypatch.setattr(lic, "_fetch_remote_config_after_validation", lambda **kwargs: None)
 
     status = lic.validate_license("FBOT-RUIM", machine_id="MAQ-1")
 
@@ -117,7 +131,7 @@ def test_license_service_backend_offline_uses_existing_validation_cache(monkeypa
     assert status == lic.LicenseStatus(
         valid=True,
         owner="Cliente Cache",
-        message="Validado offline (sem conexão).",
+        message="Servidor indisponível, usando validação offline.",
         offline=True,
     )
 
@@ -131,7 +145,36 @@ def test_license_service_backend_offline_without_cache_returns_friendly_message(
 
     assert status == lic.LicenseStatus(
         valid=False,
-        message="Sem conexão para validar licença. Tente novamente com internet.",
+        message="Servidor indisponível e sem validação offline válida.",
+    )
+
+
+def test_license_service_blocked_cache_never_unlocks_license(monkeypatch, tmp_path):
+    appdata = tmp_path / "appdata"
+    cache_path = appdata / "Fretio" / ".license_cache"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(
+        json.dumps(
+            {
+                "key": "FBOT-BLOCKED",
+                "valid": False,
+                "owner": "Cliente Bloqueado",
+                "blocked": True,
+                "timestamp": time.time(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("APPDATA", str(appdata))
+    monkeypatch.setattr(lic, "_get_license_api_url", lambda: "https://licenses.example.test/validate")
+    monkeypatch.setattr(lic, "urlopen", lambda req, timeout, context=None: (_ for _ in ()).throw(URLError("offline")))
+
+    status = lic.validate_license("FBOT-BLOCKED", machine_id="MAQ-1")
+
+    assert status == lic.LicenseStatus(
+        valid=False,
+        blocked=True,
+        message="Licença revogada.",
     )
 
 
@@ -165,6 +208,20 @@ def test_license_service_without_api_url_preserves_legacy_gist_validation(monkey
         owner="Cliente Legado",
         message="Licença válida.",
     )
+
+
+def test_license_service_uses_gist_fallback_only_without_server_url(monkeypatch):
+    monkeypatch.setattr(lic, "_get_license_api_url", lambda: "")
+    called = []
+    monkeypatch.setattr(
+        lic.LicenseService,
+        "_validate_legacy_gist",
+        lambda self, key, machine_id: called.append((key, machine_id)) or lic.LicenseStatus(valid=True, message="ok"),
+    )
+
+    lic.validate_license("fbot-legado", machine_id="MAQ-1")
+
+    assert called == [("FBOT-LEGADO", "MAQ-1")]
 
 
 def test_license_api_url_does_not_use_or_send_error_report_token(monkeypatch, tmp_path):
@@ -202,6 +259,7 @@ def test_license_api_url_does_not_use_or_send_error_report_token(monkeypatch, tm
     )
     monkeypatch.setattr(lic, "_get_gist_config", lambda: (_ for _ in ()).throw(AssertionError("gist legacy não deve ser usado")))
     monkeypatch.setattr(lic, "urlopen", fake_urlopen)
+    monkeypatch.setattr(lic, "_fetch_remote_config_after_validation", lambda **kwargs: None)
 
     status = lic.validate_license("fbot-api", machine_id="MAQ-1")
 
@@ -241,6 +299,7 @@ def test_validate_license_uses_env_api_url_when_defined(monkeypatch, tmp_path):
     monkeypatch.setenv("FRETIO_LICENSE_API_URL", "https://licenses.example.test/env-validate")
     monkeypatch.setattr(lic, "urlopen", fake_urlopen)
     monkeypatch.setattr(lic, "_save_validation_cache", lambda key, status: None)
+    monkeypatch.setattr(lic, "_fetch_remote_config_after_validation", lambda **kwargs: None)
 
     status = lic.validate_license("fbot-env", machine_id="MAQ-ENV")
 
@@ -251,3 +310,11 @@ def test_validate_license_uses_env_api_url_when_defined(monkeypatch, tmp_path):
         "key": "FBOT-ENV",
         "machine_id": "MAQ-ENV",
     }
+
+
+def test_get_license_api_url_normalizes_validate_endpoint(monkeypatch):
+    monkeypatch.setenv("FRETIO_LICENSE_API_URL", "https://licenses.example.test/api/licenses")
+    monkeypatch.delenv("FRETEBOT_LICENSE_API_URL", raising=False)
+    monkeypatch.delenv("Fretio_LICENSE_API_URL", raising=False)
+
+    assert lic._get_license_api_url() == "https://licenses.example.test/api/licenses/validate"

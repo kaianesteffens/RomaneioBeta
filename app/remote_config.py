@@ -3,7 +3,9 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import math
 import os
+import re
 import ssl
 import sys
 import threading
@@ -169,6 +171,28 @@ def _get_license_config_api_url() -> str:
         if url:
             return url
     return _get_config_value("license_config_api_url") or DEFAULT_LICENSE_CONFIG_API_URL
+
+
+def _config_api_url_from_validate_api_url(validate_api_url: str) -> str:
+    raw = str(validate_api_url or "").strip()
+    if not raw:
+        return ""
+    try:
+        from urllib.parse import urlparse, urlunparse
+
+        parsed = urlparse(raw)
+        path = (parsed.path or "").rstrip("/")
+        if path.endswith("/validate"):
+            path = f"{path.rsplit('/', 1)[0]}/config"
+        elif path.endswith("/api/licenses"):
+            path = f"{path}/config"
+        elif not path:
+            path = "/api/licenses/config"
+        else:
+            path = f"{path}/config"
+        return urlunparse(parsed._replace(path=path))
+    except Exception:
+        return ""
 
 
 def _remote_config_dir() -> Path:
@@ -368,16 +392,21 @@ def get_cached_remote_config() -> dict[str, Any] | None:
         return None
 
 
-def _fetch_remote_config_now() -> dict[str, Any]:
-    key = str(get_saved_license() or "").strip().upper()
+def _fetch_remote_config_now(
+    *,
+    key: str = "",
+    machine_id: str = "",
+    api_url: str = "",
+) -> dict[str, Any]:
+    key = str(key or get_saved_license() or "").strip().upper()
     if not key:
         _LOGGER.info("Configuracao remota ignorada: licenca local ausente")
         _set_last_fetch_status("default")
         return _default_cache()
 
-    api_url = _get_license_config_api_url()
-    machine_id = get_machine_id()
-    response = RemoteConfigClient(api_url).fetch(key, machine_id)
+    resolved_api_url = str(api_url or "").strip() or _get_license_config_api_url()
+    machine_id = str(machine_id or get_machine_id()).strip()
+    response = RemoteConfigClient(resolved_api_url).fetch(key, machine_id)
     cache_payload = _cache_payload_from_response(response)
     if cache_payload.get("valid") is True:
         _write_cache(cache_payload)
@@ -388,15 +417,21 @@ def _fetch_remote_config_now() -> dict[str, Any]:
     _LOGGER.warning("Servidor de configuracao remota retornou valid=false")
     cached = get_cached_remote_config()
     if cached:
+        _LOGGER.info("Servidor de configuracao remota recusou a licenca; usando ultimo cache valido")
         _set_last_fetch_status("cache")
         return cached
     _set_last_fetch_status("error")
     return _default_cache()
 
 
-def _fetch_remote_config_safely() -> dict[str, Any]:
+def _fetch_remote_config_safely(
+    *,
+    key: str = "",
+    machine_id: str = "",
+    api_url: str = "",
+) -> dict[str, Any]:
     try:
-        return _fetch_remote_config_now()
+        return _fetch_remote_config_now(key=key, machine_id=machine_id, api_url=api_url)
     except _NETWORK_ERRORS as exc:
         _LOGGER.warning("Falha ao buscar configuracao remota; usando cache/defaults: %s", exc)
     except Exception as exc:
@@ -404,6 +439,7 @@ def _fetch_remote_config_safely() -> dict[str, Any]:
         _set_last_fetch_status("error")
     cached = get_cached_remote_config()
     if cached:
+        _LOGGER.info("Usando cache offline da configuracao remota")
         _set_last_fetch_status("cache")
         return cached
     if get_last_fetch_status() != "error":
@@ -412,11 +448,37 @@ def _fetch_remote_config_safely() -> dict[str, Any]:
 
 
 def fetch_remote_config(wait: bool = True) -> dict[str, Any]:
+    return fetch_remote_config_for_license(wait=wait)
+
+
+def fetch_remote_config_for_license(
+    *,
+    key: str = "",
+    machine_id: str = "",
+    api_url: str = "",
+    validate_api_url: str = "",
+    wait: bool = True,
+) -> dict[str, Any]:
+    resolved_api_url = str(api_url or "").strip()
+    if not resolved_api_url:
+        resolved_api_url = _config_api_url_from_validate_api_url(validate_api_url)
+    if not resolved_api_url:
+        resolved_api_url = _get_license_config_api_url()
+
     if wait:
-        return _fetch_remote_config_safely()
+        return _fetch_remote_config_safely(
+            key=key,
+            machine_id=machine_id,
+            api_url=resolved_api_url,
+        )
 
     thread = threading.Thread(
         target=_fetch_remote_config_safely,
+        kwargs={
+            "key": key,
+            "machine_id": machine_id,
+            "api_url": resolved_api_url,
+        },
         name="FretioRemoteConfigFetch",
         daemon=True,
     )
@@ -450,3 +512,64 @@ def is_feature_allowed(name: str) -> bool:
         feature_name = f"allow_{feature_name}"
     config = get_effective_remote_config()
     return _coerce_bool(config.get(feature_name), True)
+
+
+def _safe_remote_cep_origem(value: Any) -> str:
+    cep = re.sub(r"\D", "", str(value or ""))
+    return cep if len(cep) == 8 else ""
+
+
+def _safe_remote_fator_cubagem(value: Any) -> float | int | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(parsed) or parsed <= 0:
+        return None
+    if parsed.is_integer():
+        return int(parsed)
+    return parsed
+
+
+def get_safe_runtime_overrides() -> dict[str, Any]:
+    config = get_effective_remote_config()
+    overrides: dict[str, Any] = {}
+    if not isinstance(config, dict):
+        return overrides
+
+    cep_origem = _safe_remote_cep_origem(config.get("cep_origem"))
+    if cep_origem:
+        overrides["cep_origem"] = cep_origem
+
+    fator_cubagem = _safe_remote_fator_cubagem(config.get("fator_cubagem"))
+    if fator_cubagem is not None:
+        overrides["fator_cubagem"] = fator_cubagem
+
+    return overrides
+
+
+def apply_safe_runtime_overrides(config: dict[str, Any] | None) -> dict[str, Any]:
+    base: dict[str, Any] = copy.deepcopy(config) if isinstance(config, dict) else {}
+    overrides = get_safe_runtime_overrides()
+    if not overrides:
+        return base
+
+    if "cep_origem" in overrides:
+        romaneio_cfg = base.get("romaneio", {})
+        if not isinstance(romaneio_cfg, dict):
+            romaneio_cfg = {}
+        romaneio_cfg = dict(romaneio_cfg)
+        romaneio_cfg["cep_origem"] = overrides["cep_origem"]
+        base["romaneio"] = romaneio_cfg
+
+    if "fator_cubagem" in overrides:
+        fretio_cfg = base.get("fretio", {})
+        if not isinstance(fretio_cfg, dict):
+            fretio_cfg = {}
+        fretio_cfg = dict(fretio_cfg)
+        fretio_cfg["fator_cubagem"] = overrides["fator_cubagem"]
+        base["fretio"] = fretio_cfg
+
+    return base
