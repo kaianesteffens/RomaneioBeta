@@ -1,0 +1,14 @@
+# Human-maintained desktop dependencies.
+# The Windows build must install from requirements-lock.txt, not this file.
+
+pdfplumber
+PySide6
+Pillow
+greenlet==3.1.1
+playwright==1.58.0
+toml
+beautifulsoup4
+certifi
+httpx
+cryptography==48.0.0
+pyinstaller==6.20.0

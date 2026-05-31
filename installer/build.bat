@@ -17,7 +17,6 @@ echo.
 set "PYDIR=%~dp0python-3.12"
 set "PY=%PYDIR%\python.exe"
 set "REQ_LOCK=%~dp0requirements-lock.txt"
-set "REQ_FALLBACK=%~dp0requirements.txt"
 set "PINNED_PIP_VERSION=26.1.1"
 set "PINNED_PYINSTALLER_VERSION=6.20.0"
 
@@ -67,28 +66,19 @@ REM ── 2. Instalar dependencias ──────────────�
 echo.
 echo [2/5] Instalando dependencias Python...
 "%PY%" -m pip install --upgrade pip==%PINNED_PIP_VERSION% --quiet --disable-pip-version-check 2>nul
-if exist "%REQ_LOCK%" (
-    echo      Usando lockfile: %REQ_LOCK%
-    "%PY%" -m pip install --no-deps -r "%REQ_LOCK%" --quiet --disable-pip-version-check
-    if %ERRORLEVEL% neq 0 (
-        echo ERRO: Falha ao instalar dependencias pelo lockfile!
-        %FB_PAUSE_CMD%
-        exit /b 1
-    )
-) else (
-    echo      [AVISO] requirements-lock.txt nao encontrado; usando requirements.txt.
-    "%PY%" -m pip install -r "%REQ_FALLBACK%" --quiet --disable-pip-version-check
-    if %ERRORLEVEL% neq 0 (
-        echo ERRO: Falha ao instalar dependencias!
-        %FB_PAUSE_CMD%
-        exit /b 1
-    )
-    "%PY%" -m pip install pyinstaller==%PINNED_PYINSTALLER_VERSION% --quiet --disable-pip-version-check
-    if %ERRORLEVEL% neq 0 (
-        echo ERRO: Falha ao instalar PyInstaller!
-        %FB_PAUSE_CMD%
-        exit /b 1
-    )
+if not exist "%REQ_LOCK%" (
+    echo ERRO: requirements-lock.txt nao encontrado.
+    echo      O build reprodutivel exige o lockfile existente.
+    echo      Para regenerar manualmente, veja installer\BUILD.md.
+    %FB_PAUSE_CMD%
+    exit /b 1
+)
+echo      Usando lockfile: %REQ_LOCK%
+"%PY%" -m pip install --no-deps -r "%REQ_LOCK%" --quiet --disable-pip-version-check
+if %ERRORLEVEL% neq 0 (
+    echo ERRO: Falha ao instalar dependencias pelo lockfile!
+    %FB_PAUSE_CMD%
+    exit /b 1
 )
 echo [OK] Dependencias instaladas
 
