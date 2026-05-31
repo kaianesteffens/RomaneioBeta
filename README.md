@@ -1,98 +1,86 @@
-Fretio / Fretio
-Aplicativo desktop Windows para operacao de romaneios, cotacao de frete e rastreio de entregas. O projeto extrai dados de pedidos em PDF e NF-e em XML/DANFE, consulta transportadoras em paralelo e centraliza a operacao por empresa com configuracoes separadas.
-O que o sistema faz
-Extrai pedidos de PDF e monta o romaneio para consulta e copia.
-Calcula frete a partir do romaneio colado na interface.
-Cota frete de fornecedores com preenchimento manual de volumes, pesos e valor da mercadoria.
-Rastreia entregas a partir de XMLs de NF-e e gera screenshots quando o fluxo exige evidencia.
-Trabalha com multiplas empresas no mesmo computador, cada uma com seu proprio `CONFIG.toml`.
-Valida licenca na inicializacao e suporta atualizacao automatica via GitHub Releases.
-Transportadoras atuais
-Os providers implementados no repositorio ficam em `app\\Fretio\\src\\Fretio\\providers\\` e hoje cobrem:
-Braspress
-TRD
-AGEX
-Eucatur
-Rodonaves
-Alfa
-Coopex
-Stack principal
-Python 3.12
-PySide6 para a interface desktop
-Playwright + Chromium para automacao dos portais
-pdfplumber para leitura de PDFs
-PyInstaller + Inno Setup para empacotamento e instalador Windows
-Fluxo do aplicativo
-Na abertura, o usuario seleciona a empresa com a qual vai operar.
-Em Configuracoes, define credenciais, UFs atendidas e parametros da empresa.
-Na tela inicial, escolhe um dos modulos:
-Romaneio: extrair pedidos de PDF
-Calcular Frete: cotar a partir do romaneio
-Frete Fornecedores: cotar com dados manuais
-Rastreio: importar XML(s) de NF-e e acompanhar entrega
-Configuracao
-O projeto usa configuracao por empresa em:
-```text
-%APPDATA%\\Fretio\\empresas\\<nome-da-empresa>\\CONFIG.toml
+# Fretio / RomaneioBeta Desktop
+
+Aplicativo desktop Windows para operação de romaneios, cotação de frete e rastreio. A interface local é feita em PySide6 e as automações dos portais das transportadoras rodam no próprio desktop com Playwright/Chromium.
+
+O servidor é usado como API central para licença, configuração remota, telemetria, logs sanitizados, jobs de cotação e descoberta de versão. Ele não recebe credenciais de transportadoras e não executa Playwright.
+
+## Stack
+
+- Python 3.12
+- PySide6 para UI local
+- Playwright + Chromium no desktop para automação dos portais
+- PyInstaller + Inno Setup para build Windows
+- Configuração por empresa em TOML
+
+## Fluxo principal
+
+1. O usuário abre o app e seleciona a empresa.
+2. O app carrega `%APPDATA%\Fretio\empresas\<empresa>\CONFIG.toml`.
+3. A licença é validada em `license_api_url`.
+4. A configuração remota segura é buscada no servidor.
+5. A UI PySide6 dispara módulos locais: romaneio, cotação, frete fornecedores e rastreio.
+6. Providers em `app/fretio/src/fretio/providers` usam Playwright localmente quando precisam acessar portais.
+7. Eventos, erros e jobs são enviados ao servidor em modo best-effort, sempre sanitizados.
+
+## Configuração
+
+Use [app/CONFIG.example.toml](app/CONFIG.example.toml) como referência. Não versionar `CONFIG.toml`, chaves de licença, senhas ou arquivos de cache.
+
+Exemplo mínimo, com valores fictícios:
+
+```toml
+[fretio]
+version_api_url = "https://api.exemplo.com/api/version/latest"
+license_api_url = "https://api.exemplo.com/api/licenses/validate"
+license_config_api_url = "https://api.exemplo.com/api/licenses/config"
+error_api_url = "https://api.exemplo.com/api/errors"
+usage_api_url = "https://api.exemplo.com/api/usage/events"
+quotation_jobs_api_url = "https://api.exemplo.com/api/quotations/jobs"
+quotation_normalization_api_url = "https://api.exemplo.com/api/quotations/normalize"
+
+[romaneio]
+cep_origem = "01001000"
+
+[transportadoras.trd]
+habilitado = true
+email = "usuario@example.com"
+senha = "SENHA_LOCAL"
+headless = true
+ufs_atendidas = ["RS", "SC", "PR"]
 ```
-O arquivo-base para referencia esta em:
-```text
-app\\CONFIG.example.toml
-```
-Principais secoes:
-`\[Fretio]`: cubagem, cache, repositorio de releases, licenciamento e reporte de erros
-`\[romaneio]`: CEP de origem padrao
-`\[transportadoras.<nome>]`: habilitacao, credenciais, `headless`, UFs atendidas e campos especificos de cada integracao
-Endpoints de apoio em `\[Fretio]`:
-`quotation_jobs_api_url` envia jobs de cotacao para o servidor.
-`quotation_normalization_api_url` e opcional/best-effort para normalizacao remota de payloads; falha nesse endpoint nao deve impedir a cotacao local.
-`quotation_normalization_shadow_enabled` e opcional e fica desligado por padrao. Quando ativo, envia apenas dados estruturados minimos para comparar a normalizacao remota com a local em log diagnostico.
-Falha remota ou divergencia do modo sombra nao altera a cotacao local.
-> `CONFIG.toml`, credenciais e licencas sao dados locais e nao devem ser versionados.
-Executando em desenvolvimento
-Recomendado em Windows 10/11 com Python 3.12.
+
+## Desenvolvimento
+
 ```powershell
 python -m venv .venv
-.\\.venv\\Scripts\\Activate.ps1
-python -m pip install -r installer\\requirements.txt
-python -m pip install pyinstaller
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r installer\requirements.in
 python -m playwright install chromium
-python app\\romaneio\_app.py
+python app\romaneio_app.py
 ```
-Observacoes:
-O aplicativo solicita uma chave de licenca na primeira execucao.
-O Chromium do Playwright precisa estar instalado para cotacao e rastreio.
-Em ambiente empacotado, a versao usada pelo app vem de `app\\version.txt`.
-Build do instalador
-O fluxo de build fica em `installer\\`.
-Build local
+
+Em produção, a versão do app vem de `app/version.txt`.
+
+## Build e atualização
+
+O build do desktop fica em `installer/` e usa `installer/requirements-lock.txt`. O pacote de update é um ZIP com executável e `version.txt`; o app valida a estrutura do ZIP antes de aplicar.
+
 ```cmd
 cd installer
 build.bat
 ```
-O processo gera, entre outros artefatos:
-`installer\\installer\\Romaneio-Beta-Setup-<versao>.exe`
-`installer\\installer\\Fretio-Update-<versao>.zip`
-`installer\\installer\\Romaneio.exe`
-GitHub Actions
-O workflow `.github\\workflows\\build-release.yml` roda manualmente e:
-executa o build Windows;
-gera os artefatos do instalador e do pacote de update;
-faz o bump de `app\\version.txt`;
-publica a release no repo configurado em `RELEASE_REPO`, com aliases estaveis de update/instalador;
-mantem em `installer\\repository-assets\\` apenas os artefatos `latest` que cabem nos limites do GitHub, junto do manifest `latest.json`.
-Estrutura do repositorio
-Caminho	Responsabilidade
-`app\\romaneio\_app.py`	Janela principal PySide6 e fluxo entre modulos
-`app\\cotacao\_transportadoras.py`	Orquestracao das cotacoes e sessoes por transportadora
-`app\\extrator\_pedidos.py`	Extracao de pedidos em PDF para romaneio
-`app\\extrator\_nfe.py`	Leitura de XML/DANFE de NF-e
-`app\\rastreamento.py`	Rastreio de entregas e captura de screenshots
-`app\\updater.py`	Atualizacao automatica via GitHub Releases
-`app\\license.py` / `app\\license\_manager.py`	Validacao e persistencia de licenca
-`app\\Fretio\\src\\Fretio\\providers\\`	Integracoes com transportadoras
-`installer\\`	Empacotamento PyInstaller e instalador Inno Setup
-Notas para manutencao
-O app usa threads para manter a UI responsiva; Playwright nao deve rodar na thread principal do Qt.
-Novas transportadoras devem ser implementadas em `providers\\` e registradas em `app\\cotacao\_transportadoras.py`.
-O projeto foi pensado para Windows e depende de caminhos e rotinas especificas desse ambiente.
+
+O fluxo de update consulta primeiro `version_api_url`. Se o servidor estiver indisponível, o updater usa GitHub Releases via `github_repo` e `github_repo_aliases`.
+
+## Documentação
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): arquitetura local, threads, Playwright e integração com servidor.
+- [docs/PROVIDERS.md](docs/PROVIDERS.md): como providers funcionam e como criar uma nova transportadora.
+- [docs/LICENSING.md](docs/LICENSING.md): `license_api_url`, configuração remota e dados permitidos.
+- [docs/UPDATE.md](docs/UPDATE.md): descoberta de versão, update obrigatório e fallback GitHub.
+- [docs/RELEASE.md](docs/RELEASE.md): checklist de release segura e rollback.
+- [CHANGELOG.md](CHANGELOG.md): mudanças por versão.
+
+## Regra de segurança
+
+O desktop nunca deve enviar ao servidor senhas de transportadoras, cookies, HTML bruto, screenshots, XML completo, DANFE/PDF completo, CPF/CNPJ completos de clientes finais, token GitHub, `ADMIN_TOKEN`, `DATABASE_URL` ou tracebacks sem sanitização.
