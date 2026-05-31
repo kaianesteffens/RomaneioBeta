@@ -245,3 +245,74 @@ def test_license_config_api_url_can_be_loaded_from_config_toml(monkeypatch, tmp_
     rc.fetch_remote_config(wait=True)
 
     assert requests[0].full_url == "https://config.example.test/from-toml"
+
+
+def test_fetch_remote_config_for_license_derives_config_endpoint_from_validate_url(monkeypatch, tmp_path):
+    appdata = tmp_path / "appdata"
+    requests = []
+
+    def fake_urlopen(req, timeout, context=None):
+        requests.append(req)
+        return FakeResponse({"valid": True, "license": {"owner": "Derivada"}, "config": {}})
+
+    monkeypatch.setenv("APPDATA", str(appdata))
+    monkeypatch.setattr(rc, "urlopen", fake_urlopen)
+
+    rc.fetch_remote_config_for_license(
+        key="FBOT-URL",
+        machine_id="MAQ-1",
+        validate_api_url="https://licenses.example.test/api/licenses/validate",
+        wait=True,
+    )
+
+    assert requests[0].full_url == "https://licenses.example.test/api/licenses/config"
+
+
+def test_apply_safe_runtime_overrides_does_not_overwrite_local_credentials(monkeypatch):
+    local_config = {
+        "fretio": {"fator_cubagem": 6000, "cache_dir": "cache"},
+        "romaneio": {"cep_origem": "11111111"},
+        "transportadoras": {
+            "trd": {
+                "habilitado": True,
+                "email": "local@example.com",
+                "senha": "SENHA_LOCAL",
+            }
+        },
+    }
+    original = json.loads(json.dumps(local_config))
+
+    monkeypatch.setattr(
+        rc,
+        "get_effective_remote_config",
+        lambda: {
+            "cep_origem": "99.740-000",
+            "fator_cubagem": "5500",
+            "transportadoras": {
+                "trd": {
+                    "email": "server@example.com",
+                    "senha": "SENHA_REMOTA",
+                }
+            },
+        },
+    )
+
+    applied = rc.apply_safe_runtime_overrides(local_config)
+
+    assert local_config == original
+    assert applied["romaneio"]["cep_origem"] == "99740000"
+    assert applied["fretio"]["fator_cubagem"] == 5500
+    assert applied["transportadoras"] == original["transportadoras"]
+
+
+def test_get_safe_runtime_overrides_ignores_invalid_values(monkeypatch):
+    monkeypatch.setattr(
+        rc,
+        "get_effective_remote_config",
+        lambda: {
+            "cep_origem": "123",
+            "fator_cubagem": "invalido",
+        },
+    )
+
+    assert rc.get_safe_runtime_overrides() == {}

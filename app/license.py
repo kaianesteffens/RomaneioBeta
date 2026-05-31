@@ -1,14 +1,14 @@
 """
 Fretio — Sistema de Licenciamento.
 
-Valida licenças contra um JSON remoto (GitHub Gist secreto).
-Cada instalação precisa de uma chave para funcionar.
-O administrador pode revogar licenças remotamente.
+Fluxo principal: validação via RomaneioBeta-server.
+Fallback legado temporário: leitura de licenças via GitHub Gist.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import platform
 import ssl
@@ -19,12 +19,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 from urllib.error import URLError
+from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 # ── Configuração ────────────────────────────────────────────────
 _HTTP_TIMEOUT = 15
 _GRACE_DAYS = 7  # dias de funcionamento offline após última validação
 _CONFIG_SECTIONS = ("fretio", "fretebot", "romaneio")
+_LOGGER = logging.getLogger("license")
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -183,11 +185,55 @@ def _get_config_value(key: str) -> str:
 
 def _get_license_api_url() -> str:
     """Lê endpoint próprio de licenciamento, sem usar token GitHub."""
+    raw_url = ""
     for env_name in ("FRETIO_LICENSE_API_URL", "FRETEBOT_LICENSE_API_URL", "Fretio_LICENSE_API_URL"):
         url = os.environ.get(env_name, "").strip()
         if url:
-            return url
-    return _get_config_value("license_api_url")
+            raw_url = url
+            break
+    if not raw_url:
+        raw_url = _get_config_value("license_api_url")
+    return _normalize_license_validate_url(raw_url)
+
+
+def _normalize_license_validate_url(raw_url: str) -> str:
+    url = str(raw_url or "").strip()
+    if not url:
+        return ""
+    try:
+        parsed = urlparse(url)
+        path = (parsed.path or "").rstrip("/")
+        if not path:
+            path = "/api/licenses/validate"
+        elif path.endswith("/api/licenses"):
+            path = f"{path}/validate"
+        elif path.endswith("/api/licenses/config"):
+            path = f"{path.rsplit('/', 1)[0]}/validate"
+        rebuilt = parsed._replace(path=path)
+        return urlunparse(rebuilt)
+    except Exception:
+        return url
+
+
+def _license_config_url_from_validate_url(validate_url: str) -> str:
+    normalized_validate = _normalize_license_validate_url(validate_url)
+    if not normalized_validate:
+        return ""
+    try:
+        parsed = urlparse(normalized_validate)
+        path = (parsed.path or "").rstrip("/")
+        if path.endswith("/validate"):
+            path = f"{path.rsplit('/', 1)[0]}/config"
+        elif path.endswith("/api/licenses"):
+            path = f"{path}/config"
+        elif not path:
+            path = "/api/licenses/config"
+        else:
+            path = f"{path}/config"
+        rebuilt = parsed._replace(path=path)
+        return urlunparse(rebuilt)
+    except Exception:
+        return ""
 
 
 def _get_gist_url() -> str:
@@ -312,6 +358,7 @@ def _save_validation_cache(key: str, status: LicenseStatus) -> None:
         "valid": status.valid,
         "owner": status.owner,
         "blocked": status.blocked,
+        "expires": status.expires,
         "timestamp": time.time(),
     }
     _validation_cache_file().write_text(json.dumps(data), encoding="utf-8")
@@ -338,7 +385,8 @@ def _load_validation_cache(key: str) -> Optional[LicenseStatus]:
             return LicenseStatus(
                 valid=True,
                 owner=data.get("owner", ""),
-                message="Validado offline (sem conexão).",
+                message="Servidor indisponível, usando validação offline.",
+                expires=str(data.get("expires", "") or ""),
                 offline=True,
             )
     except Exception:
@@ -391,21 +439,29 @@ class LicenseService:
     def validate(self, key: str, machine_id: str) -> LicenseStatus:
         api_url = _get_license_api_url()
         if api_url:
+            _LOGGER.info("Usando licenciamento via server: %s", api_url)
             return self._validate_backend(api_url, key, machine_id)
+        _LOGGER.info("Usando fallback Gist legado (server nao configurado)")
         return self._validate_legacy_gist(key, machine_id)
 
     def _offline_or_error(self, key: str) -> LicenseStatus:
         cached = _load_validation_cache(key)
         if cached:
+            _LOGGER.info("Usando cache offline de licenca")
             return cached
+        _LOGGER.warning("Servidor de licenciamento indisponivel e sem cache offline valido")
         return LicenseStatus(
             valid=False,
-            message="Sem conexão para validar licença. Tente novamente com internet.",
+            message="Servidor indisponível e sem validação offline válida.",
         )
 
     def _validate_backend(self, api_url: str, key: str, machine_id: str) -> LicenseStatus:
         try:
             status = LicenseClient(api_url).validate(key, machine_id)
+            if status.valid and not status.message:
+                status.message = "Licença válida."
+            if status.valid:
+                _fetch_remote_config_after_validation(key=key, machine_id=machine_id, validate_api_url=api_url)
             if status.valid or status.blocked:
                 _save_validation_cache(key, status)
             return status
@@ -476,7 +532,7 @@ class LicenseService:
                             valid=False,
                             owner=lic_data.get("owner", ""),
                             expires=expires,
-                            message=f"Licença expirou em {expires}.",
+                            message=f"Licença expirada em {expires}.",
                         )
                 except ValueError:
                     pass
@@ -490,12 +546,13 @@ class LicenseService:
                     return LicenseStatus(
                         valid=False,
                         owner=lic_data.get("owner", ""),
-                        message="Esta licença já está ativada em outro computador.",
+                        message="Limite de máquinas atingido.",
                     )
 
-            # Registrar máquina se ainda não vinculada
             if machine_id not in bound_machines:
-                _register_machine(key, machine_id, gist_url)
+                _LOGGER.warning(
+                    "Fallback Gist legado em modo somente leitura: vinculo de maquina nao sera gravado."
+                )
 
             # Tudo OK
             status = LicenseStatus(
@@ -525,3 +582,20 @@ def validate_license(key: str, machine_id: str = "") -> LicenseStatus:
         machine_id = get_machine_id()
 
     return LicenseService().validate(key, machine_id)
+
+
+def _fetch_remote_config_after_validation(*, key: str, machine_id: str, validate_api_url: str) -> None:
+    config_api_url = _license_config_url_from_validate_url(validate_api_url)
+    if not config_api_url:
+        return
+    try:
+        import remote_config as _remote_config
+
+        _remote_config.fetch_remote_config_for_license(
+            key=key,
+            machine_id=machine_id,
+            api_url=config_api_url,
+            wait=True,
+        )
+    except Exception as exc:
+        _LOGGER.warning("Falha ao buscar configuracao remota apos validar licenca: %s", exc)
