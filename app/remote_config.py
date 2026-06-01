@@ -44,6 +44,7 @@ DEFAULT_REMOTE_CONFIG: dict[str, Any] = {
         "rodonaves": True,
         "alfa": True,
         "coopex": True,
+        "translovato": True,
     },
 }
 

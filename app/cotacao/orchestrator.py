@@ -78,7 +78,7 @@ async def _executar_cotacoes_com_dados(
             transportadoras_cfg = {}
         transportadoras_cfg = dict(transportadoras_cfg)
         foco = str(MODO_FOCO_TRANSPORTADORA).strip().lower()
-        for nome_cfg in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "coopex"):
+        for nome_cfg in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "coopex", "translovato"):
             sec = transportadoras_cfg.get(nome_cfg)
             if not isinstance(sec, dict):
                 sec = {}
@@ -826,6 +826,64 @@ async def _executar_cotacoes_com_dados(
         if chrome_missing_reported:
             return _resultado_chrome_ausente(e)
         erros_setup.append(ResultadoCotacao(transportadora="COOPEX", status="erro", detalhes=str(e)))
+
+    # TRANSLOVATO
+    try:
+        if provider_factory.is_available("translovato"):
+            tlcfg = provider_factory.get_provider_config("translovato")
+            if tlcfg.get("habilitado", True):
+                incompleta = _bloquear_config_incompleta("translovato")
+                if incompleta is not None:
+                    erros_setup.append(incompleta)
+                elif not _uf_atendida(tlcfg.get("ufs_atendidas"), uf_destino):
+                    erros_setup.append(_resultado_nao_atendido("TRANSLOVATO", uf_destino))
+                else:
+                    cnpj = _digits(str(tlcfg.get("cnpj", "") or ""))
+                    usuario = str(tlcfg.get("usuario", "") or "").strip()
+                    senha_tl = str(tlcfg.get("senha", "") or "").strip()
+                    cnpj_rem_cfg = _digits(str(tlcfg.get("cnpj_remetente", "") or "")) or cnpj
+                    if len(cnpj) == 14 and usuario and senha_tl:
+                        foco_translovato = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "translovato"
+                        headless_translovato = False if foco_translovato else bool(tlcfg.get("headless", True))
+                        provider = await _obter_provider_sessao(
+                            "translovato",
+                            create_kwargs={
+                                "headless": headless_translovato,
+                                "cnpj_remetente": cnpj_rem_cfg,
+                                "produto": str(tlcfg.get("produto", "CONFECCAO") or "CONFECCAO"),
+                                "cotacao_url": str(tlcfg.get("cotacao_url", "") or "").strip(),
+                            },
+                            desired_headless=headless_translovato,
+                            log_label="TRANSLOVATO",
+                        )
+                        if provider is not None:
+                            _log_diag(
+                                f"TRANSLOVATO preparada (cnpj={cnpj[:4]}***{cnpj[-2:]}, "
+                                f"linhas_cubagem={len(cubagens_validas)}, headless={headless_translovato})"
+                            )
+                            _translovato_kwargs = dict(
+                                origem=origem,
+                                destino=destino,
+                                cep_origem=origem,
+                                cep_destino=destino,
+                                uf_destino=uf_destino,
+                                peso=peso,
+                                valor=valor,
+                                volumes=volumes,
+                                cubagem_m3=cubagem_m3,
+                                cubagens=cubagens_validas,
+                                cnpj_destinatario=cnpj_destinatario,
+                                cnpj_remetente=_digits(cnpj_remetente or cnpj_rem_cfg),
+                            )
+                            tasks.append(("TRANSLOVATO", provider, _translovato_kwargs))
+                    else:
+                        _log_diag("TRANSLOVATO não configurada (CNPJ/usuário/senha ausentes)")
+    except Exception as e:
+        _log_diag(f"Erro ao preparar TRANSLOVATO: {e}")
+        _reportar_erro_preparacao("TRANSLOVATO", e)
+        if chrome_missing_reported:
+            return _resultado_chrome_ausente(e)
+        erros_setup.append(ResultadoCotacao(transportadora="TRANSLOVATO", status="erro", detalhes=str(e)))
 
     # Executa primeiro as transportadoras mais lentas para reduzir tempo total.
     # Maior número = tendência de maior duração (baseado em testes reais).

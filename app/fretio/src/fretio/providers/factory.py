@@ -63,6 +63,7 @@ _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "rodonaves": ("dominio", "usuario", "senha", "cnpj_pagador"),
     "alfa": ("login", "senha"),
     "coopex": ("dominio", "usuario", "senha", "cnpj_pagador"),
+    "translovato": ("cnpj", "usuario", "senha"),
 }
 
 _REQUIRED_FIELD_LABELS: dict[str, str] = {
@@ -256,6 +257,23 @@ def _build_coopex(config: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _build_translovato(config: dict[str, Any]) -> dict[str, Any] | None:
+    cnpj = _text(config.get("cnpj"))
+    usuario = _text(config.get("usuario"))
+    senha = _text(config.get("senha"))
+    if not cnpj or not usuario or not senha:
+        return None
+    return {
+        "cnpj": cnpj,
+        "usuario": usuario,
+        "senha": senha,
+        "cnpj_remetente": _text(config.get("cnpj_remetente")),
+        "produto": _text(config.get("produto"), "CONFECCAO") or "CONFECCAO",
+        "cotacao_url": _text(config.get("cotacao_url")),
+        "headless": bool(config.get("headless", True)),
+    }
+
+
 _PROVIDER_SPECS: dict[str, ProviderSpec] = {
     "braspress": ProviderSpec("braspress", "fretio.providers.braspress_playwright", "BraspressPlaywrightProvider", _build_braspress),
     "bauer": ProviderSpec("bauer", "fretio.providers.bauer_auto", "BauerAutoProvider", _build_bauer),
@@ -265,6 +283,12 @@ _PROVIDER_SPECS: dict[str, ProviderSpec] = {
     "rodonaves": ProviderSpec("rodonaves", "fretio.providers.rodonaves", "RodonavesProvider", _build_rodonaves),
     "alfa": ProviderSpec("alfa", "fretio.providers.alfa", "AlfaProvider", _build_alfa),
     "coopex": ProviderSpec("coopex", "fretio.providers.coopex", "CoopexProvider", _build_coopex),
+    "translovato": ProviderSpec(
+        "translovato",
+        "fretio.providers.translovato",
+        "TranslovatoProvider",
+        _build_translovato,
+    ),
 }
 
 

@@ -43,6 +43,12 @@ def test_remote_config_failure_does_not_break_permissions(monkeypatch):
     assert rp.carrier_enabled_or_message("TRD") == (True, "")
 
 
+def test_translovato_aliases_normalize_to_canonical_name():
+    assert rp.normalize_carrier_name("Translovato") == "translovato"
+    assert rp.normalize_carrier_name("trans lovato") == "translovato"
+    assert rp.normalize_carrier_name("transportes translovato") == "translovato"
+
+
 def test_disabled_carrier_is_skipped_before_provider_creation(monkeypatch):
     create_calls = []
 

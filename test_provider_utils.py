@@ -15,6 +15,7 @@ from fretio.providers.braspress_playwright import BraspressPlaywrightProvider
 from fretio.providers.coopex import CoopexProvider
 from fretio.providers.eucatur import EucaturProvider
 from fretio.providers.rodonaves import RodonavesProvider
+from fretio.providers.translovato import TranslovatoProvider
 from fretio.providers.trd import TRDProvider
 from fretio.providers import provider_utils as pu
 from fretio.models import Cotacao
@@ -46,6 +47,30 @@ def test_document_formatters_only_apply_for_complete_values():
     assert pu._format_cpf("12345678901") == "123.456.789-01"
     assert pu._format_cpf("123") == "123"
 
+
+
+def test_translovato_helpers_parse_dimensions_value_and_deadline():
+    assert TranslovatoProvider._cm_to_m_br(10) == "0,1"
+    assert TranslovatoProvider._cm_to_m_br(31) == "0,31"
+    assert TranslovatoProvider._extract_prazo("Prazo de entrega 6 dias") == 6
+    assert TranslovatoProvider._extract_valor("Total do frete R$ 1.234,56") == 1234.56
+
+
+def test_translovato_provider_keeps_observed_selectors():
+    selectors = set(TranslovatoProvider.MAIN_SELECTORS)
+
+    assert "#cnpj" in selectors
+    assert "#user" in selectors
+    assert 'input[name="password"]' in selectors
+    assert "#sender_cpnj" in selectors
+    assert "#receiver_c" in selectors
+    assert "#cep_entrega" in selectors
+    assert 'input[name="value[volume_nf]"]' in selectors
+    assert 'input[name="value[volume_weigth]"]' in selectors
+    assert 'input[name="cubing_qnt[]"]' in selectors
+    assert 'input[name="cubing_height[]"]' in selectors
+    assert 'input[name="cubing_length[]"]' in selectors
+    assert 'input[name="cubing_depth[]"]' in selectors
 
 def test_get_stealth_script_returns_expected_browser_patches():
     script = pu.get_stealth_script()
