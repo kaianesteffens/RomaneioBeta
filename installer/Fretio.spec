@@ -20,6 +20,7 @@ hiddenimports = [
     "fretio.providers.rodonaves",
     "fretio.providers.alfa",
     "fretio.providers.coopex",
+    "fretio.providers.translovato",
     "fretio.providers._win_taskbar",
     "fretio.providers.base",
     "fretio.providers.factory",

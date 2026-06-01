@@ -347,6 +347,12 @@ Arquivos/pastas:
 - `docs/RELEASE.md`
 - `docs/UPDATE.md`
 
+Fluxo atual do workflow `Build and Release Fretio`:
+
+- Execucao manual via `workflow_dispatch` com input obrigatorio `version` (`X.Y` ou `X.Y.Z`).
+- `publish_release=true` e release oficial exigem `RELEASES_TOKEN`, `UPDATE_SIGNING_PRIVATE_KEY_B64` e `UPDATE_PUBLIC_KEY_B64`.
+- `publish_release=false` serve apenas para artefato interno; se faltar assinatura, exige `ALLOW_UNSIGNED_DEV_RELEASE=true` e nao publica release externa.
+
 Cuidados:
 
 - Mudancas em dependencia podem quebrar PyInstaller.

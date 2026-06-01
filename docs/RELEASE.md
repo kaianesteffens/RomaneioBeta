@@ -43,9 +43,9 @@ na lógica específica de eventos de uso; as validações de migrations e os tes
 
 ## Build Windows
 
-Rodar o workflow `Build and Release Fretio` no repositório `kaianesteffens/RomaneioBeta`.
+O workflow `Build and Release Fretio` é manual. Depois do merge no `master`, abra **Actions → Build and Release Fretio → Run workflow**, informe uma versão nova em `version` (`X.Y` ou `X.Y.Z`, por exemplo `2.34`) e mantenha `publish_release=true` para release oficial de cliente.
 
-Configuração obrigatória para release de cliente:
+Configuração obrigatória para release oficial de cliente:
 
 - Secret `UPDATE_SIGNING_PRIVATE_KEY_B64`
 - Variable `UPDATE_PUBLIC_KEY_B64`
@@ -53,14 +53,18 @@ Configuração obrigatória para release de cliente:
 - Variable `RELEASE_REPO=kaianesteffens/RomaneioBeta-releases`
 - Variable `ALLOW_UNSIGNED_DEV_RELEASE=false`
 
-O workflow deve gerar:
+Com `publish_release=true`, o workflow valida que `version` é maior que a maior tag já publicada no repositório de releases, atualiza `app/version.txt` antes do build, assina os ZIPs de update, publica a GitHub Release `v<version>` e falha se faltar token, chave de assinatura ou qualquer artefato obrigatório.
 
-- `Fretio-Setup-2.32.exe`
-- `Fretio-Update-2.32.zip`
-- `Fretio-Update-2.32.zip.sig`
+Para build interno sem publicação externa, rode manualmente com `publish_release=false`. Se as chaves de assinatura estiverem ausentes, esse modo só deve ser usado com `ALLOW_UNSIGNED_DEV_RELEASE=true`; ele gera apenas artefatos internos do workflow e não publica ZIP sem `.sig` no repositório de releases.
+
+O workflow deve gerar, para a versão informada:
+
+- `Fretio-Setup-<version>.exe`
+- `Fretio-Update-<version>.zip`
+- `Fretio-Update-<version>.zip.sig` em release oficial assinada
 - `Romaneio.exe`
 - assets `*-latest.*`
-- `installer/repository-assets/latest.json`
+- `installer/repository-assets/latest.json` em release oficial
 
 ## Publicação
 
