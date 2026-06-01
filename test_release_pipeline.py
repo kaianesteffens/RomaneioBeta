@@ -407,3 +407,26 @@ def test_normalize_embedded_config_backfills_license_api_url(monkeypatch):
     assert data["fretebot"]["error_api_url"] == normalize_embedded_config.DEFAULT_ERROR_API_URL
     assert data["fretio"]["quotation_normalization_api_url"] == normalize_embedded_config.DEFAULT_QUOTATION_NORMALIZATION_API_URL
     assert data["fretebot"]["quotation_normalization_api_url"] == normalize_embedded_config.DEFAULT_QUOTATION_NORMALIZATION_API_URL
+    assert data["fretio"]["version_api_url"] == normalize_embedded_config.DEFAULT_VERSION_API_URL
+    assert data["fretebot"]["version_api_url"] == normalize_embedded_config.DEFAULT_VERSION_API_URL
+
+
+def test_pyinstaller_spec_hiddenimports_dynamic_translovato_provider():
+    spec_text = (ROOT / "installer" / "Fretio.spec").read_text(encoding="utf-8")
+
+    assert '"fretio.providers.translovato"' in spec_text
+
+
+def test_build_release_workflow_requires_explicit_version_and_safe_publication():
+    workflow_text = (ROOT / ".github" / "workflows" / "build-release.yml").read_text(encoding="utf-8")
+
+    assert "version:" in workflow_text
+    assert "required: true" in workflow_text
+    assert "Input version deve usar formato X.Y ou X.Y.Z" in workflow_text
+    assert 'Set-Content -Path "app\\version.txt" -Value $version' in workflow_text
+    assert "RELEASES_TOKEN e obrigatorio para publish_release=true" in workflow_text
+    assert "Release oficial exige UPDATE_SIGNING_PRIVATE_KEY_B64 e UPDATE_PUBLIC_KEY_B64" in workflow_text
+    assert "publish_release=false; apenas artefatos internos do workflow foram gerados" in workflow_text
+    assert "if: env.PUBLISH_RELEASE == 'true'" in workflow_text
+    assert "Artefato obrigatorio ausente; release oficial abortada" in workflow_text
+    assert 'version_api_url = `"$versionApiUrl`"' in workflow_text

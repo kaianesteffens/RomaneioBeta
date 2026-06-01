@@ -2,6 +2,16 @@ name: Build and Release Fretio
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Nova versao, ex: 2.34 ou 2.34.1"
+        required: true
+        type: string
+      publish_release:
+        description: "Publicar release oficial no repositorio de releases"
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -11,6 +21,7 @@ jobs:
     runs-on: windows-latest
     env:
       HAS_RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN != '' }}
+      PUBLISH_RELEASE: ${{ inputs.publish_release }}
       HAS_UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_B64 != '' }}
       RELEASE_REPO: ${{ vars.RELEASE_REPO || 'kaianesteffens/RomaneioBeta-releases' }}
       RELEASE_REPO_ALIASES: ${{ vars.RELEASE_REPO_ALIASES }}
@@ -24,20 +35,80 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Validate update signing configuration
+      - name: Validate release inputs and publication configuration
+        id: release_inputs
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
         run: |
+          $version = "${{ inputs.version }}".Trim()
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Input version e obrigatorio. Informe uma versao nova, ex: 2.34 ou 2.34.1."
+          }
+          if ($version -notmatch '^\d+\.\d+(\.\d+)?$') {
+            throw "Input version deve usar formato X.Y ou X.Y.Z. Valor recebido: '$version'."
+          }
+
+          $publishRelease = $env:PUBLISH_RELEASE -eq "true"
           $allowUnsignedDev = $env:ALLOW_UNSIGNED_DEV_RELEASE -eq "true"
+          $hasReleaseToken = $env:HAS_RELEASES_TOKEN -eq "true"
           $hasPrivateKey = $env:HAS_UPDATE_SIGNING_KEY -eq "true"
           $hasPublicKey = -not [string]::IsNullOrWhiteSpace($env:UPDATE_PUBLIC_KEY_B64)
-          if ((-not $hasPrivateKey -or -not $hasPublicKey) -and -not $allowUnsignedDev) {
-            throw "Update signing is required. Configure secret UPDATE_SIGNING_PRIVATE_KEY_B64 and variable UPDATE_PUBLIC_KEY_B64, or set variable ALLOW_UNSIGNED_DEV_RELEASE=true only for explicit dev builds."
+
+          if ($publishRelease -and -not $hasReleaseToken) {
+            throw "RELEASES_TOKEN e obrigatorio para publish_release=true. Use publish_release=false somente para build interno sem publicacao externa."
           }
-          if ($allowUnsignedDev -and (-not $hasPrivateKey -or -not $hasPublicKey)) {
-            Write-Warning "Unsigned dev build explicitly allowed. Release updates produced by this run must not be published."
-          } else {
-            Write-Host "[OK] Update signing configured"
+          if ($publishRelease -and (-not $hasPrivateKey -or -not $hasPublicKey)) {
+            throw "Release oficial exige UPDATE_SIGNING_PRIVATE_KEY_B64 e UPDATE_PUBLIC_KEY_B64. Use publish_release=false e ALLOW_UNSIGNED_DEV_RELEASE=true apenas para build dev interno."
           }
+          if ((-not $publishRelease) -and (-not $hasPrivateKey -or -not $hasPublicKey)) {
+            if ($allowUnsignedDev) {
+              Write-Warning "Build dev interno sem assinatura permitido por ALLOW_UNSIGNED_DEV_RELEASE=true. Nenhum release externo sera publicado."
+            } else {
+              throw "Build sem assinatura exige ALLOW_UNSIGNED_DEV_RELEASE=true quando publish_release=false."
+            }
+          }
+
+          function Convert-VersionParts([string]$raw) {
+            $clean = ($raw -replace '^[vV]', '')
+            if ($clean -notmatch '^\d+\.\d+(\.\d+)?$') { return $null }
+            $parts = $clean.Split('.') | ForEach-Object { [int]$_ }
+            while ($parts.Count -lt 3) { $parts += 0 }
+            return $parts
+          }
+          function Compare-VersionParts($left, $right) {
+            for ($i = 0; $i -lt 3; $i++) {
+              if ($left[$i] -gt $right[$i]) { return 1 }
+              if ($left[$i] -lt $right[$i]) { return -1 }
+            }
+            return 0
+          }
+
+          if ($publishRelease) {
+            $newParts = Convert-VersionParts $version
+            $latestParts = $null
+            $latestTag = $null
+            $releasesJson = gh release list --repo $env:RELEASE_REPO --limit 100 --json tagName 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              throw "Nao foi possivel consultar releases em $env:RELEASE_REPO para validar a versao."
+            }
+            $releases = $releasesJson | ConvertFrom-Json
+            foreach ($release in $releases) {
+              $parts = Convert-VersionParts $release.tagName
+              if ($null -eq $parts) { continue }
+              if ($null -eq $latestParts -or (Compare-VersionParts $parts $latestParts) -gt 0) {
+                $latestParts = $parts
+                $latestTag = $release.tagName
+              }
+            }
+            if ($null -ne $latestParts -and (Compare-VersionParts $newParts $latestParts) -le 0) {
+              throw "Versao informada v$version deve ser maior que a ultima release publicada ($latestTag)."
+            }
+          }
+
+          Set-Content -Path "app\version.txt" -Value $version -Encoding ASCII
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "[OK] app\version.txt definido para $version"
 
       - name: Inject error reporting credentials
         shell: pwsh
@@ -57,6 +128,7 @@ jobs:
           $aliasesToml = "[" + ($aliasItems -join ", ") + "]"
           $licenseApiUrl = "https://fretio.api.br/api/licenses/validate"
           $licenseConfigApiUrl = "https://fretio.api.br/api/licenses/config"
+          $versionApiUrl = "https://fretio.api.br/api/version/latest"
           $licenseUrl = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
           $errorApiUrl = "https://fretio.api.br/api/errors"
           $usageApiUrl = "https://fretio.api.br/api/usage/events"
@@ -67,6 +139,7 @@ jobs:
             "github_repo_aliases = $aliasesToml"
             "license_api_url = `"$licenseApiUrl`""
             "license_config_api_url = `"$licenseConfigApiUrl`""
+            "version_api_url = `"$versionApiUrl`""
             "license_url = `"$licenseUrl`""
             "error_api_url = `"$errorApiUrl`""
             "usage_api_url = `"$usageApiUrl`""
@@ -267,21 +340,22 @@ jobs:
             installer/release-assets/**
             installer/repository-assets/**
 
-      - name: Commit version bump
+      - name: Commit generated release metadata
+        if: env.PUBLISH_RELEASE == 'true'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add app/version.txt installer/repository-assets
           if git diff --cached --quiet; then
-            echo "Sem alteracao de versao para commit"
+            echo "Sem metadados de release para commit"
             exit 0
           fi
-          git commit -m "v${{ steps.meta.outputs.version }}: bump version [skip ci]"
+          git commit -m "v${{ steps.meta.outputs.version }}: generated release metadata [skip ci]"
           git push origin HEAD || echo "::warning::Falha ao enviar commit de versao para origin."
 
       - name: Create GitHub Release
-        if: env.HAS_RELEASES_TOKEN == 'true'
+        if: env.PUBLISH_RELEASE == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
@@ -316,13 +390,20 @@ jobs:
           }
 
           $launcher = "installer/installer/Romaneio.exe"
+          $requiredAssets = @($zip, $zipSig, $setup, $launcher, $zipLatest, $zipLatestSig, $zipLatestLegacy, $zipLatestLegacySig, $setupLatest, $setupLatestLegacy)
+          foreach ($assetPath in $requiredAssets) {
+            if (!(Test-Path $assetPath)) {
+              throw "Artefato obrigatorio ausente; release oficial abortada: $assetPath"
+            }
+          }
+
           gh release upload $tag $zip $zipSig $setup $launcher $zipLatest $zipLatestSig $zipLatestLegacy $zipLatestLegacySig $setupLatest $setupLatestLegacy `
             --repo $releaseRepo `
             --clobber
 
           Write-Host "Release v$ver publicado/atualizado em $releaseRepo"
 
-      - name: Skip external release (no token)
-        if: env.HAS_RELEASES_TOKEN != 'true'
+      - name: Skip external release (internal build)
+        if: env.PUBLISH_RELEASE != 'true'
         shell: pwsh
-        run: Write-Host "RELEASES_TOKEN nao definido; apenas artefatos do workflow foram gerados."
+        run: Write-Host "publish_release=false; apenas artefatos internos do workflow foram gerados."
