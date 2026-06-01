@@ -100,6 +100,17 @@ dominio = ""
 usuario = ""
 senha = ""
 ufs_atendidas = []
+
+[transportadoras.translovato]
+habilitado = false
+cnpj = ""
+usuario = ""
+senha = ""
+cnpj_remetente = ""
+produto = "CONFECCAO"
+headless = true
+cotacao_url = "https://www.translovato.com.br/fale-conosco/solicitacao-de-cotacao#portal-do-cliente"
+ufs_atendidas = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
 """
 
 

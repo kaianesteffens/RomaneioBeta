@@ -3,6 +3,37 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from types import ModuleType
+
+
+def _install_playwright_test_stub():
+    if "playwright.async_api" in sys.modules:
+        return
+    playwright_module = ModuleType("playwright")
+    async_api_module = ModuleType("playwright.async_api")
+
+    class PlaywrightTimeoutError(TimeoutError):
+        pass
+
+    def async_playwright():
+        raise RuntimeError("Playwright não está instalado neste ambiente de teste")
+
+    class Page:
+        pass
+
+    class Frame:
+        pass
+
+    async_api_module.TimeoutError = PlaywrightTimeoutError
+    async_api_module.Page = Page
+    async_api_module.Frame = Frame
+    async_api_module.async_playwright = async_playwright
+    sys.modules.setdefault("playwright", playwright_module)
+    sys.modules["playwright.async_api"] = async_api_module
+
+
+_install_playwright_test_stub()
+
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT / "app" / "fretio" / "src"))
@@ -214,3 +245,45 @@ def test_translovato_provider_class_is_registered():
 
     assert provider_class is not None
     assert provider_class.__name__ == "TranslovatoProvider"
+
+
+def test_create_translovato_with_valid_config_returns_provider_instance():
+    factory = ProviderFactory(
+        config={
+            "transportadoras": {
+                "translovato": {
+                    "habilitado": True,
+                    "cnpj": "12.345.678/0001-90",
+                    "usuario": "usuario_teste",
+                    "senha": "senha_teste",
+                    "cnpj_remetente": "98.765.432/0001-10",
+                    "produto": "CONFECCAO",
+                    "cotacao_url": "https://example.invalid/cotacao",
+                    "headless": True,
+                }
+            }
+        }
+    )
+
+    provider = factory.create("translovato")
+
+    assert provider is not None
+    assert provider.__class__.__name__ == "TranslovatoProvider"
+    assert provider.nome == "TRANSLOVATO"
+    assert provider.cnpj == "12345678000190"
+    assert provider.usuario == "usuario_teste"
+    assert provider.cnpj_remetente == "98765432000110"
+
+
+def test_validate_translovato_incomplete_config_reports_required_fields():
+    result = validate_provider_minimum_config(
+        "translovato",
+        {"habilitado": True, "cnpj": "", "usuario": "", "senha": ""},
+    )
+
+    assert result.valid is False
+    assert result.status == "Configuração incompleta"
+    assert result.missing_fields == ("cnpj", "usuario", "senha")
+    assert "CNPJ" in result.user_message
+    assert "usuário" in result.user_message
+    assert "senha" in result.user_message
