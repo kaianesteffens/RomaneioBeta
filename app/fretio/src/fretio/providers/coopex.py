@@ -185,6 +185,8 @@ class CoopexProvider(ProviderBase):
         if len(cnpj_pagador) != 14:
             raise ValueError("cnpj_pagador é obrigatório para cotação Coopex")
 
+        self._passo_atual = "preencher_destinatario"
+
         # CNPJ pagador + trigger lookup
         await page.evaluate(f'''() => {{
             const f2 = document.querySelector('input[name=f2]');
@@ -192,6 +194,8 @@ class CoopexProvider(ProviderBase):
             if (typeof pag === 'function') pag('{cnpj_pagador}');
         }}''')
         await page.wait_for_timeout(300)
+
+        self._passo_atual = "preencher_origem_destino"
 
         # CEP origem + trigger lookup
         cep_orig = origem.replace('-', '').strip()
@@ -259,8 +263,12 @@ class CoopexProvider(ProviderBase):
             valor_fmt,
         )
 
+        self._passo_atual = "preencher_volumes"
+
         # Quantidade volumes
         await page.evaluate(f'() => {{ document.querySelector("input[name=f16]").value = "{volumes}"; }}')
+
+        self._passo_atual = "preencher_peso_valor"
 
         # Peso real do romaneio
         peso_fmt = f"{peso:.3f}".replace('.', ',')
@@ -275,6 +283,8 @@ class CoopexProvider(ProviderBase):
             f17.dispatchEvent(new Event('change', { bubbles: true }));
             f17.dispatchEvent(new Event('blur', { bubbles: true }));
         }""")
+
+        self._passo_atual = "preencher_cubagem"
 
         # Preencher campo de cubagem (m³) explicitamente.
         if cubagem_m3 > 0:
@@ -688,8 +698,10 @@ class CoopexProvider(ProviderBase):
                                          comprimento_cm, largura_cm, altura_cm,
                                          cnpj_remetente, cnpj_destinatario,
                                          cubagens_cm, cnpj_pagador, tipo_frete)
-            self._passo_atual = "submetendo_cotacao"
-            return await self._submeter_e_extrair()
+            self._passo_atual = "submeter_cotacao"
+            retorno = await self._submeter_e_extrair()
+            self._passo_atual = "ler_resultado"
+            return retorno
         except Exception as e:
             self.last_error = f"Erro na cotação: {e}"
             logger.error(f"[{self.nome}] {self.last_error}")

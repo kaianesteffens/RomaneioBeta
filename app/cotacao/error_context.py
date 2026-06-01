@@ -8,13 +8,12 @@ import json
 import re
 import traceback as traceback_mod
 
-from . import common as _common
-
 try:
     from error_reporter import (  # type: ignore[import-not-found]
         _get_machine_id_for_report,
         _get_saved_license_key,
         _get_version,
+        report_error_payload,
     )
 except Exception:
     def _get_version() -> str:
@@ -26,19 +25,33 @@ except Exception:
     def _get_machine_id_for_report() -> str:
         return ""
 
+    def report_error_payload(*a, **kw):
+        return None
+
 
 MODULE = "cotacao"
 DEFAULT_SOURCE = "cotacao_provider"
 ALLOWED_STAGES = {
+    "pre_validacao",
+    "montar_request",
+    "criar_job",
+    "instanciar_provider",
     "pre_login",
     "login",
-    "abrir_pagina",
-    "preencher_formulario",
-    "enviar_cotacao",
-    "aguardar_resultado",
-    "interpretar_resultado",
+    "abrir_cotacao",
+    "preencher_origem_destino",
+    "preencher_destinatario",
+    "preencher_peso_valor",
+    "preencher_volumes",
+    "preencher_cubagem",
+    "submeter_cotacao",
+    "ler_resultado",
+    "sem_cotacao",
     "cleanup",
+    "erro_desconhecido",
 }
+
+_ALLOWED_SOURCE_TYPES = {"romaneio", "nfe", "manual", "unknown"}
 
 _SENSITIVE_KEY_RE = re.compile(
     r"(senha|password|passwd|pwd|token|secret|cookie|authorization|auth|"
@@ -125,11 +138,170 @@ def report_provider_error(
             if value:
                 payload[key] = value
 
-        reporter = getattr(_common, "report_error_payload", None)
-        if callable(reporter):
-            reporter(payload)
+        if callable(report_error_payload):
+            report_error_payload(payload)
     except Exception:
         pass
+
+
+def build_quotation_error_diagnostic(
+    *,
+    provider: str = "",
+    stage: str = "",
+    source_type: str = "unknown",
+    quote_job_id: Any = None,
+    dados: Mapping[str, Any] | None = None,
+    kwargs: Mapping[str, Any] | None = None,
+    provider_context: Mapping[str, Any] | None = None,
+    safe_hints: Mapping[str, Any] | None = None,
+    error: BaseException | None = None,
+    last_error: Any = None,
+) -> dict[str, Any]:
+    """Monta diagnóstico sanitizado para falhas de cotação.
+
+    O retorno contém apenas flags, contagens e metadados técnicos seguros.
+    Dados operacionais sensíveis (CNPJ/CPF completos, credenciais, HTML, XML/PDF,
+    cookies ou screenshots) não são copiados para o diagnóstico.
+    """
+    merged_data = _merge_quote_data(dados, kwargs)
+    provider_norm = _normalize_short(provider, lowercase=True)
+    stage_norm = _normalize_stage(stage)
+    last_error_text = str(last_error or error or "")
+
+    provider_ctx = dict(provider_context or {})
+    provider_ctx.setdefault("provider_key", provider_norm)
+    provider_ctx.setdefault("stage", stage_norm)
+    provider_ctx.setdefault("error_type", _classify_error_type(error=error, message=last_error_text, stage=stage_norm))
+    provider_ctx.setdefault("last_error_kind", _classify_last_error_kind(error=error, message=last_error_text))
+
+    hints = dict(safe_hints or {})
+    if "headless" in provider_ctx and "headless" not in hints:
+        hints["headless"] = provider_ctx.get("headless")
+        provider_ctx.pop("headless", None)
+
+    diagnostic: dict[str, Any] = {
+        "diagnostic_version": 1,
+        "flow": "cotacao",
+        "source_type": _normalize_source_type(source_type),
+        "provider": provider_norm,
+        "stage": stage_norm,
+        "data_flags": _quote_data_flags(merged_data),
+        "provider_context": provider_ctx,
+        "safe_hints": hints,
+    }
+    if quote_job_id not in (None, ""):
+        diagnostic["quote_job_id"] = _safe_job_id(quote_job_id)
+    return sanitize_context(diagnostic)
+
+
+def _merge_quote_data(
+    dados: Mapping[str, Any] | None,
+    kwargs: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    if isinstance(dados, Mapping):
+        merged.update(dados)
+    if isinstance(kwargs, Mapping):
+        aliases = {
+            "origem": "cep_origem",
+            "destino": "destino_cep",
+            "peso": "peso",
+            "valor": "valor",
+            "volumes": "volumes",
+            "cubagens": "cubagens",
+            "cubagem_m3": "cubagem_m3",
+            "uf_destino": "uf_destino",
+            "cnpj_destinatario": "cnpj_destinatario",
+        }
+        for src_key, dest_key in aliases.items():
+            if src_key in kwargs and kwargs.get(src_key) not in (None, ""):
+                merged[dest_key] = kwargs.get(src_key)
+    return merged
+
+
+def _quote_data_flags(data: Mapping[str, Any]) -> dict[str, Any]:
+    cubagens = data.get("cubagens")
+    cubagens_list = cubagens if isinstance(cubagens, list) else []
+    cubagens_count = len([item for item in cubagens_list if isinstance(item, Mapping)])
+    volumes_total = _safe_int(data.get("volumes"))
+    if volumes_total <= 0 and cubagens_count:
+        volumes_total = sum(_safe_int(item.get("quantidade")) for item in cubagens_list if isinstance(item, Mapping))
+
+    return {
+        "cep_origem_ok": len(_digits(data.get("cep_origem") or data.get("origem"))) == 8,
+        "cep_destino_ok": len(_digits(data.get("destino_cep") or data.get("destino"))) == 8,
+        "uf_destino_ok": len(str(data.get("uf_destino") or "").strip()) == 2,
+        "cnpj_destinatario_ok": len(_digits(data.get("cnpj_destinatario"))) == 14,
+        "peso_ok": _safe_float(data.get("peso")) > 0,
+        "valor_ok": _safe_float(data.get("valor")) >= 0,
+        "cubagens_count": cubagens_count,
+        "volumes_total": volumes_total,
+        "has_cubagens": cubagens_count > 0,
+    }
+
+
+def _classify_error_type(*, error: BaseException | None, message: str, stage: str) -> str:
+    text = f"{type(error).__name__ if error else ''} {message}".lower()
+    if "timeout" in text or "timed out" in text:
+        if "selector" in text or "locator" in text:
+            return "selector_timeout"
+        return "timeout"
+    if "login" in stage or "login" in text or "credenciais" in text or "acesso negado" in text:
+        return "login_failed"
+    if "sem cot" in text or "sem valor" in text or stage == "sem_cotacao":
+        return "sem_cotacao"
+    if "cubagem" in text or "cnpj" in text or "cep" in text or "peso" in text:
+        return "dados_invalidos"
+    return "provider_error"
+
+
+def _classify_last_error_kind(*, error: BaseException | None, message: str) -> str:
+    text = f"{type(error).__name__ if error else ''} {message}".lower()
+    if "playwright" in text or "locator" in text or "page." in text:
+        return "playwright_timeout" if "timeout" in text else "playwright_error"
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if error is not None:
+        return _normalize_short(type(error).__name__, lowercase=True, max_length=80) or "exception"
+    return "last_error" if str(message or "").strip() else "unknown"
+
+
+def _normalize_source_type(value: Any) -> str:
+    normalized = _normalize_short(value, lowercase=True, max_length=32) or "unknown"
+    aliases = {
+        "pdf": "romaneio",
+        "romaneio_colado": "manual",
+        "fornecedor": "manual",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in _ALLOWED_SOURCE_TYPES else "unknown"
+
+
+def _safe_job_id(value: Any) -> int | str:
+    try:
+        if isinstance(value, bool):
+            return str(value)
+        return int(value)
+    except Exception:
+        return _normalize_short(value, lowercase=False, max_length=80)
+
+
+def _digits(value: Any) -> str:
+    return re.sub(r"\D", "", str(value or ""))
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except Exception:
+        return 0.0
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
 
 
 def sanitize_context(value: Any) -> Any:
@@ -148,7 +320,9 @@ def _sanitize_value(value: Any, *, depth: int) -> Any:
                 result["_truncated_items"] = True
                 break
             safe_key = _normalize_json_key(key)
-            if _SENSITIVE_KEY_RE.search(safe_key):
+            if _is_safe_flag_key(safe_key, raw_item):
+                result[safe_key] = _sanitize_value(raw_item, depth=depth + 1)
+            elif _SENSITIVE_KEY_RE.search(safe_key):
                 result[safe_key] = "[DADO_SENSIVEL_REMOVIDO]"
             elif _HTML_KEY_RE.search(safe_key):
                 result[safe_key] = "[HTML_REMOVIDO]"
@@ -168,6 +342,10 @@ def _sanitize_value(value: Any, *, depth: int) -> Any:
         return value
     except Exception:
         return _sanitize_text(str(value), max_length=_MAX_STRING_LENGTH)
+
+
+def _is_safe_flag_key(key: str, value: Any) -> bool:
+    return key.endswith("_ok") and isinstance(value, bool)
 
 
 def _sanitize_text(value: Any, *, max_length: int) -> str:
@@ -198,13 +376,21 @@ def _normalize_stage(stage: str) -> str:
     aliases = {
         "prelogin": "pre_login",
         "pre-login": "pre_login",
-        "cotacao": "enviar_cotacao",
-        "navegando_cotacao": "abrir_pagina",
-        "submetendo_cotacao": "enviar_cotacao",
-        "valor_resultado": "interpretar_resultado",
+        "init_browser": "pre_login",
+        "abrir_pagina": "abrir_cotacao",
+        "navegando_cotacao": "abrir_cotacao",
+        "preenchendo_formulario": "preencher_cubagem",
+        "preencher_formulario": "preencher_cubagem",
+        "enviar_cotacao": "submeter_cotacao",
+        "submetendo_cotacao": "submeter_cotacao",
+        "aguardar_resultado": "ler_resultado",
+        "interpretar_resultado": "ler_resultado",
+        "valor_resultado": "ler_resultado",
+        "resultado": "ler_resultado",
+        "validacao": "pre_validacao",
     }
     normalized = aliases.get(normalized, normalized)
-    return normalized if normalized in ALLOWED_STAGES else "interpretar_resultado"
+    return normalized if normalized in ALLOWED_STAGES else "erro_desconhecido"
 
 
 def _normalize_short(value: Any, *, lowercase: bool = True, max_length: int = 100) -> str:
@@ -224,6 +410,7 @@ def _normalize_json_key(value: Any) -> str:
 
 __all__ = [
     "ALLOWED_STAGES",
+    "build_quotation_error_diagnostic",
     "report_provider_error",
     "sanitize_context",
 ]
