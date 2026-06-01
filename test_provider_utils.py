@@ -48,7 +48,6 @@ def test_document_formatters_only_apply_for_complete_values():
     assert pu._format_cpf("123") == "123"
 
 
-
 def test_translovato_helpers_parse_dimensions_value_and_deadline():
     assert TranslovatoProvider._cm_to_m_br(10) == "0,1"
     assert TranslovatoProvider._cm_to_m_br(31) == "0,31"
@@ -71,6 +70,7 @@ def test_translovato_provider_keeps_observed_selectors():
     assert 'input[name="cubing_height[]"]' in selectors
     assert 'input[name="cubing_length[]"]' in selectors
     assert 'input[name="cubing_depth[]"]' in selectors
+
 
 def test_get_stealth_script_returns_expected_browser_patches():
     script = pu.get_stealth_script()
@@ -248,6 +248,7 @@ def test_coopex_coteir_updates_current_step_before_each_phase():
             peso=12.5,
             valor=350.0,
             volumes=1,
+            cubagem_m3=0.024,
             cubagens=[
                 {
                     "quantidade": 1,
@@ -414,3 +415,151 @@ def test_target_providers_cotar_timeout_vira_erro(provider_name, provider_factor
     assert response.error_code == "timeout"
     assert response.stage == "aguardando_resultado"
     assert response.duration_ms is not None
+
+
+def test_eucatur_aceita_mais_de_11_volumes_quando_tem_cubagem_total(monkeypatch):
+    provider = EucaturProvider(
+        dominio="DOM",
+        usuario="usr",
+        senha="secret",
+        cnpj_pagador="00000000000191",
+        headless=True,
+    )
+    captured = {}
+
+    async def _noop():
+        return None
+
+    async def _fake_preencher(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+
+    async def _fake_submeter():
+        return Cotacao(transportadora=provider.nome, prazo_dias=4, valor_frete=456.78)
+
+    monkeypatch.setattr(provider, "_init_browser", _noop)
+    monkeypatch.setattr(provider, "_login", _noop)
+    monkeypatch.setattr(provider, "_navegar_cotacao", _noop)
+    monkeypatch.setattr(provider, "_preencher_cotacao", _fake_preencher)
+    monkeypatch.setattr(provider, "_submeter_e_extrair", _fake_submeter)
+
+    result = asyncio.run(
+        provider.coteir(
+            origem="69000000",
+            destino="69000100",
+            peso=10.0,
+            valor=500.0,
+            volumes=12,
+            cubagem_m3=0.288,
+            cubagens=[{"quantidade": 12, "comprimento_cm": 40, "largura_cm": 30, "altura_cm": 20}],
+        )
+    )
+
+    assert result is not None
+    assert result.valor_frete == 456.78
+    assert captured["args"][4] == 12
+    assert captured["args"][5] == 0.288
+
+
+def test_eucatur_sem_cubagem_retorna_dado_incompleto_antes_do_browser(monkeypatch):
+    provider = EucaturProvider(
+        dominio="DOM",
+        usuario="usr",
+        senha="secret",
+        cnpj_pagador="00000000000191",
+        headless=True,
+    )
+
+    async def _fail_init():
+        raise AssertionError("browser não deveria abrir sem cubagem")
+
+    monkeypatch.setattr(provider, "_init_browser", _fail_init)
+
+    result = asyncio.run(
+        provider.coteir(
+            origem="69000000",
+            destino="69000100",
+            peso=10.0,
+            valor=500.0,
+            volumes=12,
+            cubagem_m3=0,
+            cubagens=[{"quantidade": 12, "comprimento_cm": 40, "largura_cm": 30, "altura_cm": 20}],
+        )
+    )
+
+    assert result is None
+    assert "Cubagem do romaneio não encontrada" in (provider.last_error or "")
+
+
+def test_coopex_preserva_cubagem_total_do_romaneio(monkeypatch):
+    provider = CoopexProvider(
+        dominio="DOM",
+        usuario="usr",
+        senha="secret",
+        cnpj_pagador="00000000000191",
+        headless=True,
+    )
+    captured = {}
+
+    async def _noop():
+        return None
+
+    async def _fake_preencher(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+
+    async def _fake_submeter():
+        return Cotacao(transportadora=provider.nome, prazo_dias=5, valor_frete=654.32)
+
+    monkeypatch.setattr(provider, "_init_browser", _noop)
+    monkeypatch.setattr(provider, "_login", _noop)
+    monkeypatch.setattr(provider, "_navegar_cotacao", _noop)
+    monkeypatch.setattr(provider, "_preencher_cotacao", _fake_preencher)
+    monkeypatch.setattr(provider, "_submeter_e_extrair", _fake_submeter)
+
+    result = asyncio.run(
+        provider.coteir(
+            origem="01310100",
+            destino="01310200",
+            peso=10.0,
+            valor=500.0,
+            volumes=12,
+            cubagem_m3=0.777,
+            cubagens=[{"quantidade": 12, "comprimento_cm": 40, "largura_cm": 30, "altura_cm": 20}],
+        )
+    )
+
+    assert result is not None
+    assert result.valor_frete == 654.32
+    assert captured["args"][4] == 12
+    assert captured["args"][5] == 0.777
+
+
+def test_coopex_sem_cubagem_retorna_dado_incompleto_antes_do_browser(monkeypatch):
+    provider = CoopexProvider(
+        dominio="DOM",
+        usuario="usr",
+        senha="secret",
+        cnpj_pagador="00000000000191",
+        headless=True,
+    )
+
+    async def _fail_init():
+        raise AssertionError("browser não deveria abrir sem cubagem")
+
+    monkeypatch.setattr(provider, "_init_browser", _fail_init)
+
+    result = asyncio.run(
+        provider.coteir(
+            origem="01310100",
+            destino="01310200",
+            peso=10.0,
+            valor=500.0,
+            volumes=12,
+            cubagem_m3=0,
+            cubagens=[{"quantidade": 12, "comprimento_cm": 40, "largura_cm": 30, "altura_cm": 20}],
+        )
+    )
+
+    assert result is None
+    assert "Cubagem do romaneio não encontrada" in (provider.last_error or "")

@@ -10,6 +10,11 @@ from fretio.logging_conf import get_logger
 
 logger = get_logger(__name__)
 
+_CUBAGEM_AUSENTE_MSG = (
+    "Cubagem do romaneio não encontrada. Verifique se o romaneio possui cubagem "
+    "calculada antes de cotar com COOPEX/EUCATUR."
+)
+
 
 class CoopexProvider(ProviderBase):
     """Provider COOPEX via portal SSW (sistema.ssw.inf.br)."""
@@ -630,16 +635,19 @@ class CoopexProvider(ProviderBase):
         """Realiza cotação de frete via portal SSW COOPEX."""
         self.last_error = None
         try:
+            try:
+                cubagem_m3 = float(cubagem_m3 or 0.0)
+            except Exception:
+                cubagem_m3 = 0.0
+            if cubagem_m3 <= 0:
+                self.last_error = _CUBAGEM_AUSENTE_MSG
+                logger.error(f"[{self.nome}] {self.last_error}")
+                return None
+
             cubagens_cm = self._normalizar_cubagens_cm(cubagens)
             if cubagens_cm:
                 soma = sum(int(c["quantidade"]) for c in cubagens_cm)
                 volumes = soma
-                # Calcula m³ total a partir das cubagens individuais
-                if cubagem_m3 <= 0:
-                    cubagem_m3 = sum(
-                        (c["comprimento_cm"] * c["largura_cm"] * c["altura_cm"] / 1_000_000.0) * c["quantidade"]
-                        for c in cubagens_cm
-                    )
             elif volumes > 0 and comprimento_cm > 0 and largura_cm > 0 and altura_cm > 0:
                 cubagens_cm = [
                     {
@@ -649,8 +657,6 @@ class CoopexProvider(ProviderBase):
                         "altura_cm": int(altura_cm),
                     }
                 ]
-                if cubagem_m3 <= 0:
-                    cubagem_m3 = (comprimento_cm * largura_cm * altura_cm / 1_000_000.0) * volumes
             elif cubagem_m3 > 0:
                 # Sem cubagens individuais, mas tem m³ total — prossegue
                 cubagens_cm = []

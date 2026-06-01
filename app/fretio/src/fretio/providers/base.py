@@ -32,8 +32,6 @@ _NAO_ATENDIDO_PATTERNS = (
     "cep destino não atendido",
     "cepdestino não atendido",
     "cidade de destino",
-    "não suporta mais de 11 volumes",
-    "nao suporta mais de 11 volumes",
     "sem precificação automática no ssw",
     "sem precificacao automatica no ssw",
 )
@@ -59,6 +57,8 @@ _LOGIN_PATTERNS = (
 _DADOS_INVALIDOS_PATTERNS = (
     "cubagem inválida",
     "cubagem invalida",
+    "cubagem do romaneio não encontrada",
+    "cubagem do romaneio nao encontrada",
     "cubagens ausentes",
     "volumes inválidos",
     "volumes invalidos",

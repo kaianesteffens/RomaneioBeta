@@ -42,8 +42,15 @@ def test_quote_request_from_legacy_kwargs_preserva_campos_essenciais_e_extras():
     assert request.destino_cep == "90010123"
     assert request.uf_destino == "RS"
     assert request.metadata == {"legacy_kwargs": {"cnpj_remetente": "00000000000191"}}
-    assert request.to_legacy_kwargs()["uf_destino"] == "RS"
-    assert request.to_legacy_kwargs()["cnpj_remetente"] == "00000000000191"
+    legacy = request.to_legacy_kwargs()
+    assert legacy["uf_destino"] == "RS"
+    assert legacy["volumes"] == 2
+    assert legacy["peso"] == 12.5
+    assert legacy["cubagem_m3"] == 0.144
+    assert legacy["cubagens"] == [
+        {"quantidade": 2, "comprimento_cm": 40, "largura_cm": 30, "altura_cm": 60}
+    ]
+    assert legacy["cnpj_remetente"] == "00000000000191"
 
 
 def test_cotacao_legada_to_quote_response_converte_ok_e_none():

@@ -10,6 +10,11 @@ from fretio.logging_conf import get_logger
 
 logger = get_logger(__name__)
 
+_CUBAGEM_AUSENTE_MSG = (
+    "Cubagem do romaneio não encontrada. Verifique se o romaneio possui cubagem "
+    "calculada antes de cotar com COOPEX/EUCATUR."
+)
+
 
 class EucaturProvider(ProviderBase):
     """Provider Eucatur via portal SSW (sistema.ssw.inf.br)."""
@@ -300,7 +305,8 @@ class EucaturProvider(ProviderBase):
                 }}
             }}''')
 
-        # Preencher cubagem por volume (campos cuba1..cuba11) usando somente linhas reais
+        # Preencher cubagem por volume (campos cuba1..cuba11) somente quando couber.
+        # Acima disso o SSW aceita a cubagem total já informada no campo de m³.
         cubagens_validas = self._normalizar_cubagens_cm(cubagens)
         cuba_values: list[str] = []
         for cub in cubagens_validas:
@@ -308,15 +314,18 @@ class EucaturProvider(ProviderBase):
                 cuba_values.append(
                     f'{int(cub["comprimento_cm"])}x{int(cub["largura_cm"])}x{int(cub["altura_cm"])}'
                 )
-        if not cuba_values:
-            raise Exception("Eucatur sem cubagens reais para preencher os campos cubaN")
-        if len(cuba_values) > 11:
-            raise Exception("Eucatur não suporta mais de 11 volumes (campos cuba1..cuba11)")
-        for i, cuba_value in enumerate(cuba_values, start=1):
-            await page.evaluate(f'''() => {{
-                const el = document.querySelector('input[name=cuba{i}]');
-                if (el) el.value = '{cuba_value}';
-            }}''')
+        if len(cuba_values) <= 11:
+            for i, cuba_value in enumerate(cuba_values, start=1):
+                await page.evaluate(f'''() => {{
+                    const el = document.querySelector('input[name=cuba{i}]');
+                    if (el) el.value = '{cuba_value}';
+                }}''')
+            logger.info(f"[{self.nome}] Preencheu {len(cuba_values)} campos cuba individuais")
+        else:
+            logger.info(
+                f"[{self.nome}] {len(cuba_values)} volumes > 11 campos cuba, "
+                "usando apenas cubagem m³ total"
+            )
 
         # Reaplica f15 no final, pois alguns scripts do SSW podem limpar/reformatar o campo.
         await page.evaluate(
@@ -589,7 +598,17 @@ class EucaturProvider(ProviderBase):
                     cubagens: Optional[list[dict]] = None,
                     cnpj_pagador: str = "", tipo_frete: str = "1") -> Optional[Cotacao]:
         """Realiza cotação de frete via portal SSW Eucatur."""
+        self.last_error = None
         try:
+            try:
+                cubagem_m3 = float(cubagem_m3 or 0.0)
+            except Exception:
+                cubagem_m3 = 0.0
+            if cubagem_m3 <= 0:
+                self.last_error = _CUBAGEM_AUSENTE_MSG
+                logger.error(f"[{self.nome}] {self.last_error}")
+                return None
+
             cubagens_cm = self._normalizar_cubagens_cm(cubagens)
             if cubagens_cm:
                 soma = sum(int(c["quantidade"]) for c in cubagens_cm)
@@ -599,19 +618,7 @@ class EucaturProvider(ProviderBase):
                     )
                     return None
                 volumes = soma
-
-                # Verifica limite de campos cuba1..cuba11 ANTES de iniciar o browser.
-                # Limitação estrutural do SSW — tratada como restrição conhecida, não erro técnico.
-                if soma > 11:
-                    self.last_error = "Eucatur não suporta mais de 11 volumes"
-                    logger.info(f"[{self.nome}] {self.last_error} ({soma} volumes)")
-                    return None
-
             elif volumes > 0 and comprimento_cm > 0 and largura_cm > 0 and altura_cm > 0:
-                if volumes > 11:
-                    self.last_error = "Eucatur não suporta mais de 11 volumes"
-                    logger.info(f"[{self.nome}] {self.last_error} ({volumes} volumes)")
-                    return None
                 cubagens_cm = [
                     {
                         "quantidade": int(volumes),
@@ -620,6 +627,8 @@ class EucaturProvider(ProviderBase):
                         "altura_cm": int(altura_cm),
                     }
                 ]
+            elif cubagem_m3 > 0:
+                cubagens_cm = []
             else:
                 logger.error(
                     f"[{self.nome}] Cotação bloqueada: cubagens reais ausentes/inválidas "
