@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
@@ -85,6 +86,27 @@ class TranslovatoProvider(ProviderBase):
         if len(digits) <= 6:
             return "***"
         return f"{digits[:4]}***{digits[-2:]}"
+
+
+    @staticmethod
+    def _normalizar_texto_comparacao(value: str) -> str:
+        text = unicodedata.normalize("NFKD", str(value or ""))
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+        text = re.sub(r"[^A-Za-z0-9]+", " ", text).strip().upper()
+        return re.sub(r"\s+", " ", text)
+
+    @classmethod
+    def _parse_cidade_uf(cls, value: str) -> tuple[str, str]:
+        text = re.sub(r"\s+", " ", str(value or "").strip())
+        if not text:
+            return "", ""
+        uf = ""
+        city = text
+        match = re.search(r"(.+?)(?:\s*/\s*|\s+-\s+|\s+)([A-Za-z]{2})$", text)
+        if match:
+            city = str(match.group(1) or "").strip(" -/")
+            uf = str(match.group(2) or "").strip().upper()
+        return cls._normalizar_texto_comparacao(city), uf
 
     @staticmethod
     def _format_cnpj(value: str) -> str:
@@ -290,25 +312,151 @@ class TranslovatoProvider(ProviderBase):
         await loc.dispatch_event("change")
         await loc.dispatch_event("blur")
 
-    async def _cep_entrega_if_needed(self, cep_destino: str) -> None:
-        page = self._page
-        await page.keyboard.press("Tab")
-        await page.wait_for_timeout(1800)
+    async def _read_receiver_cnpj_digits(self) -> str:
         try:
-            loc = page.locator(self.DELIVERY_ZIP_SELECTOR)
-            if await loc.count() == 0:
-                return
-            field = loc.first
-            if not await field.is_enabled(timeout=1500):
-                return
-            current = (await field.input_value(timeout=1500)).strip()
-            if not current:
-                await field.fill(_digits(cep_destino))
-                await field.dispatch_event("input")
-                await field.dispatch_event("change")
-                await field.dispatch_event("blur")
+            return _digits(await self._page.locator(self.RECEIVER_CNPJ_SELECTOR).first.input_value(timeout=1500))
         except Exception:
-            return
+            return ""
+
+    async def _validate_receiver_cnpj(self, expected: str, *, context: str) -> None:
+        found = await self._read_receiver_cnpj_digits()
+        logger.info(
+            "[TRANSLOVATO] Validação CNPJ destinatário (%s): esperado=%s encontrado=%s",
+            context,
+            self._mask_doc(expected),
+            self._mask_doc(found),
+        )
+        if found != expected:
+            raise ValueError(
+                "CNPJ destinatário no portal diverge do romaneio após "
+                f"{context}: esperado {self._mask_doc(expected)}, encontrado {self._mask_doc(found)}"
+            )
+
+    async def _preencher_cnpj_destinatario(self, receiver: str) -> None:
+        loc = self._page.locator(self.RECEIVER_CNPJ_SELECTOR).first
+        await loc.wait_for(state="visible", timeout=12000)
+        await loc.fill(receiver)
+        await loc.dispatch_event("input")
+        await loc.dispatch_event("change")
+        await loc.dispatch_event("blur")
+        await self._validate_receiver_cnpj(receiver, context="blur")
+        await loc.press("Tab")
+        await self._page.wait_for_timeout(500)
+        await self._validate_receiver_cnpj(receiver, context="tabulação")
+
+    async def _read_delivery_zip_digits(self) -> str:
+        try:
+            loc = self._page.locator(self.DELIVERY_ZIP_SELECTOR)
+            if await loc.count() == 0:
+                return ""
+            return _digits(await loc.first.input_value(timeout=1500))
+        except Exception:
+            return ""
+
+    async def _read_delivery_city_uf(self) -> tuple[str, str, str]:
+        script = r"""() => {
+            const visible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style && style.visibility !== 'hidden' && style.display !== 'none' && rect.width >= 0 && rect.height >= 0;
+            };
+            const fields = Array.from(document.querySelectorAll('input, select, textarea'));
+            const labelFor = (el) => {
+                const id = el.getAttribute('id') || '';
+                const direct = id ? document.querySelector(`label[for="${CSS.escape(id)}"]`) : null;
+                const parent = el.closest('label');
+                return [direct && direct.innerText, parent && parent.innerText].filter(Boolean).join(' ');
+            };
+            const textOf = (el) => [
+                el.getAttribute('id'),
+                el.getAttribute('name'),
+                el.getAttribute('placeholder'),
+                el.getAttribute('aria-label'),
+                labelFor(el),
+            ].filter(Boolean).join(' ').toLowerCase();
+            const valueOf = (el) => {
+                if (el.tagName === 'SELECT') {
+                    return (el.options[el.selectedIndex]?.text || el.value || '').trim();
+                }
+                return (el.value || '').trim();
+            };
+            const candidates = fields
+                .filter(visible)
+                .map((el) => ({ el, haystack: textOf(el), value: valueOf(el) }))
+                .filter((item) => item.value);
+            const cityUf = candidates.find((item) =>
+                /(cidade|municipio|munic[ií]pio).*(uf|estado)|cidade.*estado|cep.*cidade|entrega.*cidade|destino.*cidade/.test(item.haystack)
+            );
+            if (cityUf) return cityUf.value;
+            const city = candidates.find((item) => /(cidade|municipio|munic[ií]pio)/.test(item.haystack));
+            const uf = candidates.find((item) => /(^|[^a-z])(uf|estado)([^a-z]|$)/.test(item.haystack));
+            return [city && city.value, uf && uf.value].filter(Boolean).join('/');
+        }"""
+        try:
+            raw = str(await self._page.evaluate(script) or "").strip()
+        except Exception:
+            raw = ""
+        city, uf = self._parse_cidade_uf(raw)
+        return raw, city, uf
+
+    async def _aguardar_e_validar_autopreenchimento_destino(
+        self,
+        *,
+        expected_receiver: str,
+        expected_cep: str,
+        expected_city: str = "",
+        expected_uf: str = "",
+    ) -> None:
+        expected_city_norm = self._normalizar_texto_comparacao(expected_city)
+        expected_uf_norm = str(expected_uf or "").strip().upper()
+        detected_zip = ""
+        detected_raw = ""
+        detected_city = ""
+        detected_uf = ""
+
+        for _ in range(24):
+            await self._page.wait_for_timeout(300)
+            detected_zip = await self._read_delivery_zip_digits()
+            detected_raw, detected_city, detected_uf = await self._read_delivery_city_uf()
+            if (not expected_cep or detected_zip == expected_cep) and (detected_city or detected_uf):
+                break
+
+        await self._validate_receiver_cnpj(expected_receiver, context="autopreenchimento do endereço")
+        logger.info(
+            "[TRANSLOVATO] Diagnóstico endereço destino: CNPJ esperado=%s CNPJ campo=%s cidade/UF esperada=%s/%s cidade/UF detectada=%s",
+            self._mask_doc(expected_receiver),
+            self._mask_doc(await self._read_receiver_cnpj_digits()),
+            expected_city_norm or "?",
+            expected_uf_norm or "?",
+            detected_raw or "?",
+        )
+
+        if expected_cep and not detected_zip:
+            raise ValueError(
+                "Portal Translovato não confirmou o CEP de entrega após o CNPJ; "
+                "cotação bloqueada para evitar destino incorreto."
+            )
+        if expected_cep and detected_zip != expected_cep:
+            raise ValueError(
+                "CEP de entrega preenchido pelo portal diverge do romaneio: "
+                f"esperado {expected_cep[:5]}-{expected_cep[5:]}, detectado {detected_zip[:5]}-{detected_zip[5:]}"
+            )
+        if not detected_city and not detected_uf:
+            raise ValueError(
+                "Portal Translovato não confirmou cidade/UF do destino após o CNPJ; "
+                "cotação bloqueada para evitar destino incorreto."
+            )
+        if expected_uf_norm and detected_uf and detected_uf != expected_uf_norm:
+            raise ValueError(
+                "UF de entrega preenchida pelo portal diverge do romaneio: "
+                f"esperada {expected_uf_norm}, detectada {detected_uf}"
+            )
+        if expected_city_norm and detected_city and detected_city != expected_city_norm:
+            raise ValueError(
+                "Cidade de entrega preenchida pelo portal diverge do romaneio: "
+                f"esperada {expected_city_norm}, detectada {detected_city}"
+            )
 
     async def _ensure_cubagem_rows(self, desired_rows: int) -> int:
         page = self._page
@@ -360,6 +508,8 @@ class TranslovatoProvider(ProviderBase):
         cubagens: list[dict[str, int]],
         cnpj_destinatario: str,
         cnpj_remetente: str,
+        cidade_destino: str = "",
+        uf_destino: str = "",
     ) -> str:
         self._passo_atual = "preenchendo_formulario"
         sender = _digits(cnpj_remetente or self.cnpj_remetente or self.cnpj)
@@ -375,11 +525,18 @@ class TranslovatoProvider(ProviderBase):
             self._mask_doc(receiver),
         )
         await self._fill_input(self.SENDER_CNPJ_SELECTOR, sender)
-        await self._fill_input(self.RECEIVER_CNPJ_SELECTOR, receiver)
-        await self._cep_entrega_if_needed(destino)
+        await self._preencher_cnpj_destinatario(receiver)
+        await self._aguardar_e_validar_autopreenchimento_destino(
+            expected_receiver=receiver,
+            expected_cep=_digits(destino),
+            expected_city=cidade_destino,
+            expected_uf=uf_destino,
+        )
         await self._fill_input(self.VALUE_SELECTOR, self._format_decimal_br(valor, 2))
         await self._fill_input(self.WEIGHT_SELECTOR, self._format_decimal_br(peso, 3))
-        return await self._preencher_cubagens(cubagens)
+        detalhes = await self._preencher_cubagens(cubagens)
+        await self._validate_receiver_cnpj(receiver, context="preenchimento final da cotação")
+        return detalhes
 
     async def _simular_e_extrair(self, detalhes_extra: str = "") -> Cotacao | None:
         self._passo_atual = "simulando_cotacao"
@@ -427,6 +584,7 @@ class TranslovatoProvider(ProviderBase):
         cep_origem: str = "",
         cep_destino: str = "",
         uf_destino: str = "",
+        cidade_destino: str = "",
         **_kwargs: Any,
     ) -> Cotacao | None:
         try:
@@ -458,6 +616,8 @@ class TranslovatoProvider(ProviderBase):
                 cubagens=cubagens_validas,
                 cnpj_destinatario=cnpj_destinatario,
                 cnpj_remetente=cnpj_remetente,
+                cidade_destino=cidade_destino,
+                uf_destino=uf_destino,
             )
             return await self._simular_e_extrair(detalhes)
         except Exception as exc:
