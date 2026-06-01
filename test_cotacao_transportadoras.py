@@ -288,20 +288,23 @@ def test_session_lazy_prelogin_runs_for_new_trd_provider(monkeypatch):
 # ── Testes de tratamento de erros reportados ──────────────────────────────────
 
 
-def test_eucatur_mais_de_11_volumes_vira_resultado_controlado(monkeypatch):
-    """Eucatur > 11 volumes deve retornar status nao_atendido, não erro técnico reportado."""
+def test_eucatur_mais_de_11_volumes_com_cubagem_nao_bloqueia(monkeypatch):
+    """Eucatur > 11 volumes deve seguir para o provider quando há cubagem total."""
     monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
     reportados = []
     monkeypatch.setattr(ct, "report_error_message", lambda *a, **kw: reportados.append(a))
     monkeypatch.setattr(ct, "report_error", lambda *a, **kw: reportados.append(a))
+    chamadas = []
 
     class FakeEucaturProvider:
         nome = "EUCATUR"
-        last_error = "Eucatur não suporta mais de 11 volumes"
+        last_error = None
         _passo_atual = "inicio"
 
         async def coteir(self, **kwargs):
-            return None
+            chamadas.append(kwargs)
+            from fretio.models import Cotacao
+            return Cotacao(transportadora="EUCATUR", prazo_dias=2, valor_frete=321.0)
 
         async def cleanup(self):
             pass
@@ -341,9 +344,9 @@ def test_eucatur_mais_de_11_volumes_vira_resultado_controlado(monkeypatch):
         "cnpj_destinatario": "12345678000190",
         "peso": 10.0,
         "valor": 500.0,
-        "volumes": 1,
-        "cubagem_m3": 0.05,
-        "cubagens": [{"quantidade": 1, "comprimento_cm": 40, "largura_cm": 30, "altura_cm": 20}],
+        "volumes": 12,
+        "cubagem_m3": 0.288,
+        "cubagens": [{"quantidade": 12, "comprimento_cm": 40, "largura_cm": 30, "altura_cm": 20}],
         "descricoes_itens": [],
     }
 
@@ -353,11 +356,86 @@ def test_eucatur_mais_de_11_volumes_vira_resultado_controlado(monkeypatch):
 
     eucatur_results = [r for r in resultados if r.transportadora == "EUCATUR"]
     assert len(eucatur_results) == 1
-    assert eucatur_results[0].status == "nao_atendido"
-    assert "11 volumes" in (eucatur_results[0].detalhes or "")
-    # Não deve ter reportado como erro técnico
+    assert eucatur_results[0].status == "ok"
+    assert eucatur_results[0].valor_frete == 321.0
+    assert chamadas[0]["volumes"] == 12
+    assert chamadas[0]["cubagem_m3"] == 0.288
     assert len(reportados) == 0
 
+
+def test_coopex_mais_de_11_volumes_com_cubagem_nao_bloqueia(monkeypatch):
+    """COOPEX > 11 volumes deve seguir para o provider quando há cubagem total."""
+    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    reportados = []
+    monkeypatch.setattr(ct, "report_error_message", lambda *a, **kw: reportados.append(a))
+    monkeypatch.setattr(ct, "report_error", lambda *a, **kw: reportados.append(a))
+    chamadas = []
+
+    class FakeCoopexProvider:
+        nome = "COOPEX"
+        last_error = None
+        _passo_atual = "inicio"
+
+        async def coteir(self, **kwargs):
+            chamadas.append(kwargs)
+            from fretio.models import Cotacao
+            return Cotacao(transportadora="COOPEX", prazo_dias=2, valor_frete=432.1)
+
+        async def cleanup(self):
+            pass
+
+    class FakeFactory:
+        def __init__(self, config):
+            pass
+
+        def is_available(self, nome):
+            return nome == "coopex"
+
+        def get_provider_config(self, nome):
+            if nome == "coopex":
+                return {
+                    "habilitado": True,
+                    "dominio": "DOM",
+                    "usuario": "usr",
+                    "senha": "pw",
+                    "cnpj_pagador": "00000000000191",
+                    "ufs_atendidas": ["SP"],
+                }
+            return {"habilitado": False}
+
+        def create(self, nome, **kwargs):
+            return FakeCoopexProvider()
+
+    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+
+    config = {
+        "fretio": {},
+        "romaneio": {"cep_origem": "01310100"},
+        "transportadoras": {"coopex": {"habilitado": True}},
+    }
+    dados = {
+        "destino_cep": "01310200",
+        "uf_destino": "SP",
+        "cnpj_destinatario": "12345678000190",
+        "peso": 10.0,
+        "valor": 500.0,
+        "volumes": 12,
+        "cubagem_m3": 0.288,
+        "cubagens": [{"quantidade": 12, "comprimento_cm": 40, "largura_cm": 30, "altura_cm": 20}],
+        "descricoes_itens": [],
+    }
+
+    resultados = asyncio.run(
+        ct._executar_cotacoes_com_dados(config=config, dados=dados, cep_origem="01310100")
+    )
+
+    coopex_results = [r for r in resultados if r.transportadora == "COOPEX"]
+    assert len(coopex_results) == 1
+    assert coopex_results[0].status == "ok"
+    assert coopex_results[0].valor_frete == 432.1
+    assert chamadas[0]["volumes"] == 12
+    assert chamadas[0]["cubagem_m3"] == 0.288
+    assert len(reportados) == 0
 
 
 def test_translovato_cotacao_e_enfileirada_com_kwargs_esperados(monkeypatch):
@@ -498,6 +576,7 @@ def test_translovato_config_incompleta_retorna_resultado_controlado(monkeypatch)
     assert len(translovato_results) == 1
     assert translovato_results[0].status == "Configuração incompleta"
     assert "Configuração incompleta" in translovato_results[0].detalhes
+
 
 def test_timeout_provider_nao_chama_report_error(monkeypatch):
     """TimeoutError de provider não deve acionar report_error — é falha controlada."""

@@ -1296,9 +1296,6 @@ async def _executar_cotacoes_com_dados(
             "não cadastrada",
             "nao cadastrada",
             "rota:",
-            # Limitação estrutural Eucatur/SSW — não é erro técnico
-            "não suporta mais de 11 volumes",
-            "nao suporta mais de 11 volumes",
         )
         return any(p in d for p in patterns)
 
