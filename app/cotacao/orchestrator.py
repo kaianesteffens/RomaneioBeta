@@ -14,7 +14,7 @@ from .jobs_client import *
 from .config import *
 from .romaneio_parser import *
 from .session_manager import *
-from .error_context import report_provider_error
+from .error_context import build_quotation_error_diagnostic, report_provider_error
 
 async def _executar_cotacoes_com_dados(
     *,
@@ -25,6 +25,8 @@ async def _executar_cotacoes_com_dados(
     progresso_callback: "Callable[[dict[str, Any]], None] | None" = None,
     cnpj_remetente: str = "",
     tipo_frete: str = "",
+    source_type: str = "unknown",
+    quote_job_id: Any = None,
 ) -> list[ResultadoCotacao]:
     def _emitir_progresso(
         *,
@@ -278,6 +280,62 @@ async def _executar_cotacoes_com_dados(
         _log_diag(f"Cotação cancelada: Chrome ausente ({exc})")
         return [ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=msg)]
 
+    def _diagnostico_erro_cotacao(
+        nome: str,
+        stage: str,
+        *,
+        provider: Any = None,
+        kwargs: dict[str, Any] | None = None,
+        error: BaseException | None = None,
+        last_error: Any = None,
+        duration_ms: int | None = None,
+    ) -> dict[str, Any]:
+        provider_key = str(nome or "").strip().lower()
+        provider_stage = getattr(provider, "_passo_atual", None) if provider is not None else None
+        effective_stage = str(provider_stage or stage or "").strip()
+        browser_url = ""
+        portal_domain_known = None
+        page = getattr(provider, "_page", None) if provider is not None else None
+        try:
+            browser_url = str(getattr(page, "url", "") or "")
+        except Exception:
+            browser_url = ""
+        if browser_url:
+            portal_domain_known = "ssw.inf.br" in browser_url.lower() or provider_key in browser_url.lower()
+        provider_context: dict[str, Any] = {
+            "provider_key": provider_key,
+            "stage": effective_stage,
+        }
+        if duration_ms is not None:
+            provider_context["duration_ms"] = duration_ms
+        safe_hints: dict[str, Any] = {
+            "headless": getattr(provider, "headless", None) if provider is not None else None,
+        }
+        if portal_domain_known is not None:
+            safe_hints["portal_domain_known"] = portal_domain_known
+        return build_quotation_error_diagnostic(
+            provider=nome,
+            stage=effective_stage,
+            source_type=source_type,
+            quote_job_id=quote_job_id,
+            dados={
+                **(dados if isinstance(dados, dict) else {}),
+                "cep_origem": origem,
+                "destino_cep": destino,
+                "uf_destino": uf_destino,
+                "cnpj_destinatario": cnpj_destinatario,
+                "peso": peso,
+                "valor": valor,
+                "volumes": volumes,
+                "cubagens": cubagens_validas,
+            },
+            kwargs=kwargs,
+            provider_context=provider_context,
+            safe_hints=safe_hints,
+            error=error,
+            last_error=last_error,
+        )
+
     def _reportar_erro_preparacao(nome: str, exc: BaseException) -> None:
         nonlocal chrome_missing_reported
         exc_text = str(exc)
@@ -291,6 +349,12 @@ async def _executar_cotacoes_com_dados(
                 exc_text,
                 exception=exc,
                 context={
+                    **_diagnostico_erro_cotacao(
+                        nome,
+                        "pre_login",
+                        error=exc,
+                        last_error=exc_text,
+                    ),
                     "event": "chrome_missing",
                     "source": "cotacao_usuario",
                     "carrier": nome,
@@ -303,6 +367,12 @@ async def _executar_cotacoes_com_dados(
             f"Erro ao preparar {nome}: {exc}",
             exception=exc,
             context={
+                **_diagnostico_erro_cotacao(
+                    nome,
+                    "instanciar_provider",
+                    error=exc,
+                    last_error=exc_text,
+                ),
                 "source": "cotacao_usuario",
                 "carrier_enabled": True,
                 "uf_destino": uf_destino,
@@ -1026,10 +1096,17 @@ async def _executar_cotacoes_com_dados(
                     f"{type(erro).__name__}: {erro}",
                     exception=erro,
                     context={
+                        **_diagnostico_erro_cotacao(
+                            nome_task,
+                            getattr(provider_task, "_passo_atual", "") or "submeter_cotacao",
+                            provider=provider_task,
+                            kwargs=kwargs_task,
+                            error=erro,
+                            last_error=erro_str,
+                            duration_ms=duration_ms,
+                        ),
                         "source": "cotacao_usuario",
                         "carrier_enabled": True,
-                        "duration_ms": duration_ms,
-                        "kwargs": kwargs_task,
                         "browser_state": {
                             "passo_atual": getattr(provider_task, "_passo_atual", None),
                             "logged_in": getattr(provider_task, "_logged_in", None),
@@ -1127,6 +1204,35 @@ async def _executar_cotacoes_com_dados(
                     f"{r.transportadora} retornou status {r.status}: "
                     f"{r.detalhes or 'sem detalhes'}"
                 )
+                if r.status == "erro":
+                    response_stage = quote_response.stage or getattr(provider_task, "_passo_atual", None) or "ler_resultado"
+                    diagnostic = _diagnostico_erro_cotacao(
+                        nome_task,
+                        response_stage,
+                        provider=provider_task,
+                        kwargs=kwargs_task,
+                        last_error=r.detalhes or quote_response.error_code,
+                        duration_ms=duration_ms,
+                    )
+                    provider_ctx = diagnostic.get("provider_context")
+                    if isinstance(provider_ctx, dict) and quote_response.error_code:
+                        provider_ctx["error_type"] = quote_response.error_code
+                    report_provider_error(
+                        nome_task,
+                        response_stage,
+                        f"{nome_task} retornou erro: {r.detalhes or quote_response.error_code or 'sem detalhes'}",
+                        context={
+                            **diagnostic,
+                            "source": "cotacao_usuario",
+                            "carrier_enabled": True,
+                            "last_error": r.detalhes,
+                            "browser_state": {
+                                "passo_atual": getattr(provider_task, "_passo_atual", None),
+                                "logged_in": getattr(provider_task, "_logged_in", None),
+                                "headless": getattr(provider_task, "headless", None),
+                            },
+                        },
+                    )
             _emitir_progresso(
                 concluidas=concluidas,
                 total=total_cotacoes,
@@ -1236,11 +1342,17 @@ async def _executar_cotacoes_com_dados(
                 getattr(provider_task, "_passo_atual", "") or "interpretar_resultado",
                 f"{nome_task} retornou None: {detalhe_report}",
                 context={
+                    **_diagnostico_erro_cotacao(
+                        nome_task,
+                        getattr(provider_task, "_passo_atual", "") or "ler_resultado",
+                        provider=provider_task,
+                        kwargs=kwargs_task,
+                        last_error=detalhe,
+                        duration_ms=duration_ms,
+                    ),
                     "source": "cotacao_usuario",
                     "carrier_enabled": True,
-                    "duration_ms": duration_ms,
                     "last_error": detalhe,
-                    "kwargs": kwargs_task,
                     "browser_state": {
                         "passo_atual": getattr(provider_task, "_passo_atual", None),
                         "logged_in": getattr(provider_task, "_logged_in", None),
