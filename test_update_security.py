@@ -5,6 +5,11 @@ import zipfile
 from pathlib import Path
 
 import pytest
+
+cryptography = pytest.importorskip(
+    "cryptography",
+    reason="test_update_security exige cryptography; fora do perfil quick/offline do Codex",
+)
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
