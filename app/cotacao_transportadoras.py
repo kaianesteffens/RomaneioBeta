@@ -149,6 +149,8 @@ async def cotar_transportadoras(
             cep_origem=cep_origem,
             sessao=sessao,
             progresso_callback=progresso_callback,
+            source_type="romaneio",
+            quote_job_id=job_id,
         )
         return resultados
     except asyncio.CancelledError:
@@ -242,6 +244,8 @@ async def cotar_transportadoras_romaneio_colado(
             progresso_callback=progresso_callback,
             cnpj_remetente=cnpj_remetente,
             tipo_frete=tipo_frete,
+            source_type="manual",
+            quote_job_id=job_id,
         )
         return resultados
     except asyncio.CancelledError:
