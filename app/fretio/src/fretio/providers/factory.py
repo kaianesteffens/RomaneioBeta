@@ -59,10 +59,10 @@ _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "bauer": ("cotacao_url", "cnpj_pagador", "cnpj_remetente", "cnpj_destinatario"),
     "trd": ("email", "senha"),
     "agex": ("email", "senha"),
-    "eucatur": ("dominio", "usuario", "senha", "cnpj_pagador"),
+    "eucatur": ("dominio", "usuario", "senha"),
     "rodonaves": ("dominio", "usuario", "senha", "cnpj_pagador"),
     "alfa": ("login", "senha"),
-    "coopex": ("dominio", "usuario", "senha", "cnpj_pagador"),
+    "coopex": ("dominio", "usuario", "senha"),
     "translovato": ("cnpj", "usuario", "senha"),
 }
 
@@ -198,7 +198,7 @@ def _build_eucatur(config: dict[str, Any]) -> dict[str, Any] | None:
     usuario = _text(config.get("usuario"))
     senha = _text(config.get("senha"))
     cnpj_pagador = _text(config.get("cnpj_pagador"))
-    if not dominio or not usuario or not senha or not cnpj_pagador:
+    if not dominio or not usuario or not senha:
         return None
     return {
         "dominio": dominio,
@@ -246,7 +246,7 @@ def _build_coopex(config: dict[str, Any]) -> dict[str, Any] | None:
     usuario = _text(config.get("usuario"))
     senha = _text(config.get("senha"))
     cnpj_pagador = _text(config.get("cnpj_pagador"))
-    if not dominio or not usuario or not senha or not cnpj_pagador:
+    if not dominio or not usuario or not senha:
         return None
     return {
         "dominio": dominio,

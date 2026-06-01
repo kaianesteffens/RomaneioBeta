@@ -170,10 +170,10 @@ def test_validate_provider_minimum_config_uses_provider_required_fields():
         },
         "trd": {"habilitado": True, "email": "cliente@example.com", "senha": "s"},
         "agex": {"habilitado": True, "email": "cliente@example.com", "senha": "s"},
-        "eucatur": {"habilitado": True, "dominio": "EUC", "usuario": "u", "senha": "s", "cnpj_pagador": "1"},
+        "eucatur": {"habilitado": True, "dominio": "EUC", "usuario": "u", "senha": "s"},
         "rodonaves": {"habilitado": True, "dominio": "RTE", "usuario": "u", "senha": "s", "cnpj_pagador": "1"},
         "alfa": {"habilitado": True, "login": "u", "senha": "s"},
-        "coopex": {"habilitado": True, "dominio": "CLD", "usuario": "u", "senha": "s", "cnpj_pagador": "1"},
+        "coopex": {"habilitado": True, "dominio": "CLD", "usuario": "u", "senha": "s"},
         "translovato": {"habilitado": True, "cnpj": "12345678000190", "usuario": "u", "senha": "s"},
     }
 
@@ -287,3 +287,13 @@ def test_validate_translovato_incomplete_config_reports_required_fields():
     assert "CNPJ" in result.user_message
     assert "usuário" in result.user_message
     assert "senha" in result.user_message
+
+
+def test_eucatur_e_coopex_minimum_config_nao_exige_documento_pagador():
+    for provider in ("eucatur", "coopex"):
+        result = validate_provider_minimum_config(
+            provider,
+            {"habilitado": True, "dominio": "DOM", "usuario": "user", "senha": "secret", "cnpj_pagador": ""},
+        )
+        assert result.valid is True
+        assert result.missing_fields == ()
