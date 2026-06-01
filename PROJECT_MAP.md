@@ -79,7 +79,7 @@ Regra importante:
 
 Arquivos principais:
 
-- `app/company_config.py`: cria, lista, migra, renomeia e salva configuracoes por empresa.
+- `app/company_config.py`: cria, lista, migra, renomeia e salva configuracoes por empresa, incluindo defaults não destrutivos como `romaneio.cnpj_pagador_padrao`.
 - `app/fretio/src/fretio/config_manager.py`: leitura de configuracao dentro do pacote Fretio.
 - `app/CONFIG.example.toml`: exemplo seguro.
 
@@ -229,10 +229,10 @@ Campos minimos por provider:
 - `bauer`: `cotacao_url`, `cnpj_pagador`, `cnpj_remetente`, `cnpj_destinatario`
 - `trd`: `email`, `senha`
 - `agex`: `email`, `senha`
-- `eucatur`: `dominio`, `usuario`, `senha`, `cnpj_pagador`
+- `eucatur`: login mínimo `dominio`, `usuario`, `senha`; `cnpj_pagador` é resolvido só na cotação, primeiro na transportadora e depois em `romaneio.cnpj_pagador_padrao`.
 - `rodonaves`: `dominio`, `usuario`, `senha`, `cnpj_pagador`
 - `alfa`: `login`, `senha`
-- `coopex`: `dominio`, `usuario`, `senha`, `cnpj_pagador`
+- `coopex`: login mínimo `dominio`, `usuario`, `senha`; `cnpj_pagador` é resolvido só na cotação, primeiro na transportadora e depois em `romaneio.cnpj_pagador_padrao`.
 - `translovato`: `cnpj`, `usuario`, `senha`
 
 Para criar provider novo:

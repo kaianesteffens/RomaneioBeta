@@ -263,6 +263,37 @@ async def _executar_cotacoes_com_dados(
             detalhes=detalhes,
         )
 
+    def _documento_pagador_padrao() -> str:
+        rom_cfg = effective_config.get("romaneio", {}) if isinstance(effective_config, dict) else {}
+        if not isinstance(rom_cfg, dict):
+            return ""
+        for key in ("cnpj_pagador_padrao", "documento_pagador_padrao", "documento_empresa", "cnpj_empresa"):
+            value = _digits(str(rom_cfg.get(key, "") or ""))
+            if len(value) in (11, 14):
+                return value
+        return ""
+
+    def _resolver_documento_pagador(tcfg: dict[str, Any]) -> str:
+        especifico = _digits(str(tcfg.get("cnpj_pagador", "") or ""))
+        if len(especifico) in (11, 14):
+            return especifico
+        return _documento_pagador_padrao()
+
+    def _resultado_documento_pagador_ausente(nome: str) -> ResultadoCotacao:
+        display = str(nome or "").strip().upper()
+        detalhes = (
+            f"{display}: documento pagador obrigatório para cotação. "
+            "Preencha o CNPJ pagador na credencial da transportadora ou informe "
+            "o Documento pagador padrão em Configurações > Empresa."
+        )
+        _log_diag(detalhes)
+        return ResultadoCotacao(
+            transportadora=display,
+            status="Configuração incompleta",
+            detalhes=detalhes,
+            stage="validacao",
+        )
+
     def _resultado_nao_atendido(nome: str, uf: str) -> ResultadoCotacao:
         display = str(nome or "").strip().upper()
         detalhes = PROVIDER_PROGRESS_MESSAGES["nao_atendido"]
@@ -691,8 +722,10 @@ async def _executar_cotacoes_com_dados(
                     dominio = str(ecfg.get("dominio", "")).strip()
                     usuario = str(ecfg.get("usuario", "")).strip()
                     senha_euc = str(ecfg.get("senha", "")).strip()
-                    cnpj_pagador_euc = _digits(str(ecfg.get("cnpj_pagador", "") or ""))
-                    if dominio and usuario and senha_euc and len(cnpj_pagador_euc) == 14:
+                    cnpj_pagador_euc = _resolver_documento_pagador(ecfg)
+                    if not cnpj_pagador_euc:
+                        erros_setup.append(_resultado_documento_pagador_ausente("EUCATUR"))
+                    elif dominio and usuario and senha_euc:
                         foco_eucatur = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "eucatur"
                         headless_eucatur = False if foco_eucatur else bool(ecfg.get("headless", True))
                         provider = await _obter_provider_sessao(
@@ -721,7 +754,7 @@ async def _executar_cotacoes_com_dados(
                             _euc_kwargs["tipo_frete"] = "2"
                         tasks.append(("EUCATUR", provider, _euc_kwargs))
                     else:
-                        _log_diag("Eucatur não configurada (domínio/usuário/senha/cnpj_pagador ausentes)")
+                        _log_diag("Eucatur não configurada (domínio/usuário/senha ausentes)")
     except Exception as e:
         _log_diag(f"Erro ao preparar Eucatur: {e}")
         _reportar_erro_preparacao("EUCATUR", e)
@@ -859,8 +892,10 @@ async def _executar_cotacoes_com_dados(
                     dominio = str(cocfg.get("dominio", "")).strip()
                     usuario = str(cocfg.get("usuario", "")).strip()
                     senha_co = str(cocfg.get("senha", "")).strip()
-                    cnpj_pagador_co = _digits(str(cocfg.get("cnpj_pagador", "") or ""))
-                    if dominio and usuario and senha_co and len(cnpj_pagador_co) == 14:
+                    cnpj_pagador_co = _resolver_documento_pagador(cocfg)
+                    if not cnpj_pagador_co:
+                        erros_setup.append(_resultado_documento_pagador_ausente("COOPEX"))
+                    elif dominio and usuario and senha_co:
                         foco_coopex = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "coopex"
                         headless_coopex = False if foco_coopex else bool(cocfg.get("headless", True))
                         provider = await _obter_provider_sessao(
@@ -889,7 +924,7 @@ async def _executar_cotacoes_com_dados(
                             _co_kwargs["tipo_frete"] = "2"
                         tasks.append(("COOPEX", provider, _co_kwargs))
                     else:
-                        _log_diag("COOPEX não configurada (domínio/usuário/senha/cnpj_pagador ausentes)")
+                        _log_diag("COOPEX não configurada (domínio/usuário/senha ausentes)")
     except Exception as e:
         _log_diag(f"Erro ao preparar COOPEX: {e}")
         _reportar_erro_preparacao("COOPEX", e)

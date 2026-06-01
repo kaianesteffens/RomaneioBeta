@@ -65,6 +65,7 @@ from company_config import (
     _escrever_config_toml,
     _fretio_appdata_dir,
     _garantir_defaults_fretio,
+    _garantir_defaults_empresa,
     _ler_ultima_empresa,
     _listar_empresas,
     _migrar_config_se_necessario,
@@ -496,7 +497,20 @@ CAMPOS_CREDENCIAIS: dict[str, list[tuple[str, str, bool]]] = {
         ("cnpj_remetente", "CNPJ Remetente", False),
     ],
     "coopex": [("dominio", "Domínio", False), ("usuario", "Usuário", False), ("senha", "Senha", True)],
+    "translovato": [("cnpj", "CNPJ", False), ("usuario", "Usuário", False), ("senha", "Senha", True)],
 }
+
+TRANSPORTADORAS_CONFIGURAVEIS = [
+    "braspress",
+    "bauer",
+    "trd",
+    "agex",
+    "eucatur",
+    "rodonaves",
+    "alfa",
+    "coopex",
+    "translovato",
+]
 
 
 def _migrate_appdata_fretebot_to_fretio() -> None:
@@ -558,8 +572,11 @@ def _migrate_appdata_fretebot_to_fretio() -> None:
             dst_data = _load_toml(dst_cfg)
 
             _garantir_defaults_fretio(src_data)
+            _garantir_defaults_empresa(src_data)
             dst_fb = dst_data.get("fretio", {}) if isinstance(dst_data.get("fretio", {}), dict) else {}
-            if _garantir_defaults_fretio(dst_data):
+            defaults_changed = _garantir_defaults_fretio(dst_data)
+            defaults_changed = _garantir_defaults_empresa(dst_data) or defaults_changed
+            if defaults_changed:
                 dst_fb = dst_data.get("fretio", {}) if isinstance(dst_data.get("fretio", {}), dict) else {}
 
             changed = False
@@ -842,7 +859,7 @@ class ConfiguracoesDialog(QDialog):
         vbox = QVBoxLayout(content)
         vbox.setSpacing(10)
         transp_cfg = self.config.get("transportadoras", {}) or {}
-        for nome in sorted(["braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex"]):
+        for nome in sorted(TRANSPORTADORAS_CONFIGURAVEIS):
             tcfg = transp_cfg.get(nome, {}) or {}
             ufs_atuais = tcfg.get("ufs_atendidas", [])
             if isinstance(ufs_atuais, str):
@@ -1068,6 +1085,11 @@ class RomaneioWindow(QMainWindow):
         self._romaneio_colado = ""
         self._modo_cotacao = "pdf"
         self._sessao = TransportadoraSession(config_path=self._config_path)
+        if isinstance(self._sessao.config, dict):
+            defaults_changed = _garantir_defaults_fretio(self._sessao.config)
+            defaults_changed = _garantir_defaults_empresa(self._sessao.config) or defaults_changed
+            if defaults_changed:
+                _escrever_config_toml(self._sessao.config, self._config_path)
         self._async_loop = AsyncWorkerLoop(name="RomaneioAsyncLoop")
         self._session_task_lock = threading.Lock()
         self._async_futures: set[concurrent.futures.Future] = set()
@@ -1856,6 +1878,11 @@ class RomaneioWindow(QMainWindow):
         fb_cfg = cfg.get("fretio", {}) or {}
         self._cfg_cep_origem = QLineEdit(str(rom_cfg.get("cep_origem", "") or ""))
         self._cfg_cep_origem.setObjectName("InputField")
+        self._cfg_cnpj_pagador_padrao = QLineEdit(str(rom_cfg.get("cnpj_pagador_padrao", "") or ""))
+        self._cfg_cnpj_pagador_padrao.setObjectName("InputField")
+        self._cfg_cnpj_pagador_padrao.setPlaceholderText(
+            "CNPJ/CPF usado por Eucatur e Coopex quando a transportadora não tiver valor próprio"
+        )
         self._cfg_paralelo = QLineEdit(str(int(fb_cfg.get("max_paralelo", 3) or 3)))
         self._cfg_paralelo.setObjectName("InputField")
         self._cfg_paralelo.setMaximumWidth(80)
@@ -1863,6 +1890,7 @@ class RomaneioWindow(QMainWindow):
         self._cfg_nome_empresa.setObjectName("InputField")
         form.addRow("Empresa", self._cfg_nome_empresa)
         form.addRow("CEP origem", self._cfg_cep_origem)
+        form.addRow("Documento pagador padrão", self._cfg_cnpj_pagador_padrao)
         form.addRow("Cotações paralelas", self._cfg_paralelo)
         actions = QHBoxLayout()
         btn_salvar = QPushButton("Salvar")
@@ -1894,7 +1922,7 @@ class RomaneioWindow(QMainWindow):
         vbox.setSpacing(10)
         cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
         transp_cfg = cfg.get("transportadoras", {}) or {}
-        for nome in sorted(["braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex"]):
+        for nome in sorted(TRANSPORTADORAS_CONFIGURAVEIS):
             tcfg = transp_cfg.get(nome, {}) or {}
             ufs_atuais = tcfg.get("ufs_atendidas", [])
             if isinstance(ufs_atuais, str):
@@ -2089,6 +2117,7 @@ class RomaneioWindow(QMainWindow):
         rom = cfg.setdefault("romaneio", {})
         fb = cfg.setdefault("fretio", {})
         rom["cep_origem"] = self._cfg_cep_origem.text().strip()
+        rom["cnpj_pagador_padrao"] = self._cfg_cnpj_pagador_padrao.text().strip()
         try:
             fb["max_paralelo"] = max(1, min(7, int(self._cfg_paralelo.text().strip() or "3")))
         except ValueError:

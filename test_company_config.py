@@ -36,6 +36,7 @@ def test_company_config_creates_and_lists_empty_company_config(monkeypatch, tmp_
     assert data["fretio"]["quotation_jobs_api_url"] == cc._DEFAULT_QUOTATION_JOBS_API_URL
     assert data["fretio"]["quotation_normalization_api_url"] == cc._DEFAULT_QUOTATION_NORMALIZATION_API_URL
     assert data["romaneio"]["cep_origem"] == ""
+    assert data["romaneio"]["cnpj_pagador_padrao"] == ""
     assert data["transportadoras"]["braspress"]["habilitado"] is False
     assert data["transportadoras"]["rodonaves"]["ufs_atendidas"] == cc.TODAS_UFS
 
@@ -72,6 +73,7 @@ def test_company_config_migrates_existing_root_config(monkeypatch, tmp_path):
     assert cc._listar_empresas() == ["darlu"]
     assert cc._ler_ultima_empresa() == "darlu"
     assert data["romaneio"]["cep_origem"] == "99740000"
+    assert data["romaneio"]["cnpj_pagador_padrao"] == ""
     assert data["fretio"]["github_repo"] == cc._DEFAULT_GITHUB_REPO
     assert data["fretio"]["license_api_url"] == "https://licenses.example.test/validate"
     assert data["fretio"]["license_config_api_url"] == "https://licenses.example.test/config"
@@ -115,3 +117,17 @@ def test_company_config_rename_sanitizes_folder_and_updates_last_company(monkeyp
     assert not (cc._empresas_dir() / "acme").exists()
     assert (cc._empresas_dir() / "ACME_RS" / "CONFIG.toml").exists()
     assert cc._ler_ultima_empresa() == "ACME_RS"
+
+
+def test_company_config_garante_defaults_empresa_sem_apagar_dados():
+    data = {
+        "romaneio": {"cep_origem": "99740000"},
+        "transportadoras": {"coopex": {"usuario": "mantem"}},
+    }
+
+    changed = cc._garantir_defaults_empresa(data)
+
+    assert changed is True
+    assert data["romaneio"]["cep_origem"] == "99740000"
+    assert data["romaneio"]["cnpj_pagador_padrao"] == ""
+    assert data["transportadoras"]["coopex"]["usuario"] == "mantem"
