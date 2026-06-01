@@ -157,6 +157,7 @@ async def _executar_cotacoes_com_dados(
     uf_destino_informada = str(dados.get("uf_destino", "") or "").strip().upper()
     if len(uf_destino_informada) != 2 or not uf_destino_informada.isalpha():
         uf_destino_informada = ""
+    cidade_destino = str(dados.get("cidade_destino", "") or "").strip()
     cnpj_destinatario = _digits(str(dados.get("cnpj_destinatario", "") or ""))
     try:
         peso = float(dados.get("peso", 0.0) or 0.0)
@@ -972,6 +973,7 @@ async def _executar_cotacoes_com_dados(
                                 cep_origem=origem,
                                 cep_destino=destino,
                                 uf_destino=uf_destino,
+                                cidade_destino=cidade_destino,
                                 peso=peso,
                                 valor=valor,
                                 volumes=volumes,

@@ -40,21 +40,30 @@ def _parse_dim_cm(raw: str) -> int:
     return int(round(val))
 
 
-def _extrair_uf_hint_texto(texto: str, pos_referencia: int = -1) -> str:
-    """Tenta extrair uma UF (cidade/UF) próxima ao bloco do destinatário."""
+def _extrair_cidade_uf_hint_texto(texto: str, pos_referencia: int = -1) -> tuple[str, str]:
+    """Tenta extrair cidade/UF próxima ao bloco do destinatário."""
     pattern = re.compile(
         r"\b([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ .'-]{2,})\s*/\s*([A-Za-z]{2})\b",
         re.IGNORECASE,
     )
     matches = list(pattern.finditer(texto or ""))
     if not matches:
-        return ""
+        return "", ""
 
+    selected = matches[0]
     if pos_referencia >= 0:
         depois = [m for m in matches if m.start() >= pos_referencia]
         if depois:
-            return str(depois[0].group(2) or "").strip().upper()
-    return str(matches[0].group(2) or "").strip().upper()
+            selected = depois[0]
+    cidade = re.sub(r"\s+", " ", str(selected.group(1) or "").strip(" -/"))
+    uf = str(selected.group(2) or "").strip().upper()
+    return cidade, uf
+
+
+def _extrair_uf_hint_texto(texto: str, pos_referencia: int = -1) -> str:
+    """Tenta extrair uma UF (cidade/UF) próxima ao bloco do destinatário."""
+    _cidade, uf = _extrair_cidade_uf_hint_texto(texto, pos_referencia=pos_referencia)
+    return uf
 
 
 def _selecionar_cep_destino(texto: str, pos_referencia: int = -1, uf_hint: str = "") -> str:
@@ -148,7 +157,7 @@ def _dados_envio_romaneio_colado(romaneio_colado: str) -> dict[str, Any]:
         raise ValueError("Romaneio colado vazio")
 
     cnpj_destinatario, pos_ref = _selecionar_cnpj_destinatario(texto)
-    uf_hint = _extrair_uf_hint_texto(texto, pos_referencia=pos_ref)
+    cidade_destino, uf_hint = _extrair_cidade_uf_hint_texto(texto, pos_referencia=pos_ref)
     destino_cep = _selecionar_cep_destino(texto, pos_referencia=pos_ref, uf_hint=uf_hint)
     uf_destino = str(uf_hint or "").strip().upper()
     if not uf_destino and len(destino_cep) == 8:
@@ -233,6 +242,7 @@ def _dados_envio_romaneio_colado(romaneio_colado: str) -> dict[str, Any]:
     return {
         "destino_cep": destino_cep,
         "uf_destino": uf_destino,
+        "cidade_destino": cidade_destino,
         "cnpj_destinatario": cnpj_destinatario,
         "peso": peso,
         "valor": valor,

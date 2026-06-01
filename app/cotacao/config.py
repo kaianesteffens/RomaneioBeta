@@ -189,13 +189,25 @@ def _dados_envio(extrator, pedidos: list[Any]) -> dict[str, Any]:
 
     grupos_caixa, caixas_complementares, total_boxes, total_volume, total_weight, total_valor = extrator._calcular_caixas_agrupadas(pedidos)
 
-    destino_cep = extrator.obter_cep_local_entrega(pedidos[0].local_entrega or "")
+    local_entrega = pedidos[0].local_entrega or ""
+    destino_cep = extrator.obter_cep_local_entrega(local_entrega)
     uf_destino = ""
+    cidade_destino = ""
     try:
         if hasattr(extrator, "obter_uf_local_entrega"):
-            uf_destino = str(extrator.obter_uf_local_entrega(pedidos[0].local_entrega or "") or "").strip().upper()
+            uf_destino = str(extrator.obter_uf_local_entrega(local_entrega) or "").strip().upper()
     except Exception:
         uf_destino = ""
+    try:
+        if hasattr(extrator, "_extrair_componentes_local"):
+            _rua, _cep, cidade_uf = extrator._extrair_componentes_local(local_entrega)
+            match = re.search(r"(.+?)\s*/\s*([A-Za-z]{2})$", str(cidade_uf or "").strip())
+            if match:
+                cidade_destino = re.sub(r"\s+", " ", str(match.group(1) or "").strip())
+                if not uf_destino:
+                    uf_destino = str(match.group(2) or "").strip().upper()
+    except Exception:
+        cidade_destino = ""
     cnpj_destinatario = _digits(getattr(pedidos[0], "cnpj_cliente", ""))
 
     def _parse_dims_cm(dims_str: str) -> tuple[int, int, int]:
@@ -279,6 +291,7 @@ def _dados_envio(extrator, pedidos: list[Any]) -> dict[str, Any]:
     return {
         "destino_cep": _cep(destino_cep),
         "uf_destino": uf_destino,
+        "cidade_destino": cidade_destino,
         "cnpj_destinatario": cnpj_destinatario,
         "peso": float(total_weight or 0.0),
         "valor": float(total_valor or 0.0),
