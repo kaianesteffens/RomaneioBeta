@@ -7,7 +7,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT / "app" / "fretio" / "src"))
 
-from fretio.providers.factory import ProviderFactory, _build_agex, validate_provider_minimum_config
+from fretio.providers.factory import ProviderFactory, _build_agex, _build_translovato, validate_provider_minimum_config
 
 
 class DummyProvider:
@@ -143,6 +143,7 @@ def test_validate_provider_minimum_config_uses_provider_required_fields():
         "rodonaves": {"habilitado": True, "dominio": "RTE", "usuario": "u", "senha": "s", "cnpj_pagador": "1"},
         "alfa": {"habilitado": True, "login": "u", "senha": "s"},
         "coopex": {"habilitado": True, "dominio": "CLD", "usuario": "u", "senha": "s", "cnpj_pagador": "1"},
+        "translovato": {"habilitado": True, "cnpj": "12345678000190", "usuario": "u", "senha": "s"},
     }
 
     for provider, config in valid_configs.items():
@@ -182,3 +183,34 @@ def test_validate_provider_minimum_config_keeps_agex_legacy_email_in_cnpj():
     )
 
     assert result.valid is True
+
+
+def test_build_translovato_accepts_expected_optional_fields():
+    built = _build_translovato(
+        {
+            "cnpj": "12.345.678/0001-90",
+            "usuario": "user",
+            "senha": "secret",
+            "cnpj_remetente": "98.765.432/0001-10",
+            "produto": "CONFECCAO",
+            "cotacao_url": "https://example.invalid/cotacao",
+            "headless": False,
+        }
+    )
+
+    assert built == {
+        "cnpj": "12.345.678/0001-90",
+        "usuario": "user",
+        "senha": "secret",
+        "cnpj_remetente": "98.765.432/0001-10",
+        "produto": "CONFECCAO",
+        "cotacao_url": "https://example.invalid/cotacao",
+        "headless": False,
+    }
+
+
+def test_translovato_provider_class_is_registered():
+    provider_class = ProviderFactory.get_provider_class("translovato")
+
+    assert provider_class is not None
+    assert provider_class.__name__ == "TranslovatoProvider"

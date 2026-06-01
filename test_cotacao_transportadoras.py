@@ -359,6 +359,146 @@ def test_eucatur_mais_de_11_volumes_vira_resultado_controlado(monkeypatch):
     assert len(reportados) == 0
 
 
+
+def test_translovato_cotacao_e_enfileirada_com_kwargs_esperados(monkeypatch):
+    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    chamadas = []
+
+    class FakeTranslovatoProvider:
+        nome = "TRANSLOVATO"
+        last_error = None
+        _passo_atual = "inicio"
+
+        async def coteir(self, **kwargs):
+            chamadas.append(kwargs)
+            from fretio.models import Cotacao
+            return Cotacao(transportadora="TRANSLOVATO", prazo_dias=6, valor_frete=654.32)
+
+        async def cleanup(self):
+            pass
+
+    class FakeFactory:
+        def __init__(self, config):
+            self.config = config
+
+        def is_available(self, nome):
+            return nome == "translovato"
+
+        def get_provider_config(self, nome):
+            if nome == "translovato":
+                return {
+                    "habilitado": True,
+                    "cnpj": "12.345.678/0001-90",
+                    "usuario": "usr",
+                    "senha": "pw",
+                    "cnpj_remetente": "98.765.432/0001-10",
+                    "headless": True,
+                    "ufs_atendidas": ["RS"],
+                }
+            return {"habilitado": False}
+
+        def validate_minimum_config(self, nome):
+            from fretio.providers.factory import validate_provider_minimum_config
+            return validate_provider_minimum_config(nome, self.get_provider_config(nome))
+
+        def create(self, nome, **kwargs):
+            assert nome == "translovato"
+            return FakeTranslovatoProvider()
+
+    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+
+    config = {
+        "fretio": {},
+        "romaneio": {"cep_origem": "90000000"},
+        "transportadoras": {"translovato": {"habilitado": True}},
+    }
+    dados = {
+        "destino_cep": "90010123",
+        "uf_destino": "RS",
+        "cnpj_destinatario": "12345678000190",
+        "peso": 3.3,
+        "valor": 150.0,
+        "volumes": 1,
+        "cubagem_m3": 0.044,
+        "cubagens": [{"quantidade": 1, "comprimento_cm": 45, "largura_cm": 31, "altura_cm": 31}],
+        "descricoes_itens": [],
+    }
+
+    resultados = asyncio.run(
+        ct._executar_cotacoes_com_dados(config=config, dados=dados, cep_origem="90000000")
+    )
+
+    translovato_results = [r for r in resultados if r.transportadora == "TRANSLOVATO"]
+    assert len(translovato_results) == 1
+    assert translovato_results[0].status == "ok"
+    assert chamadas[0]["origem"] == "90000000"
+    assert chamadas[0]["destino"] == "90010123"
+    assert chamadas[0]["cep_origem"] == "90000000"
+    assert chamadas[0]["cep_destino"] == "90010123"
+    assert chamadas[0]["uf_destino"] == "RS"
+    assert chamadas[0]["cnpj_destinatario"] == "12345678000190"
+    assert chamadas[0]["cnpj_remetente"] == "98765432000110"
+    assert chamadas[0]["cubagens"] == [
+        {
+            "quantidade": 1,
+            "comprimento_cm": 45,
+            "largura_cm": 31,
+            "altura_cm": 31,
+            "peso_por_volume_kg": None,
+        }
+    ]
+
+
+def test_translovato_config_incompleta_retorna_resultado_controlado(monkeypatch):
+    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+
+    class FakeFactory:
+        def __init__(self, config):
+            self.config = config
+
+        def is_available(self, nome):
+            return nome == "translovato"
+
+        def get_provider_config(self, nome):
+            if nome == "translovato":
+                return {"habilitado": True, "cnpj": "", "usuario": "", "senha": "", "ufs_atendidas": ["RS"]}
+            return {"habilitado": False}
+
+        def validate_minimum_config(self, nome):
+            from fretio.providers.factory import validate_provider_minimum_config
+            return validate_provider_minimum_config(nome, self.get_provider_config(nome))
+
+        def create(self, nome, **kwargs):
+            raise AssertionError("provider incompleto não deveria ser criado")
+
+    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+
+    config = {
+        "fretio": {},
+        "romaneio": {"cep_origem": "90000000"},
+        "transportadoras": {"translovato": {"habilitado": True}},
+    }
+    dados = {
+        "destino_cep": "90010123",
+        "uf_destino": "RS",
+        "cnpj_destinatario": "12345678000190",
+        "peso": 3.3,
+        "valor": 150.0,
+        "volumes": 1,
+        "cubagem_m3": 0.044,
+        "cubagens": [{"quantidade": 1, "comprimento_cm": 45, "largura_cm": 31, "altura_cm": 31}],
+        "descricoes_itens": [],
+    }
+
+    resultados = asyncio.run(
+        ct._executar_cotacoes_com_dados(config=config, dados=dados, cep_origem="90000000")
+    )
+
+    translovato_results = [r for r in resultados if r.transportadora == "TRANSLOVATO"]
+    assert len(translovato_results) == 1
+    assert translovato_results[0].status == "Configuração incompleta"
+    assert "Configuração incompleta" in translovato_results[0].detalhes
+
 def test_timeout_provider_nao_chama_report_error(monkeypatch):
     """TimeoutError de provider não deve acionar report_error — é falha controlada."""
     monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))

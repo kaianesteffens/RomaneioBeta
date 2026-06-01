@@ -17,6 +17,7 @@ KNOWN_CARRIERS = (
     "rodonaves",
     "alfa",
     "coopex",
+    "translovato",
 )
 
 FEATURE_MESSAGES = {
@@ -54,6 +55,9 @@ def normalize_carrier_name(name: Any) -> str:
         "alfa": "alfa",
         "alfa transportes": "alfa",
         "coopex": "coopex",
+        "translovato": "translovato",
+        "trans lovato": "translovato",
+        "transportes translovato": "translovato",
     }
     if folded in aliases:
         return aliases[folded]

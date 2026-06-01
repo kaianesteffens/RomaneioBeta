@@ -14,6 +14,7 @@ Registrados em `app/fretio/src/fretio/providers/factory.py`:
 - `rodonaves`
 - `alfa`
 - `coopex`
+- `translovato`
 
 Cada provider lê apenas sua seção em `CONFIG.toml`, por exemplo:
 

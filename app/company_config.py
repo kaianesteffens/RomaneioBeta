@@ -200,6 +200,9 @@ def _criar_config_empresa_vazia(nome: str) -> None:
                      "ufs_atendidas": list(TODAS_UFS)},
             "coopex": {"habilitado": False, "dominio": "", "usuario": "", "senha": "",
                        "ufs_atendidas": []},
+            "translovato": {"habilitado": False, "cnpj": "", "usuario": "", "senha": "",
+                            "cnpj_remetente": "", "produto": "CONFECCAO", "cotacao_url": "",
+                            "headless": True, "ufs_atendidas": list(TODAS_UFS)},
         },
     }
     _garantir_defaults_fretio(config)

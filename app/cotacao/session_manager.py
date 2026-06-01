@@ -113,6 +113,7 @@ _PRIORIDADE_LENTIDAO: dict[str, int] = {
     "TRD": 700,
     "ALFA": 600,
     "BRASPRESS": 500,
+    "TRANSLOVATO": 450,
     "EUCATUR": 400,
     "COOPEX": 350,
     "RODONAVES": 300,
@@ -127,6 +128,7 @@ _TIMEOUT_COTACAO_S: dict[str, int] = {
     "ALFA": 60,
     "TRD": 120,
     "RODONAVES": 120,
+    "TRANSLOVATO": 120,
     "AGEX": 90,
     # SSW providers: polling até 25s + fallbacks → dar margem para completar internamente
     "COOPEX": 90,
@@ -137,6 +139,7 @@ _TIMEOUT_COTACAO_PADRAO_S = 45
 _TIMEOUT_PRELOGIN_S: dict[str, int] = {
     "ALFA": 90,
     "TRD": 90,
+    "TRANSLOVATO": 90,
     "RODONAVES": 60,
     "AGEX": 60,
 }
@@ -432,7 +435,7 @@ class TransportadoraSession:
                     transportadoras_cfg = {}
                 transportadoras_cfg = dict(transportadoras_cfg)
                 foco = str(MODO_FOCO_TRANSPORTADORA).strip().lower()
-                for nome_cfg in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex"):
+                for nome_cfg in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex", "translovato"):
                     sec = transportadoras_cfg.get(nome_cfg)
                     if not isinstance(sec, dict):
                         sec = {}
@@ -528,6 +531,16 @@ class TransportadoraSession:
                     if provider is not None:
                         await self.registrar_provider("coopex", provider)
                         _log_diag(f"COOPEX sessão criada com headless={headless_coopex}")
+
+            if provider_factory.is_available("translovato"):
+                tlcfg = provider_factory.get_provider_config("translovato")
+                if tlcfg.get("habilitado", True):
+                    foco_translovato = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "translovato"
+                    headless_translovato = False if foco_translovato else bool(tlcfg.get("headless", True))
+                    provider = provider_factory.create("translovato", headless=headless_translovato)
+                    if provider is not None:
+                        await self.registrar_provider("translovato", provider)
+                        _log_diag(f"TRANSLOVATO sessão criada com headless={headless_translovato}")
 
             _pre_login_semaforo = asyncio.Semaphore(2)
             providers_snapshot = await self.listar_providers()
