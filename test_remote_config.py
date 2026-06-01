@@ -316,3 +316,7 @@ def test_get_safe_runtime_overrides_ignores_invalid_values(monkeypatch):
     )
 
     assert rc.get_safe_runtime_overrides() == {}
+
+
+def test_default_remote_config_enables_translovato_by_default():
+    assert rc.DEFAULT_REMOTE_CONFIG["carriers_enabled"]["translovato"] is True

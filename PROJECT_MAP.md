@@ -221,6 +221,7 @@ Providers registrados:
 - `rodonaves` -> `fretio.providers.rodonaves.RodonavesProvider`
 - `alfa` -> `fretio.providers.alfa.AlfaProvider`
 - `coopex` -> `fretio.providers.coopex.CoopexProvider`
+- `translovato` -> `fretio.providers.translovato.TranslovatoProvider`
 
 Campos minimos por provider:
 
@@ -232,6 +233,7 @@ Campos minimos por provider:
 - `rodonaves`: `dominio`, `usuario`, `senha`, `cnpj_pagador`
 - `alfa`: `login`, `senha`
 - `coopex`: `dominio`, `usuario`, `senha`, `cnpj_pagador`
+- `translovato`: `cnpj`, `usuario`, `senha`
 
 Para criar provider novo:
 

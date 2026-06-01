@@ -155,3 +155,14 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
+
+def test_config_manager_fallback_includes_translovato_section():
+    config = ConfigManager.get_instance("fallback-translovato-test").get_fallback()
+
+    translovato = config["transportadoras"]["translovato"]
+    assert translovato["habilitado"] is False
+    assert translovato["cnpj"] == ""
+    assert translovato["usuario"] == ""
+    assert translovato["senha"] == ""
+    assert translovato["produto"] == "CONFECCAO"
