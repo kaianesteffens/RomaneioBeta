@@ -24,6 +24,8 @@ error_report_token = ""  # Token GitHub com scope 'gist' para envio de erros
 
 [romaneio]
 cep_origem = "99740000"
+# Documento pagador padrão usado em cotações SSW quando a transportadora não tiver CNPJ pagador próprio.
+cnpj_pagador_padrao = "00.000.000/0000-00"
 
 [transportadoras.braspress]
 habilitado = true

@@ -1113,3 +1113,119 @@ def test_orquestrador_faz_fallback_para_coteir_quando_cotar_request_falha(monkey
     assert len(trd_results) >= 1
     assert trd_results[0].status == "ok"
     assert trd_results[0].valor_frete == 333.0
+
+
+def test_eucatur_falha_com_mensagem_clara_sem_documento_pagador(monkeypatch):
+    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+
+    class FakeFactory:
+        def __init__(self, config):
+            self.config = config
+
+        def is_available(self, nome):
+            return nome == "eucatur"
+
+        def get_provider_config(self, nome):
+            if nome == "eucatur":
+                return {
+                    "habilitado": True,
+                    "dominio": "DOM",
+                    "usuario": "usr",
+                    "senha": "pw",
+                    "cnpj_pagador": "",
+                    "ufs_atendidas": ["AM"],
+                }
+            return {"habilitado": False}
+
+        def validate_minimum_config(self, nome):
+            from fretio.providers.factory import validate_provider_minimum_config
+            return validate_provider_minimum_config(nome, self.get_provider_config(nome))
+
+        def create(self, nome, **kwargs):
+            raise AssertionError("não deve criar provider sem documento pagador")
+
+    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    config = {"fretio": {}, "romaneio": {"cep_origem": "69000000", "cnpj_pagador_padrao": ""}}
+    dados = {
+        "destino_cep": "69000100",
+        "uf_destino": "AM",
+        "cnpj_destinatario": "12345678000190",
+        "peso": 10.0,
+        "valor": 500.0,
+        "volumes": 1,
+        "cubagem_m3": 0.024,
+        "cubagens": [{"quantidade": 1, "comprimento_cm": 40, "largura_cm": 30, "altura_cm": 20}],
+        "descricoes_itens": [],
+    }
+
+    resultados = asyncio.run(ct._executar_cotacoes_com_dados(config=config, dados=dados, cep_origem="69000000"))
+
+    eucatur_results = [r for r in resultados if r.transportadora == "EUCATUR"]
+    assert len(eucatur_results) == 1
+    assert eucatur_results[0].status == "Configuração incompleta"
+    assert "documento pagador obrigatório" in eucatur_results[0].detalhes
+    assert "Configurações > Empresa" in eucatur_results[0].detalhes
+
+
+def test_coopex_usa_documento_pagador_padrao_da_empresa(monkeypatch):
+    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    chamadas = []
+
+    class FakeCoopexProvider:
+        nome = "COOPEX"
+        last_error = None
+        _passo_atual = "inicio"
+
+        async def coteir(self, **kwargs):
+            chamadas.append(kwargs)
+            from fretio.models import Cotacao
+            return Cotacao(transportadora="COOPEX", prazo_dias=2, valor_frete=111.0)
+
+    class FakeFactory:
+        def __init__(self, config):
+            self.config = config
+
+        def is_available(self, nome):
+            return nome == "coopex"
+
+        def get_provider_config(self, nome):
+            if nome == "coopex":
+                return {
+                    "habilitado": True,
+                    "dominio": "DOM",
+                    "usuario": "usr",
+                    "senha": "pw",
+                    "cnpj_pagador": "",
+                    "ufs_atendidas": ["SP"],
+                }
+            return {"habilitado": False}
+
+        def validate_minimum_config(self, nome):
+            from fretio.providers.factory import validate_provider_minimum_config
+            return validate_provider_minimum_config(nome, self.get_provider_config(nome))
+
+        def create(self, nome, **kwargs):
+            assert kwargs["cnpj_pagador"] == "12345678000190"
+            return FakeCoopexProvider()
+
+    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    config = {"fretio": {}, "romaneio": {"cep_origem": "01310100", "cnpj_pagador_padrao": "12.345.678/0001-90"}}
+    dados = {
+        "destino_cep": "01310200",
+        "uf_destino": "SP",
+        "cnpj_destinatario": "98765432000110",
+        "peso": 10.0,
+        "valor": 500.0,
+        "volumes": 1,
+        "cubagem_m3": 0.024,
+        "cubagens": [{"quantidade": 1, "comprimento_cm": 40, "largura_cm": 30, "altura_cm": 20}],
+        "descricoes_itens": [],
+    }
+
+    resultados = asyncio.run(ct._executar_cotacoes_com_dados(config=config, dados=dados, cep_origem="01310100"))
+
+    coopex_results = [r for r in resultados if r.transportadora == "COOPEX"]
+    assert len(coopex_results) == 1
+    assert coopex_results[0].status == "ok"
+    assert chamadas[0]["cnpj_pagador"] == "12345678000190"
+    assert chamadas[0]["cnpj_remetente"] == "12345678000190"

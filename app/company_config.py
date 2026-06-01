@@ -163,6 +163,20 @@ def _garantir_defaults_fretio(config: dict[str, Any]) -> bool:
     return changed
 
 
+def _garantir_defaults_empresa(config: dict[str, Any]) -> bool:
+    """Garante campos novos da empresa sem sobrescrever valores existentes."""
+    changed = False
+    romaneio_cfg = config.get("romaneio")
+    if not isinstance(romaneio_cfg, dict):
+        romaneio_cfg = {}
+        config["romaneio"] = romaneio_cfg
+        changed = True
+    if "cnpj_pagador_padrao" not in romaneio_cfg:
+        romaneio_cfg["cnpj_pagador_padrao"] = ""
+        changed = True
+    return changed
+
+
 def _criar_config_empresa_vazia(nome: str) -> None:
     config: dict[str, Any] = {
         "fretio": {
@@ -178,7 +192,7 @@ def _criar_config_empresa_vazia(nome: str) -> None:
             "quotation_jobs_api_url": _DEFAULT_QUOTATION_JOBS_API_URL,
             "quotation_normalization_api_url": _DEFAULT_QUOTATION_NORMALIZATION_API_URL,
         },
-        "romaneio": {"cep_origem": ""},
+        "romaneio": {"cep_origem": "", "cnpj_pagador_padrao": ""},
         "transportadoras": {
             "braspress": {"habilitado": False, "cnpj": "", "senha": "",
                           "ufs_atendidas": list(TODAS_UFS)},
@@ -206,6 +220,7 @@ def _criar_config_empresa_vazia(nome: str) -> None:
         },
     }
     _garantir_defaults_fretio(config)
+    _garantir_defaults_empresa(config)
     _escrever_config_toml(config, _empresa_config_path(nome))
 
 
@@ -234,8 +249,11 @@ def _migrar_config_se_necessario() -> None:
                 except Exception:
                     import toml  # type: ignore[import-untyped]
                     data = toml.loads(raw)
-                if isinstance(data, dict) and _garantir_defaults_fretio(data):
-                    _escrever_config_toml(data, destino)
+                if isinstance(data, dict):
+                    changed = _garantir_defaults_fretio(data)
+                    changed = _garantir_defaults_empresa(data) or changed
+                    if changed:
+                        _escrever_config_toml(data, destino)
             except Exception:
                 pass
             _salvar_ultima_empresa("darlu")

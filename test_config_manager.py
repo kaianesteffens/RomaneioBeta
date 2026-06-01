@@ -166,3 +166,9 @@ def test_config_manager_fallback_includes_translovato_section():
     assert translovato["usuario"] == ""
     assert translovato["senha"] == ""
     assert translovato["produto"] == "CONFECCAO"
+
+
+def test_config_manager_fallback_includes_default_payer_document_field():
+    config = ConfigManager.get_instance("fallback-payer-document-test").get_fallback()
+
+    assert config["romaneio"]["cnpj_pagador_padrao"] == ""

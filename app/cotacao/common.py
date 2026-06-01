@@ -120,6 +120,7 @@ cache_dir = "cache"
 
 [romaneio]
 cep_origem = "99740000"
+cnpj_pagador_padrao = ""
 
 [transportadoras.braspress]
 habilitado = true
