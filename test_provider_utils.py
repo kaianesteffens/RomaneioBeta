@@ -563,3 +563,72 @@ def test_coopex_sem_cubagem_retorna_dado_incompleto_antes_do_browser(monkeypatch
 
     assert result is None
     assert "Cubagem do romaneio não encontrada" in (provider.last_error or "")
+
+
+def test_translovato_city_uf_normalization_handles_accents_and_masks_doc():
+    assert TranslovatoProvider._parse_cidade_uf("Caxias do Sul/RS") == ("CAXIAS DO SUL", "RS")
+    assert TranslovatoProvider._parse_cidade_uf("São José - SC") == ("SAO JOSE", "SC")
+    masked = TranslovatoProvider._mask_doc("12.345.678/0001-90")
+    assert masked == "1234***90"
+    assert "3456780001" not in masked
+
+
+def test_translovato_blocks_when_autofill_city_diverges():
+    provider = TranslovatoProvider(cnpj="12345678000190", usuario="u", senha="s")
+
+    class FakePage:
+        async def wait_for_timeout(self, _timeout):
+            return None
+
+    provider._page = FakePage()
+
+    async def run():
+        provider._read_delivery_zip_digits = lambda: _async_value("95000000")
+        provider._read_delivery_city_uf = lambda: _async_value(("Farroupilha/RS", "FARROUPILHA", "RS"))
+        provider._read_receiver_cnpj_digits = lambda: _async_value("12345678000190")
+        await provider._aguardar_e_validar_autopreenchimento_destino(
+            expected_receiver="12345678000190",
+            expected_cep="95000000",
+            expected_city="Caxias do Sul",
+            expected_uf="RS",
+        )
+
+    with pytest.raises(ValueError, match="Cidade de entrega"):
+        asyncio.run(run())
+
+
+def test_translovato_accepts_matching_autofill_without_manual_zip_fill():
+    provider = TranslovatoProvider(cnpj="12345678000190", usuario="u", senha="s")
+    calls = {"zip_reads": 0, "city_reads": 0}
+
+    class FakePage:
+        async def wait_for_timeout(self, _timeout):
+            return None
+
+    provider._page = FakePage()
+
+    async def read_zip():
+        calls["zip_reads"] += 1
+        return "95000000"
+
+    async def read_city():
+        calls["city_reads"] += 1
+        return "Caxias do Sul/RS", "CAXIAS DO SUL", "RS"
+
+    async def run():
+        provider._read_delivery_zip_digits = read_zip
+        provider._read_delivery_city_uf = read_city
+        provider._read_receiver_cnpj_digits = lambda: _async_value("12345678000190")
+        await provider._aguardar_e_validar_autopreenchimento_destino(
+            expected_receiver="12345678000190",
+            expected_cep="95000000",
+            expected_city="Caxias do Sul",
+            expected_uf="RS",
+        )
+
+    asyncio.run(run())
+    assert calls == {"zip_reads": 1, "city_reads": 1}
+
+
+async def _async_value(value):
+    return value

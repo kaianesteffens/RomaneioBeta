@@ -45,6 +45,7 @@ def test_dados_envio_romaneio_colado_extracts_core_fields():
     dados = _dados_envio_romaneio_colado(_romaneio_valido())
     assert dados["destino_cep"] == "90010123"
     assert dados["uf_destino"] == "RS"
+    assert dados["cidade_destino"] == "Porto Alegre"
     assert dados["cnpj_destinatario"] == "12345678000190"
     assert dados["peso"] == 3.3
     assert dados["valor"] == 150.99
