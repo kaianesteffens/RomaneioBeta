@@ -1,5 +1,5 @@
 """Provider Rodonaves (RTE) – seletores extraidos da gravação Playwright."""
-from typing import Optional
+from typing import Any, Optional
 import asyncio
 import json
 import os
@@ -97,6 +97,186 @@ class RodonavesProvider(ProviderBase):
                 "ERR_HTTP2_PROTOCOL_ERROR",
             )
         )
+
+
+    @staticmethod
+    def _is_playwright_lifecycle_error(error: BaseException | str) -> bool:
+        text = str(error or "").lower()
+        return any(
+            token in text
+            for token in (
+                "target page, context or browser has been closed",
+                "target closed",
+                "browser has been closed",
+                "context has been closed",
+                "page has been closed",
+                "browser closed",
+            )
+        )
+
+    def _safe_current_url(self) -> str:
+        page = self._page
+        if page is None:
+            return "(sem page)"
+        try:
+            if page.is_closed():
+                return "(page fechada)"
+        except Exception:
+            return "(page sem status)"
+        try:
+            return str(getattr(page, "url", "") or "(sem URL)")
+        except Exception:
+            return "(URL indisponivel)"
+
+    def _browser_is_connected(self) -> bool:
+        try:
+            return bool(self._browser and self._browser.is_connected())
+        except Exception:
+            return False
+
+    def _page_is_closed(self, page: Any | None = None) -> bool:
+        page = self._page if page is None else page
+        if page is None:
+            return True
+        try:
+            return bool(page.is_closed())
+        except Exception:
+            return True
+
+    def _lifecycle_closed_reason(self) -> str | None:
+        if not self._browser:
+            return "browser ausente"
+        if not self._browser_is_connected():
+            return "browser desconectado"
+        if self._context is None:
+            return "context ausente"
+        if self._page is None:
+            return "page ausente"
+        if self._page_is_closed():
+            return "page fechada"
+        return None
+
+    def _record_lifecycle_diagnostic(
+        self,
+        *,
+        stage: str,
+        target_url: str,
+        reason: str,
+        previous_stage: str | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        detail = (
+            "Lifecycle Playwright RODONAVES: "
+            f"stage={stage}; previous_stage={previous_stage or self._passo_atual}; "
+            f"target_url={target_url}; current_url={self._safe_current_url()}; "
+            f"reason={reason}; headless={self._effective_headless}"
+        )
+        if error is not None:
+            detail = f"{detail}; error={error}"
+        self.last_error = detail
+        logger.warning(f"[{self.nome}] {detail}")
+
+    async def _ensure_live_page_for_navigation(
+        self,
+        *,
+        stage: str,
+        target_url: str,
+        recreate_session: bool = True,
+    ):
+        """Garante browser/context/page vivos antes de usar page.goto()."""
+        reason = self._lifecycle_closed_reason()
+        if reason is None:
+            return self._page
+
+        self._record_lifecycle_diagnostic(
+            stage=stage,
+            target_url=target_url,
+            reason=reason,
+        )
+
+        if not recreate_session:
+            raise RuntimeError(self.last_error or f"Sessao Playwright indisponivel: {reason}")
+
+        if reason in {"browser ausente", "browser desconectado", "context ausente"}:
+            await self.cleanup()
+            await self._init_browser()
+            await self._sync_active_page()
+        else:
+            try:
+                if self._context is not None:
+                    self._page = await self._context.new_page()
+                else:
+                    await self.cleanup()
+                    await self._init_browser()
+                    await self._sync_active_page()
+            except Exception as exc:
+                self._record_lifecycle_diagnostic(
+                    stage=stage,
+                    target_url=target_url,
+                    reason="falha ao recriar page; reiniciando sessao",
+                    error=exc,
+                )
+                await self.cleanup()
+                await self._init_browser()
+                await self._sync_active_page()
+
+        reason_after = self._lifecycle_closed_reason()
+        if reason_after is not None:
+            self._record_lifecycle_diagnostic(
+                stage=stage,
+                target_url=target_url,
+                reason=f"sessao continua indisponivel apos recriacao: {reason_after}",
+            )
+            raise RuntimeError(self.last_error or "Sessao Playwright indisponivel apos recriacao")
+        self._logged_in = False
+        return self._page
+
+    async def _goto_with_lifecycle_guard(
+        self,
+        target_url: str,
+        *,
+        stage: str,
+        wait_until: str,
+        timeout: int,
+        attempts: int = 3,
+    ):
+        last_error: BaseException | None = None
+        for attempt in range(max(1, attempts)):
+            page = await self._ensure_live_page_for_navigation(stage=stage, target_url=target_url)
+            try:
+                await page.goto(target_url, wait_until=wait_until, timeout=timeout)
+                return page
+            except Exception as goto_err:
+                last_error = goto_err
+                previous_stage = self._passo_atual
+                if self._is_playwright_lifecycle_error(goto_err) and attempt < attempts - 1:
+                    self._record_lifecycle_diagnostic(
+                        stage=stage,
+                        target_url=target_url,
+                        reason="page/context/browser fechou durante goto; recriando sessao",
+                        previous_stage=previous_stage,
+                        error=goto_err,
+                    )
+                    await self.cleanup()
+                    await self._init_browser()
+                    await asyncio.sleep(0.5)
+                    continue
+                if self._is_retryable_navigation_error(goto_err) and attempt < attempts - 1:
+                    logger.warning(
+                        f"[{self.nome}] goto {target_url} transitório, retry {attempt + 1}/{attempts}: {goto_err}"
+                    )
+                    await asyncio.sleep(1)
+                    continue
+                if self._is_playwright_lifecycle_error(goto_err):
+                    self._record_lifecycle_diagnostic(
+                        stage=stage,
+                        target_url=target_url,
+                        reason="falha de lifecycle persistente durante goto",
+                        previous_stage=previous_stage,
+                        error=goto_err,
+                    )
+                raise
+        raise RuntimeError(str(last_error) if last_error else f"Falha ao navegar para {target_url}")
 
     # ── helpers ────────────────────────────────────────────────────────
 
@@ -874,8 +1054,10 @@ class RodonavesProvider(ProviderBase):
 
     async def _navegar_cotacao(self, _from_login: bool = False):
         """Navega para /Quotation e aguarda o formulário ficar visível."""
-        await self._sync_active_page()
-        page = self._page
+        page = await self._ensure_live_page_for_navigation(
+            stage="navegando_cotacao",
+            target_url=self.PORTAL_URL,
+        )
 
         # Verifica se o formulário já está na página atual
         try:
@@ -887,23 +1069,12 @@ class RodonavesProvider(ProviderBase):
 
         logger.info(f"[{self.nome}] Navegando para /Quotation... URL atual: {page.url}""")
 
-        # Navega direto via goto com retry para falhas transitórias de rede.
-        for _goto_attempt in range(3):
-            try:
-                await page.goto(
-                    "https://cliente.rte.com.br/Quotation",
-                    wait_until="domcontentloaded",
-                    timeout=30000,
-                )
-                break
-            except Exception as goto_err:
-                if self._is_retryable_navigation_error(goto_err) and _goto_attempt < 2:
-                    logger.warning(
-                        f"[{self.nome}] goto /Quotation transitório, retry {_goto_attempt + 1}/3: {goto_err}"
-                    )
-                    await asyncio.sleep(1)
-                    continue
-                raise
+        page = await self._goto_with_lifecycle_guard(
+            self.PORTAL_URL,
+            stage="navegando_cotacao",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
 
         # Verifica se sessão expirou (redirecionou para home/login)
         try:
@@ -930,25 +1101,20 @@ class RodonavesProvider(ProviderBase):
     async def _login(self):
         if self._logged_in:
             return
-        await self._sync_active_page()
-        page = self._page
+        login_url = self.login_url or f"{self.BASE_URL}/?showLogin=true"
+        page = await self._ensure_live_page_for_navigation(
+            stage="login",
+            target_url=login_url,
+        )
         logger.info(f"[{self.nome}] Iniciando login...")
 
         # Acessa página de login para estabelecer sessão/cookies
-        for _goto_attempt in range(3):
-            try:
-                await page.goto(
-                    "https://cliente.rte.com.br/?showLogin=true",
-                    wait_until="domcontentloaded",
-                    timeout=15000,
-                )
-                break
-            except Exception as goto_err:
-                if self._is_retryable_navigation_error(goto_err) and _goto_attempt < 2:
-                    logger.warning(f"[{self.nome}] goto login transitório, retry {_goto_attempt + 1}/3: {goto_err}")
-                    await asyncio.sleep(1)
-                    continue
-                raise
+        page = await self._goto_with_lifecycle_guard(
+            login_url,
+            stage="login",
+            wait_until="domcontentloaded",
+            timeout=15000,
+        )
 
         # Aguarda jQuery estar disponível (necessário para o AJAX)
         for _jquery_attempt in range(2):
@@ -1007,10 +1173,13 @@ class RodonavesProvider(ProviderBase):
         logger.info(f"[{self.nome}] Login OK – formulário visível")
 
     async def pre_login(self):
+        self._passo_atual = "pre_login"
         await self._init_browser()
         try:
             await self._login()
+            return True
         except Exception as e:
+            self.last_error = str(e)
             logger.warning(f"[{self.nome}] Pre-login falhou: {e}, tentando novamente...")
             await self.cleanup()
             # Retry: reinicializa browser e tenta login de novo
@@ -1018,9 +1187,12 @@ class RodonavesProvider(ProviderBase):
                 await self._init_browser()
                 await self._login()
                 logger.info(f"[{self.nome}] Pre-login OK no retry")
+                return True
             except Exception as e2:
-                logger.warning(f"[{self.nome}] Pre-login retry também falhou: {e2}""")
+                self.last_error = str(e2)
+                logger.warning(f"[{self.nome}] Pre-login retry também falhou: {e2}")
                 await self.cleanup()
+                return False
 
     # ── preenchimento do formulário (seletores por ID do HTML real) ───
 

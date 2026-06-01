@@ -252,6 +252,7 @@ Boas praticas:
 - Nao criar event loop proprio.
 - Usar seletores robustos de Playwright.
 - Preservar cleanup de page/context/browser/Playwright/processos.
+- Em providers que reutilizam sessao (ex.: RODONAVES), validar page/context/browser antes de `goto()` e registrar URL alvo, etapa anterior, `headless` e motivo quando houver fechamento de lifecycle.
 - Manter `last_error` informativo.
 - Nao salvar senha/logins/cookies em log.
 
