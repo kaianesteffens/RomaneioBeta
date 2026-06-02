@@ -35,6 +35,7 @@ _install_playwright_test_stub()
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT / "app" / "fretio" / "src"))
 
+from fretio.models import Cotacao
 from fretio.providers.rodonaves import RodonavesProvider
 
 
@@ -167,5 +168,110 @@ def test_rodonaves_restarts_session_when_browser_closes_during_goto(monkeypatch)
         assert second_page.gotos[0][0] == "https://cliente.rte.com.br/?showLogin=true"
         assert "page/context/browser fechou durante goto" in provider.last_error
         assert "stage=login" in provider.last_error
+
+    asyncio.run(run())
+
+
+class FakeDiagnosticPage:
+    url = "https://cliente.rte.com.br/Quotation"
+
+    def is_closed(self):
+        return False
+
+    async def title(self):
+        return "Cotação RTE"
+
+    async def evaluate(self, _script):
+        return {
+            "bodyText": "Erro para CNPJ 12345678000190 no CEP 99999-000 sem valor",
+            "alertText": "CNPJ 12345678000190 inválido",
+            "formPresent": True,
+            "calculateButtonPresent": True,
+            "calculateButtonVisible": True,
+            "resultPresent": False,
+            "recaptchaFrames": 1,
+            "captchaTokenLen": 0,
+        }
+
+
+def test_rodonaves_safe_diagnostic_snapshot_redacts_documents():
+    async def run():
+        provider = _provider()
+        provider._page = FakeDiagnosticPage()
+        provider._passo_atual = "ler_resultado"
+
+        snapshot = await provider._capture_safe_diagnostic_snapshot(
+            reason="valor_frete_nao_encontrado",
+            stage="ler_resultado",
+            api_result={"text": "CNPJ 12345678000190 valor ausente", "url": "https://cliente.rte.com.br/Quotation"},
+        )
+
+        assert snapshot["form_present"] is True
+        assert snapshot["recaptcha_frames"] == 1
+        assert "12345678000190" not in snapshot["body_excerpt"]
+        assert "12345678000190" not in snapshot["alert_excerpt"]
+        assert "12345678000190" not in snapshot["api_excerpt"]
+        assert "***" in snapshot["body_excerpt"]
+        assert provider._diagnostic_context["rodonaves_snapshot"] is snapshot
+
+    asyncio.run(run())
+
+
+def test_rodonaves_retries_visible_when_headless_recaptcha_blocks(monkeypatch):
+    async def run():
+        provider = _provider()
+        provider._effective_headless = True
+        calls = []
+
+        async def fake_init_browser():
+            calls.append("init")
+
+        async def fake_login():
+            calls.append("login")
+
+        async def fake_navegar():
+            calls.append("navegar")
+
+        async def fake_preencher(**_kwargs):
+            calls.append("preencher")
+
+        async def fake_submeter():
+            calls.append("submeter")
+            provider.last_error = "Rodonaves: reCAPTCHA pendente em headless; será necessário refazer em modo visível"
+            return None
+
+        async def fake_retry_visible(**kwargs):
+            calls.append("retry_visible")
+            assert kwargs["volumes"] == 23
+            assert kwargs["preencher_cep_origem"] is True
+            return Cotacao(transportadora="RODONAVES", prazo_dias=3, valor_frete=123.45)
+
+        monkeypatch.setattr(provider, "_init_browser", fake_init_browser)
+        monkeypatch.setattr(provider, "_login", fake_login)
+        monkeypatch.setattr(provider, "_navegar_cotacao", fake_navegar)
+        monkeypatch.setattr(provider, "_preencher_cotacao", fake_preencher)
+        monkeypatch.setattr(provider, "_submeter_e_extrair", fake_submeter)
+        monkeypatch.setattr(provider, "_retry_visible_after_headless_captcha", fake_retry_visible)
+
+        result = await provider.coteir(
+            origem="01001000",
+            destino="02002000",
+            peso=100,
+            valor=1500.0,
+            volumes=23,
+            comprimento_cm=0,
+            largura_cm=0,
+            altura_cm=0,
+            cnpj_destinatario="12345678000190",
+            cubagens=[
+                {"quantidade": 10, "comprimento_cm": 40, "largura_cm": 30, "altura_cm": 20, "peso_por_volume_kg": 4.3},
+                {"quantidade": 13, "comprimento_cm": 50, "largura_cm": 35, "altura_cm": 25, "peso_por_volume_kg": 4.4},
+            ],
+            preencher_cep_origem=True,
+        )
+
+        assert result is not None
+        assert result.valor_frete == 123.45
+        assert calls == ["init", "login", "navegar", "preencher", "submeter", "retry_visible"]
 
     asyncio.run(run())

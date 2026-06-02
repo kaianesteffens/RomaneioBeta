@@ -172,7 +172,7 @@ senha = ""
 cnpj_pagador = ""
 login_url = "https://cliente.rte.com.br/?showLogin=true"
 cotacao_url = "https://sistema.rte.com.br/bin/ssw1608"
-headless = true
+headless = false
 ufs_atendidas = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
 
 [transportadoras.alfa]

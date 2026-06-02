@@ -253,6 +253,8 @@ Boas praticas:
 - Usar seletores robustos de Playwright.
 - Preservar cleanup de page/context/browser/Playwright/processos.
 - Em providers que reutilizam sessao (ex.: RODONAVES), validar page/context/browser antes de `goto()` e registrar URL alvo, etapa anterior, `headless` e motivo quando houver fechamento de lifecycle.
+- RODONAVES usa reCAPTCHA no portal `cliente.rte.com.br`; preferir modo visível/off-screen (`headless=false`) e, se a sessão iniciar headless e o CAPTCHA bloquear a cotação, refazer apenas a tentativa da RODONAVES em modo visível com diagnóstico seguro.
+- Diagnósticos locais de provider devem guardar só metadados seguros (URL, etapa, flags de seletores, contagens, trechos redigidos), sem HTML bruto, cookies, tokens, senhas, CNPJ/CPF completo ou dados reais de cliente.
 - Manter `last_error` informativo.
 - Nao salvar senha/logins/cookies em log.
 
