@@ -338,6 +338,10 @@ async def _executar_cotacoes_com_dados(
             "provider_key": provider_key,
             "stage": effective_stage,
         }
+        provider_diag = getattr(provider, "_diagnostic_context", None) if provider is not None else None
+        if isinstance(provider_diag, dict):
+            for diag_key, diag_value in provider_diag.items():
+                provider_context[diag_key] = diag_value
         if duration_ms is not None:
             provider_context["duration_ms"] = duration_ms
         safe_hints: dict[str, Any] = {
@@ -783,7 +787,7 @@ async def _executar_cotacoes_com_dados(
                         cnpj_pagador = _digits(str(rcfg.get("cnpj_pagador", "") or ""))
                         if dominio and usuario and senha and len(cnpj_pagador) == 14:
                             foco_rodonaves = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "rodonaves"
-                            headless_rodonaves = False if foco_rodonaves else bool(rcfg.get("headless", True))
+                            headless_rodonaves = False if foco_rodonaves else bool(rcfg.get("headless", False))
                             provider = await _obter_provider_sessao(
                                 "rodonaves",
                                 create_kwargs={
