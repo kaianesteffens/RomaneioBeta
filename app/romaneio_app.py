@@ -811,7 +811,7 @@ class ConfiguracoesDialog(QDialog):
 
         tabs = QTabWidget()
         tabs.setObjectName("MainTabs")
-        tabs.addTab(self._tab_ufs(), "UFs Atendidas")
+        tabs.addTab(self._tab_ufs(), "UFs atendidas")
         tabs.addTab(self._tab_credenciais(), "Credenciais")
         layout.addWidget(tabs, 1)
 
@@ -854,9 +854,12 @@ class ConfiguracoesDialog(QDialog):
     # --- aba UFs Atendidas ---
     def _tab_ufs(self) -> QWidget:
         scroll = QScrollArea()
+        scroll.setObjectName("ConfigScroll")
+        scroll.viewport().setObjectName("ConfigViewport")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         content = QWidget()
+        content.setObjectName("ConfigSurface")
         vbox = QVBoxLayout(content)
         vbox.setSpacing(10)
         transp_cfg = self.config.get("transportadoras", {}) or {}
@@ -901,6 +904,7 @@ class ConfiguracoesDialog(QDialog):
         vbox.addStretch(1)
         scroll.setWidget(content)
         wrapper = QWidget()
+        wrapper.setObjectName("ConfigSurface")
         wl = QVBoxLayout(wrapper)
         wl.setContentsMargins(0, 0, 0, 0)
         wl.addWidget(scroll)
@@ -909,9 +913,12 @@ class ConfiguracoesDialog(QDialog):
     # --- aba Credenciais ---
     def _tab_credenciais(self) -> QWidget:
         scroll = QScrollArea()
+        scroll.setObjectName("ConfigScroll")
+        scroll.viewport().setObjectName("ConfigViewport")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         content = QWidget()
+        content.setObjectName("ConfigSurface")
         vbox = QVBoxLayout(content)
         vbox.setSpacing(10)
         transp_cfg = self.config.get("transportadoras", {}) or {}
@@ -956,6 +963,7 @@ class ConfiguracoesDialog(QDialog):
         vbox.addStretch(1)
         scroll.setWidget(content)
         wrapper = QWidget()
+        wrapper.setObjectName("ConfigSurface")
         wl = QVBoxLayout(wrapper)
         wl.setContentsMargins(0, 0, 0, 0)
         wl.addWidget(scroll)
@@ -1026,13 +1034,14 @@ class ConfiguracoesDialog(QDialog):
         if dark:
             c_bg = "#0d1117"; c_panel = "#161b22"; c_panel2 = "#1c232c"; c_panel3 = "#21282f"
             c_border = "#262f3a"; c_ink = "#e6edf3"; c_muted = "#768390"
-            c_ink2 = "#adbac7"; c_faint = "#444c56"; c_accent = "#00b4d8"
+            c_ink2 = "#adbac7"; c_faint = "#444c56"; c_accent = "#00b4d8"; c_accent_hover = "#0098b8"
         else:
             c_bg = "#f0f4f8"; c_panel = "#ffffff"; c_panel2 = "#f8fafc"; c_panel3 = "#f1f5f9"
             c_border = "#e2e8f0"; c_ink = "#0f172a"; c_muted = "#64748b"
-            c_ink2 = "#334155"; c_faint = "#94a3b8"; c_accent = "#0077b6"
+            c_ink2 = "#334155"; c_faint = "#94a3b8"; c_accent = "#0077b6"; c_accent_hover = "#0369a1"
         self.setStyleSheet(f"""
             QDialog {{ background: {c_bg}; color: {c_ink}; }}
+            QWidget#ConfigSurface, QWidget#ConfigViewport {{ background: {c_bg}; color: {c_ink}; }}
             QLabel {{ color: {c_ink}; }}
             #TitleLabel {{ font-size: 18px; font-weight: 700; color: {c_ink}; }}
             #SettingsGroup {{ border: 1px solid {c_border}; border-radius: 8px;
@@ -1053,8 +1062,10 @@ class ConfiguracoesDialog(QDialog):
                            border-top-right-radius: 8px; }}
             QTabBar::tab:selected {{ background: {c_panel}; color: {c_ink};
                                      border-bottom-color: {c_panel}; }}
+            QTabBar::tab:hover {{ background: {c_panel3}; color: {c_ink}; }}
             QPushButton {{ background: {c_accent}; color: #fff; border: none; border-radius: 8px;
                           padding: 9px 16px; font-weight: 600; }}
+            QPushButton:hover {{ background: {c_accent_hover}; color: #fff; }}
             QPushButton#SecondaryButton {{ background: {c_panel2}; color: {c_ink2};
                                           border: 1px solid {c_border}; }}
             QPushButton#SecondaryButton:hover {{ background: {c_panel3}; color: {c_ink}; }}
@@ -1064,8 +1075,18 @@ class ConfiguracoesDialog(QDialog):
             QPushButton#MiniButton:hover {{ background: {c_panel3}; }}
             QCheckBox {{ color: {c_ink}; spacing: 4px; }}
             QLineEdit {{ color: {c_ink}; background: {c_panel2}; border: 1px solid {c_border};
-                        border-radius: 6px; padding: 5px 8px; }}
+                        border-radius: 6px; padding: 5px 8px; selection-background-color: {c_accent}; }}
+            QLineEdit:focus {{ border: 1px solid {c_accent}; background: {c_panel}; }}
             QScrollArea {{ background: transparent; border: none; }}
+            QScrollArea#ConfigScroll > QWidget > QWidget {{ background: {c_bg}; }}
+            QScrollBar:vertical {{ background: {c_panel2}; width: 10px; margin: 0; border-radius: 5px; }}
+            QScrollBar::handle:vertical {{ background: {c_faint}; min-height: 28px; border-radius: 5px; }}
+            QScrollBar::handle:vertical:hover {{ background: {c_muted}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+            QScrollBar:horizontal {{ background: {c_panel2}; height: 10px; margin: 0; border-radius: 5px; }}
+            QScrollBar::handle:horizontal {{ background: {c_faint}; min-width: 28px; border-radius: 5px; }}
+            QScrollBar::handle:horizontal:hover {{ background: {c_muted}; }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; }}
             QGroupBox {{ border: none; }}
         """)
 
@@ -1448,7 +1469,7 @@ class RomaneioWindow(QMainWindow):
         carr_vlayout = QVBoxLayout(carr_card)
         carr_vlayout.setContentsMargins(14, 12, 14, 12)
         carr_vlayout.setSpacing(4)
-        carr_lbl = QLabel("STATUS CARRIERS")
+        carr_lbl = QLabel("STATUS DAS TRANSPORTADORAS")
         carr_lbl.setObjectName("SectionLabel")
         carr_vlayout.addWidget(carr_lbl)
 
@@ -2165,6 +2186,7 @@ class RomaneioWindow(QMainWindow):
         dlg = QDialog(self)
         dlg.setWindowTitle("Buscar comando")
         dlg.setMinimumSize(460, 360)
+        dlg.setStyleSheet(self.styleSheet())
         layout = QVBoxLayout(dlg)
         search = QLineEdit()
         search.setPlaceholderText("Digite para buscar...")
@@ -2211,7 +2233,7 @@ class RomaneioWindow(QMainWindow):
             c_bg = "#0d1117"; c_panel = "#161b22"; c_panel2 = "#1c232c"; c_panel3 = "#21282f"
             c_border = "#262f3a"; c_border_soft = "#1d2530"
             c_ink = "#e6edf3"; c_muted = "#768390"; c_ink2 = "#adbac7"; c_faint = "#444c56"
-            c_accent = "#00b4d8"; c_accent2 = "#0a2030"; c_accent_border = "#0d3d55"
+            c_accent = "#00b4d8"; c_accent_hover = "#0098b8"; c_accent2 = "#0a2030"; c_accent_border = "#0d3d55"
             c_green = "#3fb950"; c_green_dim = "#0d2b16"
             c_red = "#f85149"; c_red_dim = "#2b0e0e"
             c_amber = "#e3b341"; c_amber_dim = "#2b2008"
@@ -2219,13 +2241,15 @@ class RomaneioWindow(QMainWindow):
             c_bg = "#f0f4f8"; c_panel = "#ffffff"; c_panel2 = "#f8fafc"; c_panel3 = "#f1f5f9"
             c_border = "#e2e8f0"; c_border_soft = "#edf2f7"
             c_ink = "#0f172a"; c_muted = "#64748b"; c_ink2 = "#334155"; c_faint = "#94a3b8"
-            c_accent = "#0077b6"; c_accent2 = "#e0f2fe"; c_accent_border = "#bae6fd"
+            c_accent = "#0077b6"; c_accent_hover = "#0369a1"; c_accent2 = "#e0f2fe"; c_accent_border = "#bae6fd"
             c_green = "#16a34a"; c_green_dim = "#dcfce7"
             c_red = "#dc2626"; c_red_dim = "#fee2e2"
             c_amber = "#d97706"; c_amber_dim = "#fef3c7"
 
         self.setStyleSheet(f"""
             QMainWindow {{ background: {c_bg}; color: {c_ink}; }}
+            QDialog {{ background: {c_bg}; color: {c_ink}; }}
+            QWidget {{ color: {c_ink}; }}
             #Sidebar {{ background: {c_panel}; border-right: 1px solid {c_border}; min-width: 200px; max-width: 200px; }}
             #BrandLabel {{ font-size: 18px; font-weight: 700; letter-spacing: -0.5px; color: {c_ink}; }}
             #SidebarSep {{ background: {c_border}; border: none; max-height: 1px; }}
@@ -2238,6 +2262,7 @@ class RomaneioWindow(QMainWindow):
             #TopBar {{ background: {c_panel}; border-bottom: 1px solid {c_border}; }}
             #TopBarTitle {{ font-size: 14px; font-weight: 600; color: {c_ink}; }}
             #CmdKBtn {{ background: {c_panel2}; border: 1px solid {c_border}; border-radius: 6px; }}
+            #CmdKBtn:hover {{ background: {c_panel3}; border-color: {c_accent_border}; }}
             #CmdKText {{ font-size: 12px; color: {c_muted}; }}
             #CmdKKbd {{ font-family: 'JetBrains Mono'; font-size: 10px; padding: 1px 5px;
                         background: {c_panel3}; border: 1px solid {c_border}; border-radius: 3px; color: {c_faint}; }}
@@ -2262,6 +2287,7 @@ class RomaneioWindow(QMainWindow):
             #TableMonoBold {{ font-family: 'JetBrains Mono'; font-size: 13px; font-weight: 600; color: {c_ink}; }}
             #CotacaoStatusTable {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 8px; gridline-color: {c_border_soft}; font-size: 11px; }}
             #CotacaoStatusTable::item {{ padding: 4px; }}
+            #CotacaoStatusTable::item:selected {{ background: {c_accent2}; color: {c_ink}; }}
             #CotacaoStatusTable QHeaderView::section {{ background: {c_panel3}; color: {c_muted}; border: none; border-bottom: 1px solid {c_border}; padding: 5px 7px; font-size: 10px; font-weight: 700; }}
             #CarrierRowName {{ font-family: 'JetBrains Mono'; font-size: 12px; color: {c_ink2}; }}
             #TagGreen {{ background: {c_green_dim}; color: {c_green}; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }}
@@ -2292,10 +2318,19 @@ class RomaneioWindow(QMainWindow):
             {"#RastreioGreenBlock { background: #0d2010; border: 1px solid #1a3a20; border-radius: 8px; }" if dark else "#RastreioGreenBlock { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; }"}
             {"#RastreioSlateBlock { background: #1c232c; border: 1px solid #262f3a; border-radius: 8px; }" if dark else "#RastreioSlateBlock { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }"}
             QPushButton {{ background: {c_accent}; color: #ffffff; border: none; border-radius: 8px; padding: 10px 14px; font-weight: 600; }}
-            QPushButton:hover {{ background: {c_accent}; }}
+            QPushButton:hover {{ background: {c_accent_hover}; }}
+            QPushButton:disabled {{ background: {c_panel3}; color: {c_faint}; }}
             QPushButton#SecondaryButton {{ background: {c_panel2}; color: {c_ink2}; border: 1px solid {c_border}; }}
-            QPushButton#SecondaryButton:hover {{ background: {c_panel2}; color: {c_ink}; }}
-            #InputField {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 6px; padding: 6px 8px; }}
+            QPushButton#SecondaryButton:hover {{ background: {c_panel3}; color: {c_ink}; border-color: {c_accent_border}; }}
+            #InputField {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 6px; padding: 6px 8px; selection-background-color: {c_accent}; }}
+            #InputField:focus {{ background: {c_panel}; border: 1px solid {c_accent}; }}
+            QLineEdit {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 6px; padding: 6px 8px; selection-background-color: {c_accent}; }}
+            QLineEdit:focus {{ background: {c_panel}; border: 1px solid {c_accent}; }}
+            QPlainTextEdit {{ selection-background-color: {c_accent}; }}
+            QListWidget {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 8px; padding: 4px; }}
+            QListWidget::item {{ padding: 7px 8px; border-radius: 5px; }}
+            QListWidget::item:selected {{ background: {c_accent2}; color: {c_ink}; }}
+            QListWidget::item:hover {{ background: {c_panel3}; }}
             #FornLabel {{ font-size: 13px; font-weight: 600; color: {c_ink}; padding-right: 6px; }}
             #FornUnit {{ font-size: 12px; color: {c_muted}; }}
             QTabWidget#MainTabs::pane {{ border: 1px solid {c_border}; border-radius: 10px; background: {c_panel}; }}
@@ -2303,6 +2338,7 @@ class RomaneioWindow(QMainWindow):
                            padding: 7px 12px; margin-right: 4px; border-top-left-radius: 8px;
                            border-top-right-radius: 8px; }}
             QTabBar::tab:selected {{ background: {c_panel}; color: {c_ink}; border-bottom-color: {c_panel}; }}
+            QTabBar::tab:hover {{ background: {c_panel3}; color: {c_ink}; }}
             #SettingsGroup {{ border: 1px solid {c_border}; border-radius: 8px;
                              padding: 12px 10px 10px 10px; margin-top: 6px; background: {c_panel}; }}
             QGroupBox#SettingsGroup {{ border: 1px solid {c_border}; background: {c_panel}; border-radius: 8px; margin-top: 0px; }}
@@ -2315,10 +2351,23 @@ class RomaneioWindow(QMainWindow):
             QPushButton#MiniButton {{ background: {c_panel2}; color: {c_ink2};
                                      border: 1px solid {c_border}; border-radius: 4px;
                                      padding: 2px 8px; font-size: 11px; }}
-            QPushButton#MiniButton:hover {{ background: {c_panel3}; }}
+            QPushButton#MiniButton:hover {{ background: {c_panel3}; border-color: {c_accent_border}; }}
             QCheckBox {{ color: {c_ink}; spacing: 4px; }}
             QScrollArea {{ background: transparent; border: none; }}
+            QScrollBar:vertical {{ background: {c_panel2}; width: 10px; margin: 0; border-radius: 5px; }}
+            QScrollBar::handle:vertical {{ background: {c_faint}; min-height: 28px; border-radius: 5px; }}
+            QScrollBar::handle:vertical:hover {{ background: {c_muted}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+            QScrollBar:horizontal {{ background: {c_panel2}; height: 10px; margin: 0; border-radius: 5px; }}
+            QScrollBar::handle:horizontal {{ background: {c_faint}; min-width: 28px; border-radius: 5px; }}
+            QScrollBar::handle:horizontal:hover {{ background: {c_muted}; }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; }}
         """)
+
+        for bar_name in ("progress_bar", "forn_progress_bar", "rastreio_progress_bar"):
+            bar = getattr(self, bar_name, None)
+            if hasattr(bar, "set_theme"):
+                bar.set_theme(c_panel2, c_border, c_accent)
 
         # Refresh NavItem widgets
         for item in getattr(self, '_nav_items_list', []):

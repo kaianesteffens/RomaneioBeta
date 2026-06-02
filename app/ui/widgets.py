@@ -21,6 +21,16 @@ class IndeterminateBar(QWidget):
         self._last_t = monotonic()
         self._offset_px = 0.0
         self._speed_px_s = 360.0
+        self._track_color = "#e9eef7"
+        self._border_color = "#cfd8ea"
+        self._chunk_color = "#1f6feb"
+
+    def set_theme(self, track: str, border: str, chunk: str) -> None:
+        """Atualiza as cores da barra para acompanhar o tema ativo."""
+        self._track_color = track
+        self._border_color = border
+        self._chunk_color = chunk
+        self.update()
 
     def start_anim(self) -> None:
         self._last_t = monotonic()
@@ -58,8 +68,8 @@ class IndeterminateBar(QWidget):
         radius = 5.0
 
         track_rect = QRectF(0.5, 0.5, max(0.0, w - 1.0), max(0.0, h - 1.0))
-        painter.setPen(QPen(QColor("#cfd8ea"), 1.0))
-        painter.setBrush(QColor("#e9eef7"))
+        painter.setPen(QPen(QColor(self._border_color), 1.0))
+        painter.setBrush(QColor(self._track_color))
         painter.drawRoundedRect(track_rect, radius, radius)
 
         if w <= 2 or h <= 2:
@@ -70,7 +80,7 @@ class IndeterminateBar(QWidget):
         x = (self._offset_px % span) - chunk_w
 
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor("#1f6feb"))
+        painter.setBrush(QColor(self._chunk_color))
         for shift in (0.0, span):
             xr = x + shift
             chunk_rect = QRectF(xr, 1.0, chunk_w, max(0.0, h - 2.0))
