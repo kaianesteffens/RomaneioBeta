@@ -1,8 +1,9 @@
 """Provider Eucatur - Sistema SSW de Transportes."""
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
+import asyncio
 import re
-from playwright.async_api import async_playwright, Page
+from playwright.async_api import async_playwright, Page, TimeoutError as PlaywrightTimeoutError
 from fretio.providers.base import ProviderBase
 from fretio.models import Cotacao
 from fretio.quotation_contract import QuoteRequest, QuoteResponse
@@ -100,27 +101,54 @@ class EucaturProvider(ProviderBase):
         await self._init_browser()
         await self._login()
 
+    @staticmethod
+    def _is_safe_cleanup_error(exc: BaseException) -> bool:
+        text = str(exc or "").lower()
+        return isinstance(exc, (asyncio.CancelledError, TimeoutError, PlaywrightTimeoutError)) or any(
+            token in text
+            for token in (
+                "target page, context or browser has been closed",
+                "target closed",
+                "browser has been closed",
+                "context has been closed",
+                "page has been closed",
+                "playwright",
+                "closed",
+            )
+        )
+
+    @classmethod
+    async def _cleanup_step(cls, label: str, close_call: Any, *, timeout_s: float = 5.0) -> None:
+        try:
+            await asyncio.wait_for(close_call(), timeout=timeout_s)
+        except BaseException as exc:
+            if cls._is_safe_cleanup_error(exc):
+                logger.warning("[Eucatur] Cleanup ignorou %s: %s", label, exc)
+                return
+            logger.warning("[Eucatur] Cleanup ignorou falha em %s: %s", label, exc)
+
     async def cleanup(self):
-        """Fecha o browser."""
+        """Fecha recursos Playwright sem derrubar o async worker."""
+        page = self._page
+        context = self._context
+        browser = self._browser
         try:
-            if self._page and not self._page.is_closed():
-                await self._page.close()
-        except Exception:
-            pass
-        try:
-            if self._context:
-                await self._context.close()
-        except Exception:
-            pass
-        try:
-            if self._browser:
-                await self._browser.close()
-        except Exception:
-            pass
-        self._browser = None
-        self._context = None
-        self._page = None
-        self._logged_in = False
+            if page is not None:
+                try:
+                    page_closed = bool(page.is_closed())
+                except BaseException:
+                    page_closed = True
+                if not page_closed:
+                    await self._cleanup_step("page.close", page.close)
+            if context is not None:
+                await self._cleanup_step("context.close", context.close)
+            if browser is not None:
+                await self._cleanup_step("browser.close", browser.close)
+        finally:
+            self._browser = None
+            self._context = None
+            self._page = None
+            self._logged_in = False
 
     @staticmethod
     def _normalizar_cubagens_cm(cubagens: Optional[list[dict]]) -> list[dict]:
@@ -151,7 +179,13 @@ class EucaturProvider(ProviderBase):
 
     async def _navegar_cotacao(self):
         """Navega para a tela de cotação (ssw1608)."""
-        await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=60000)
+        self._passo_atual = "navegando_cotacao"
+        try:
+            await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=60000)
+        except PlaywrightTimeoutError as exc:
+            raise RuntimeError(
+                "Eucatur: timeout de rede/portal ao abrir tela SSW de cotação (ssw1608)"
+            ) from exc
         await self._page.wait_for_timeout(800)
 
         has_form = await self._page.locator('input[name=f2]').count()
@@ -160,7 +194,12 @@ class EucaturProvider(ProviderBase):
             logger.warning(f"[{self.nome}] Formulário não encontrado, tentando re-login...")
             self._logged_in = False
             await self._login()
-            await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=60000)
+            try:
+                await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=60000)
+            except PlaywrightTimeoutError as exc:
+                raise RuntimeError(
+                    "Eucatur: timeout de rede/portal ao reabrir tela SSW de cotação (ssw1608)"
+                ) from exc
             await self._page.wait_for_timeout(800)
             has_form = await self._page.locator('input[name=f2]').count()
             if has_form == 0:
