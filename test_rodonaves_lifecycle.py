@@ -275,3 +275,58 @@ def test_rodonaves_retries_visible_when_headless_recaptcha_blocks(monkeypatch):
         assert calls == ["init", "login", "navegar", "preencher", "submeter", "retry_visible"]
 
     asyncio.run(run())
+
+
+def test_rodonaves_valid_quote_forces_coherent_login_status(monkeypatch):
+    async def run():
+        provider = _provider()
+        calls = []
+
+        async def fake_init_browser():
+            calls.append("init")
+
+        async def fake_login():
+            calls.append("login")
+            provider._set_login_status("login_ok", True)
+
+        async def fake_navegar():
+            calls.append("navegar")
+
+        async def fake_preencher(**_kwargs):
+            calls.append("preencher")
+
+        async def fake_submeter():
+            calls.append("submeter")
+            provider._set_login_status("aguardando_captcha", True)
+            provider._set_login_status("captcha_resolvido", True)
+            provider._logged_in = False  # simula sincronização antiga incoerente após resultado válido
+            provider._set_login_status("login_falhou", True)
+            return Cotacao(transportadora="RODONAVES", prazo_dias=3, valor_frete=925.56)
+
+        monkeypatch.setattr(provider, "_init_browser", fake_init_browser)
+        monkeypatch.setattr(provider, "_login", fake_login)
+        monkeypatch.setattr(provider, "_navegar_cotacao", fake_navegar)
+        monkeypatch.setattr(provider, "_preencher_cotacao", fake_preencher)
+        monkeypatch.setattr(provider, "_submeter_e_extrair", fake_submeter)
+
+        result = await provider.coteir(
+            origem="01001000",
+            destino="02002000",
+            peso=100,
+            valor=1500.0,
+            volumes=1,
+            cnpj_destinatario="12345678000190",
+            cubagens=[{"quantidade": 1, "comprimento_cm": 40, "largura_cm": 30, "altura_cm": 20}],
+        )
+
+        assert result is not None
+        assert result.valor_frete == 925.56
+        assert provider._logged_in is True
+        assert provider.login_status["login_ok"] is True
+        assert provider.login_status["aguardando_captcha"] is True
+        assert provider.login_status["captcha_resolvido"] is True
+        assert provider.login_status["cotacao_ok"] is True
+        assert provider.login_status["login_falhou"] is False
+        assert calls == ["init", "login", "navegar", "preencher", "submeter"]
+
+    asyncio.run(run())
