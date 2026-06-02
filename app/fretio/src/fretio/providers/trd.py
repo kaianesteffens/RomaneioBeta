@@ -7,7 +7,7 @@ import re
 import time
 import tempfile
 from pathlib import Path
-from playwright.async_api import async_playwright, Frame
+from playwright.async_api import async_playwright, Frame, TimeoutError as PlaywrightTimeoutError
 from fretio.providers.base import ProviderBase
 from fretio.providers.provider_utils import _digits, _fmt_peso, get_stealth_script
 from fretio.models import Cotacao
@@ -22,6 +22,7 @@ class TRDProvider(ProviderBase):
     
     LOGIN_URL = "https://platform.senior.com.br/login/?redirectTo=https%3A%2F%2Fplatform.senior.com.br%2Fsenior-x%2F&tenant=trdtransportes.com"
     COTACAO_URL = "https://platform.senior.com.br/logistica-documentos/tms/documentos-frontend/#/cotacao/adicao"
+    COTACAO_GOTO_TIMEOUT_MS = 60000
     _digits = staticmethod(_digits)
 
     @staticmethod
@@ -468,6 +469,18 @@ class TRDProvider(ProviderBase):
         if not ok:
             raise RuntimeError(self.last_error or "Falha no login TRD")
         return True
+
+    async def _goto_cotacao_tratavel(self) -> None:
+        try:
+            await self._page.goto(
+                self.COTACAO_URL,
+                wait_until='domcontentloaded',
+                timeout=self.COTACAO_GOTO_TIMEOUT_MS,
+            )
+        except PlaywrightTimeoutError as exc:
+            raise RuntimeError(
+                "TRD: timeout de navegação ao abrir cotação Senior; provável instabilidade do portal/rede"
+            ) from exc
 
     async def cleanup(self):
         """Fecha o browser."""
@@ -1510,7 +1523,7 @@ class TRDProvider(ProviderBase):
 
             self._passo_atual = "navegando_cotacao"
             logger.info(f"[{self.nome}] Navegando para cotação...")
-            await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=30000)
+            await self._goto_cotacao_tratavel()
             await self._page.wait_for_timeout(500)
 
             # Verificar se sessão expirou (redirecionou para login ou não carregou o form)
@@ -1541,7 +1554,7 @@ class TRDProvider(ProviderBase):
                 self._page = await self._context.new_page()
                 await self._page.add_init_script(self._STEALTH_JS)
                 _registrar_listener()
-                await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=30000)
+                await self._goto_cotacao_tratavel()
                 await self._page.wait_for_timeout(500)
 
             # ETAPA 1: DADOS DO FRETE

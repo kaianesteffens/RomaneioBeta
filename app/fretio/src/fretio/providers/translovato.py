@@ -546,29 +546,32 @@ class TranslovatoProvider(ProviderBase):
         )
 
         if expected_cep and not detected_zip:
-            raise ValueError(
-                "Portal Translovato não confirmou o CEP de entrega após o CNPJ; "
-                "cotação bloqueada para evitar destino incorreto."
+            logger.warning(
+                "[TRANSLOVATO] Portal não expôs CEP de entrega após CNPJ válido; seguindo com endereço automático. CNPJ=%s",
+                self._mask_doc(expected_receiver),
             )
-        if expected_cep and detected_zip != expected_cep:
-            raise ValueError(
-                "CEP de entrega preenchido pelo portal diverge do romaneio: "
-                f"esperado {expected_cep[:5]}-{expected_cep[5:]}, detectado {detected_zip[:5]}-{detected_zip[5:]}"
+        elif expected_cep and detected_zip != expected_cep:
+            logger.warning(
+                "[TRANSLOVATO] CEP automático do portal diverge do romaneio; seguindo porque CNPJ final está correto. esperado=%s detectado=%s CNPJ=%s",
+                f"{expected_cep[:5]}-***" if len(expected_cep) == 8 else "?",
+                f"{detected_zip[:5]}-***" if len(detected_zip) == 8 else "?",
+                self._mask_doc(expected_receiver),
             )
         if not detected_city and not detected_uf:
-            raise ValueError(
-                "Portal Translovato não confirmou cidade/UF do destino após o CNPJ; "
-                "cotação bloqueada para evitar destino incorreto."
+            logger.warning(
+                "[TRANSLOVATO] Cidade/UF do destino não detectadas com segurança; seguindo com endereço automático do portal. CNPJ=%s",
+                self._mask_doc(expected_receiver),
             )
+            return
         if expected_uf_norm and detected_uf and detected_uf != expected_uf_norm:
             raise ValueError(
                 "UF de entrega preenchida pelo portal diverge do romaneio: "
-                f"esperada {expected_uf_norm}, detectada {detected_uf}"
+                f"esperada {expected_uf_norm}, detectada {detected_uf}."
             )
         if expected_city_norm and detected_city and detected_city != expected_city_norm:
             raise ValueError(
                 "Cidade de entrega preenchida pelo portal diverge do romaneio: "
-                f"esperada {expected_city_norm}, detectada {detected_city}"
+                f"esperada {expected_city_norm}, detectada {detected_city}."
             )
 
     async def _ensure_cubagem_rows(self, desired_rows: int) -> int:
