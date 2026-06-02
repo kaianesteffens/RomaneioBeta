@@ -348,6 +348,13 @@ Arquivos/pastas:
 - `docs/RELEASE.md`
 - `docs/UPDATE.md`
 
+Fluxo atual do workflow `Desktop CI` (`.github/workflows/ci.yml`):
+
+- Dispara em `pull_request` contra `master` e tambem por `workflow_dispatch`, sem filtros de paths.
+- Roda em Linux com Python 3.12, instala dependencias de `installer/requirements.txt`, `requirements-dev.txt` se existir, e `pytest`.
+- Executa `compileall` em `app` e testes raiz, depois `pytest -q` com deselect apenas de testes antigos ja conhecidos que ainda falham fora do escopo do CI inicial.
+- Nao roda build de instalador, Playwright interativo, release, assinatura de update nem exige credenciais reais.
+
 Fluxo atual do workflow `Build and Release Fretio`:
 
 - Execucao manual via `workflow_dispatch` com input obrigatorio `version` (`X.Y` ou `X.Y.Z`).
