@@ -329,6 +329,14 @@ class RodonavesProvider(ProviderBase):
                 raise
         raise RuntimeError(str(last_error) if last_error else f"Falha ao navegar para {target_url}")
 
+    async def _wait_for_quotation_form(self, page: Any, *, timeout: int, success_message: str) -> bool:
+        try:
+            await page.locator("#ReceiverTaxId").wait_for(timeout=timeout)
+            logger.info(f"[{self.nome}] {success_message}")
+            return True
+        except Exception:
+            return False
+
     # ── helpers ────────────────────────────────────────────────────────
 
     async def _simular_interacao_humana(self, page) -> None:
@@ -1278,29 +1286,41 @@ class RodonavesProvider(ProviderBase):
         )
 
         # Verifica se o formulário já está na página atual
-        try:
-            await page.locator("#ReceiverTaxId").wait_for(timeout=3000)
-            logger.info(f"[{self.nome}] Formulário já visível na página atual")
+        if await self._wait_for_quotation_form(
+            page,
+            timeout=3000,
+            success_message="Formulário já visível na página atual",
+        ):
             return
-        except Exception:
-            pass
 
         logger.info(f"[{self.nome}] Navegando para /Quotation... URL atual: {page.url}""")
 
-        page = await self._goto_with_lifecycle_guard(
-            self.PORTAL_URL,
-            stage="navegando_cotacao",
-            wait_until="domcontentloaded",
-            timeout=30000,
-        )
-
-        # Verifica se sessão expirou (redirecionou para home/login)
+        goto_error: Exception | None = None
         try:
-            await page.locator("#ReceiverTaxId").wait_for(timeout=15000)
-            logger.info(f"[{self.nome}] Formulário visível após goto /Quotation")
+            page = await self._goto_with_lifecycle_guard(
+                self.PORTAL_URL,
+                stage="navegando_cotacao",
+                wait_until="commit",
+                timeout=12000,
+                attempts=1,
+            )
+        except Exception as exc:
+            goto_error = exc
+            logger.warning(
+                f"[{self.nome}] goto {self.PORTAL_URL} não confirmou commit imediatamente: {exc}. "
+                "Aguardando formulário da cotação na mesma página..."
+            )
+            page = await self._ensure_live_page_for_navigation(
+                stage="navegando_cotacao",
+                target_url=self.PORTAL_URL,
+            )
+
+        if await self._wait_for_quotation_form(
+            page,
+            timeout=35000,
+            success_message="Formulário visível após goto /Quotation",
+        ):
             return
-        except Exception:
-            pass
 
         # Sessão provavelmente expirou — detecta login modal ou redirect
         # Só tenta re-login se NÃO estamos sendo chamados de dentro do _login()
@@ -1313,6 +1333,11 @@ class RodonavesProvider(ProviderBase):
                 self._logged_in = False
                 await self._login()
                 return
+
+        if goto_error is not None:
+            raise RuntimeError(
+                f"Formulário de cotação não carregou após navegação pendente (URL: {page.url})"
+            ) from goto_error
 
         raise RuntimeError(f"Formulário de cotação não carregou (URL: {page.url})")
 

@@ -88,6 +88,7 @@ from extrator_pedidos import ExtratorPedidos
 from cotacao_transportadoras import (
     CHROME_DOWNLOAD_URL,
     CHROME_MISSING_USER_MESSAGE,
+    carrier_login_indicator_from_progress_payload,
     cotar_transportadoras_romaneio_colado,
     formatar_resultados_cotacao,
     setup_global_exception_handler,
@@ -2786,6 +2787,26 @@ class RomaneioWindow(QMainWindow):
         for dot in getattr(self, "_login_status_dots", {}).values():
             dot.set_status("fail")
 
+    def _set_carrier_login_status(self, nome: str, status: str) -> None:
+        dot = self._login_status_dots.get(nome)
+        if dot is not None:
+            dot.set_status(status)
+        pair = self._home_carrier_info.get(nome)
+        if pair is None:
+            return
+        cr_dot, cr_tag = pair
+        color_map = {
+            "ok": ("#3fb950", "online", "TagGreen"),
+            "fail": ("#f85149", "erro", "TagRed"),
+            "pending": ("#e3b341", "aguardando", "TagAmber"),
+        }
+        color, text, tag_obj = color_map.get(status, ("#768390", "—", "TagAmber"))
+        cr_dot.setStyleSheet(f"border-radius:3px;background:{color};")
+        cr_tag.setText(text)
+        cr_tag.setObjectName(tag_obj)
+        cr_tag.style().unpolish(cr_tag)
+        cr_tag.style().polish(cr_tag)
+
     def _abrir_instalacao_chrome(self) -> None:
         QDesktopServices.openUrl(QUrl(CHROME_DOWNLOAD_URL))
 
@@ -3024,6 +3045,9 @@ class RomaneioWindow(QMainWindow):
             concluidas = int(payload.get("concluidas", 0) or 0)
             resultado = payload.get("resultado")
             self._atualizar_tabela_status_cotacao(payload, fornecedor=is_forn)
+            promoted_login_status = carrier_login_indicator_from_progress_payload(payload)
+            if promoted_login_status is not None:
+                self._set_carrier_login_status(*promoted_login_status)
 
             if total > 0:
                 self._cotacao_total = total
@@ -3054,24 +3078,7 @@ class RomaneioWindow(QMainWindow):
             self.label_info.setText(event.msg)
             self.label_info.setStyleSheet("color: #1f6feb;")
         elif isinstance(event, LoginStatusEvent):
-            dot = self._login_status_dots.get(event.nome)
-            if dot is not None:
-                dot.set_status(event.status)
-            # Atualiza também o card de status no dashboard
-            pair = self._home_carrier_info.get(event.nome)
-            if pair is not None:
-                cr_dot, cr_tag = pair
-                _color_map = {
-                    "ok":      ("#3fb950", "online",     "TagGreen"),
-                    "fail":    ("#f85149", "erro",       "TagRed"),
-                    "pending": ("#e3b341", "aguardando", "TagAmber"),
-                }
-                color, text, tag_obj = _color_map.get(event.status, ("#768390", "—", "TagAmber"))
-                cr_dot.setStyleSheet(f"border-radius:3px;background:{color};")
-                cr_tag.setText(text)
-                cr_tag.setObjectName(tag_obj)
-                cr_tag.style().unpolish(cr_tag)
-                cr_tag.style().polish(cr_tag)
+            self._set_carrier_login_status(event.nome, event.status)
     def _registrar_romaneio(self, arquivo: str) -> None:
         from datetime import date as _date
         destino = (self.pedidos[0].local_entrega or "—") if self.pedidos else "—"
