@@ -74,6 +74,8 @@ class RodonavesProvider(ProviderBase):
         self._chrome_proc = None
         self._active_user_data_dir = ""
         self._passo_atual: str = "inicio"
+        self._diagnostic_context: dict[str, Any] = {}
+        self._force_visible_session = False
 
     @staticmethod
     def _is_retryable_navigation_error(error: BaseException | str) -> bool:
@@ -171,6 +173,14 @@ class RodonavesProvider(ProviderBase):
             f"target_url={target_url}; current_url={self._safe_current_url()}; "
             f"reason={reason}; headless={self._effective_headless}"
         )
+        self._diagnostic_context.update({
+            "rodonaves_stage": stage,
+            "rodonaves_previous_stage": previous_stage or self._passo_atual,
+            "rodonaves_target_url": target_url,
+            "rodonaves_current_url": self._safe_current_url(),
+            "rodonaves_close_reason": reason,
+            "rodonaves_effective_headless": self._effective_headless,
+        })
         if error is not None:
             detail = f"{detail}; error={error}"
         self.last_error = detail
@@ -700,7 +710,7 @@ class RodonavesProvider(ProviderBase):
         """Lanca Chrome e conecta via CDP, com retry + limpeza de perfil em caso de crash."""
         import shutil as _shutil
         chrome_path = find_chrome()
-        requested_headless = bool(self.headless)
+        requested_headless = bool(self.headless) and not bool(self._force_visible_session)
 
         for launch_attempt in range(2):
             launch_headless = requested_headless if launch_attempt == 0 else False
@@ -1021,6 +1031,173 @@ class RodonavesProvider(ProviderBase):
         self._window_id = None
         self._chrome_proc = None
         self._active_user_data_dir = ""
+
+    @staticmethod
+    def _safe_diagnostic_excerpt(value: Any, *, limit: int = 900) -> str:
+        text = str(value or "")
+        text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)
+        text = re.sub(r"(?is)<[^>]+>", " ", text)
+        text = re.sub(r"\b\d{14}\b", "***", text)
+        text = re.sub(r"\b\d{11}\b", "***", text)
+        text = re.sub(r"\b\d{5}-?\d{3}\b", "***", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) > limit:
+            return text[:limit].rstrip() + "..."
+        return text
+
+    def _set_last_error_with_diagnostic(self, message: str, *, stage: str | None = None) -> None:
+        stage_name = stage or self._passo_atual
+        snapshot = self._diagnostic_context.get("rodonaves_snapshot")
+        suffix = ""
+        if isinstance(snapshot, dict):
+            flags = []
+            for key in (
+                "url",
+                "title",
+                "recaptcha_frames",
+                "captcha_token_len",
+                "form_present",
+                "result_present",
+                "alert_excerpt",
+                "body_excerpt",
+            ):
+                value = snapshot.get(key)
+                if value not in (None, "", []):
+                    flags.append(f"{key}={value}")
+            if flags:
+                suffix = " | diagnostico: " + "; ".join(flags[:8])
+        self.last_error = f"{message} (stage={stage_name}; headless={self._effective_headless}){suffix}"
+
+    async def _capture_safe_diagnostic_snapshot(
+        self,
+        *,
+        reason: str,
+        stage: str | None = None,
+        api_result: dict | None = None,
+    ) -> dict[str, Any]:
+        page = self._page
+        snapshot: dict[str, Any] = {
+            "reason": str(reason or "")[:120],
+            "stage": stage or self._passo_atual,
+            "headless": self.headless,
+            "effective_headless": self._effective_headless,
+            "logged_in": self._logged_in,
+        }
+        if page is None:
+            snapshot["page_state"] = "ausente"
+            self._diagnostic_context["rodonaves_snapshot"] = snapshot
+            return snapshot
+        try:
+            snapshot["page_closed"] = bool(page.is_closed())
+        except Exception:
+            snapshot["page_closed"] = None
+        try:
+            snapshot["url"] = str(getattr(page, "url", "") or "")[:240]
+        except Exception:
+            snapshot["url"] = ""
+        if snapshot.get("page_closed"):
+            self._diagnostic_context["rodonaves_snapshot"] = snapshot
+            return snapshot
+        try:
+            snapshot["title"] = self._safe_diagnostic_excerpt(await page.title(), limit=120)
+        except Exception:
+            pass
+        try:
+            dom_state = await page.evaluate(r"""() => {
+                const text = (document.body && document.body.innerText || '').replace(/\s+/g, ' ').trim();
+                const alertText = Array.from(document.querySelectorAll('.alert, .validation-summary-errors, [role="alert"], .field-validation-error'))
+                    .map(el => (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim())
+                    .filter(Boolean)
+                    .join(' | ');
+                const visible = (selector) => {
+                    const el = document.querySelector(selector);
+                    if (!el) return false;
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+                };
+                const captchaToken = document.querySelector('textarea[name="g-recaptcha-response"]');
+                return {
+                    bodyText: text.slice(0, 2500),
+                    alertText: alertText.slice(0, 1000),
+                    formPresent: !!document.querySelector('#ReceiverTaxId'),
+                    calculateButtonPresent: !!document.querySelector('#calculateQuotationBtn'),
+                    calculateButtonVisible: visible('#calculateQuotationBtn'),
+                    resultPresent: !!document.querySelector('td.col-result, #quotationResult'),
+                    recaptchaFrames: document.querySelectorAll('iframe[title*="reCAPTCHA"], iframe[src*="recaptcha"]').length,
+                    captchaTokenLen: captchaToken && captchaToken.value ? captchaToken.value.length : 0,
+                };
+            }""")
+            if isinstance(dom_state, dict):
+                snapshot.update({
+                    "form_present": bool(dom_state.get("formPresent")),
+                    "calculate_button_present": bool(dom_state.get("calculateButtonPresent")),
+                    "calculate_button_visible": bool(dom_state.get("calculateButtonVisible")),
+                    "result_present": bool(dom_state.get("resultPresent")),
+                    "recaptcha_frames": int(dom_state.get("recaptchaFrames") or 0),
+                    "captcha_token_len": int(dom_state.get("captchaTokenLen") or 0),
+                    "alert_excerpt": self._safe_diagnostic_excerpt(dom_state.get("alertText"), limit=500),
+                    "body_excerpt": self._safe_diagnostic_excerpt(dom_state.get("bodyText"), limit=900),
+                })
+        except Exception as exc:
+            snapshot["snapshot_error"] = self._safe_diagnostic_excerpt(exc, limit=180)
+        if api_result:
+            snapshot["api_url"] = str(api_result.get("url") or "")[:240]
+            if "json" in api_result:
+                snapshot["api_kind"] = "json"
+                snapshot["api_excerpt"] = self._safe_diagnostic_excerpt(json.dumps(api_result.get("json"), ensure_ascii=False), limit=700)
+            elif "text" in api_result:
+                snapshot["api_kind"] = "text"
+                snapshot["api_excerpt"] = self._safe_diagnostic_excerpt(api_result.get("text"), limit=700)
+        self._diagnostic_context["rodonaves_snapshot"] = snapshot
+        logger.info(f"[{self.nome}] Diagnóstico seguro Rodonaves ({reason}): {snapshot}")
+        return snapshot
+
+    def _should_retry_visible_after_headless_captcha_failure(self) -> bool:
+        if self._force_visible_session or not self._effective_headless:
+            return False
+        text = str(self.last_error or "").lower()
+        return "recaptcha" in text and "headless" in text
+
+    async def _retry_visible_after_headless_captcha(
+        self,
+        *,
+        origem: str,
+        destino: str,
+        peso: float,
+        valor: float,
+        volumes: int,
+        comprimento_cm: int,
+        largura_cm: int,
+        altura_cm: int,
+        cnpj_remetente: str,
+        cnpj_destinatario: str,
+        cubagens: Optional[list[dict]],
+        preencher_cep_origem: bool,
+    ) -> Optional[Cotacao]:
+        previous_error = self.last_error or "reCAPTCHA pendente em headless"
+        logger.warning(
+            f"[{self.nome}] {previous_error}. Refazendo a cotação em modo visível somente para RODONAVES."
+        )
+        self._diagnostic_context["rodonaves_headless_retry_reason"] = previous_error
+        await self.cleanup()
+        self._force_visible_session = True
+        self._logged_in = False
+        return await self.coteir(
+            origem=origem,
+            destino=destino,
+            peso=peso,
+            valor=valor,
+            volumes=volumes,
+            cubagem_m3=0.0,
+            comprimento_cm=comprimento_cm,
+            largura_cm=largura_cm,
+            altura_cm=altura_cm,
+            cnpj_remetente=cnpj_remetente,
+            cnpj_destinatario=cnpj_destinatario,
+            cubagens=cubagens,
+            preencher_cep_origem=preencher_cep_origem,
+        )
 
     async def _reset_page_for_retry(self, error: Exception) -> None:
         """Recria a página (mas não o browser) para erros transitórios de frame/page."""
@@ -1437,6 +1614,7 @@ class RodonavesProvider(ProviderBase):
     async def _submeter_e_extrair(self) -> Optional[Cotacao]:
         page = self._page
         self.last_error = None
+        await self._capture_safe_diagnostic_snapshot(reason="inicio_submissao", stage="submetendo_cotacao")
 
         # ─── E-mail ───
         try:
@@ -1514,6 +1692,22 @@ class RodonavesProvider(ProviderBase):
 
         self._passo_atual = "aguardando_captcha"
         token = await _captcha_token()
+        recaptcha_frames = 0
+        try:
+            recaptcha_frames = await page.locator("iframe[title*='reCAPTCHA'], iframe[src*='recaptcha']").count()
+        except Exception:
+            recaptcha_frames = 0
+        if not token.strip() and self._effective_headless and recaptcha_frames > 0:
+            await self._capture_safe_diagnostic_snapshot(
+                reason="recaptcha_pendente_headless",
+                stage="aguardando_captcha",
+            )
+            self._set_last_error_with_diagnostic(
+                "Rodonaves: reCAPTCHA pendente em headless; será necessário refazer em modo visível",
+                stage="aguardando_captcha",
+            )
+            logger.warning(f"[{self.nome}] {self.last_error}")
+            return None
         if not token.strip() and not self._effective_headless:
             logger.warning(
                 f"[{self.nome}] reCAPTCHA: resolva manualmente no navegador; aguardando até {self.CAPTCHA_MAX_WAIT_S}s..."
@@ -1622,6 +1816,11 @@ class RodonavesProvider(ProviderBase):
                 await page.wait_for_timeout(250)
             else:
                 logger.warning(f"[{self.nome}] Timeout aguardando resultado (30s)")
+                await self._capture_safe_diagnostic_snapshot(
+                    reason="timeout_aguardando_resultado",
+                    stage="aguardando_resultado_api",
+                    api_result=api_result,
+                )
 
             if api_result:
                 await page.wait_for_timeout(500)
@@ -1688,7 +1887,15 @@ class RodonavesProvider(ProviderBase):
 
                     erro_validacao = re.search(r'Alerta\s*\{.*?"errors".*?\}', body_norm, re.DOTALL)
                     if erro_validacao:
-                        self.last_error = f"Rodonaves: erro de validacao - {erro_validacao.group(0)[:300]}"
+                        await self._capture_safe_diagnostic_snapshot(
+                            reason="erro_validacao_portal",
+                            stage="ler_resultado",
+                            api_result=api_result,
+                        )
+                        self._set_last_error_with_diagnostic(
+                            f"Rodonaves: erro de validacao - {self._safe_diagnostic_excerpt(erro_validacao.group(0), limit=300)}",
+                            stage="ler_resultado",
+                        )
                         logger.error(f"[{self.nome}] {self.last_error}")
                         return None
 
@@ -1748,13 +1955,20 @@ class RodonavesProvider(ProviderBase):
                         break
 
             if valor_frete is None:
-                self.last_error = "Rodonaves: valor de frete nao encontrado no resultado"
+                await self._capture_safe_diagnostic_snapshot(
+                    reason="valor_frete_nao_encontrado",
+                    stage="ler_resultado",
+                    api_result=api_result,
+                )
+                snapshot = self._diagnostic_context.get("rodonaves_snapshot", {})
+                if isinstance(snapshot, dict) and snapshot.get("recaptcha_frames") and not snapshot.get("captcha_token_len"):
+                    msg = "Rodonaves: reCAPTCHA não resolvido ou bloqueio antifraude impediu a cotação"
+                elif api_result:
+                    msg = "Rodonaves: resposta da API/portal recebida, mas valor de frete não foi encontrado"
+                else:
+                    msg = "Rodonaves: portal não retornou resultado de cotação dentro do tempo esperado"
+                self._set_last_error_with_diagnostic(msg, stage="ler_resultado")
                 logger.warning(f"[{self.nome}] {self.last_error}")
-                try:
-                    trecho = await page.inner_text("body")
-                    logger.info(f"[{self.nome}] Trecho body: {(trecho or '')[:1500]}")
-                except Exception:
-                    pass
                 return None
 
             return Cotacao(
@@ -1840,8 +2054,39 @@ class RodonavesProvider(ProviderBase):
                 cep_origem=cep_orig,
             )
             self._passo_atual = "submetendo_cotacao"
-            return await self._submeter_e_extrair()
+            resultado = await self._submeter_e_extrair()
+            if resultado is None and self._should_retry_visible_after_headless_captcha_failure():
+                return await self._retry_visible_after_headless_captcha(
+                    origem=origem,
+                    destino=destino,
+                    peso=peso,
+                    valor=valor,
+                    volumes=volumes,
+                    comprimento_cm=comprimento_cm,
+                    largura_cm=largura_cm,
+                    altura_cm=altura_cm,
+                    cnpj_remetente=cnpj_remetente,
+                    cnpj_destinatario=cnpj_destinatario,
+                    cubagens=cubagens,
+                    preencher_cep_origem=preencher_cep_origem,
+                )
+            return resultado
         except Exception as error:
+            if self._should_retry_visible_after_headless_captcha_failure():
+                return await self._retry_visible_after_headless_captcha(
+                    origem=origem,
+                    destino=destino,
+                    peso=peso,
+                    valor=valor,
+                    volumes=volumes,
+                    comprimento_cm=comprimento_cm,
+                    largura_cm=largura_cm,
+                    altura_cm=altura_cm,
+                    cnpj_remetente=cnpj_remetente,
+                    cnpj_destinatario=cnpj_destinatario,
+                    cubagens=cubagens,
+                    preencher_cep_origem=preencher_cep_origem,
+                )
             self.last_error = str(error)
             logger.error(f"[{self.nome}] Erro na cotação: {error}""")
             # Detectar browser morto e resetar para próxima tentativa
