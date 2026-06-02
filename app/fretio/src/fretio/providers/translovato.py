@@ -79,6 +79,7 @@ class TranslovatoProvider(ProviderBase):
         self._context = None
         self._page = None
         self._logged_in = False
+        self._last_receiver_diagnostic: dict[str, Any] = {}
 
     @staticmethod
     def _mask_doc(value: str) -> str:
@@ -318,6 +319,72 @@ class TranslovatoProvider(ProviderBase):
         except Exception:
             return ""
 
+    async def _receiver_divergence_diagnostic(
+        self,
+        *,
+        stage: str,
+        expected: str,
+        found: str,
+        selector: str | None = None,
+    ) -> dict[str, Any]:
+        raw_city = ""
+        city = ""
+        uf = ""
+        zip_digits = ""
+        autocomplete_present = False
+        try:
+            raw_city, city, uf = await self._read_delivery_city_uf()
+        except Exception:
+            pass
+        try:
+            zip_digits = await self._read_delivery_zip_digits()
+        except Exception:
+            pass
+        try:
+            autocomplete_present = bool(await self._page.evaluate(r"""() => {
+                const visible = (el) => {
+                    if (!el) return false;
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+                };
+                return Array.from(document.querySelectorAll(
+                    '[role="listbox"], [role="option"], .autocomplete, .ui-autocomplete, .select2-results, .dropdown-menu, ul li'
+                )).some(visible);
+            }"""))
+        except Exception:
+            autocomplete_present = False
+        diag = {
+            "stage": str(stage or "")[:80],
+            "expected_masked": self._mask_doc(expected),
+            "found_masked": self._mask_doc(found),
+            "selector": selector or self.RECEIVER_CNPJ_SELECTOR,
+            "autocomplete_present": autocomplete_present,
+            "cep_detected_masked": f"{zip_digits[:5]}-***" if len(zip_digits) == 8 else "",
+            "cidade_detectada": raw_city[:80],
+            "cidade_norm": city[:80],
+            "uf_detectada": uf[:2],
+        }
+        self._last_receiver_diagnostic = diag
+        logger.warning(
+            "[TRANSLOVATO] Diagnóstico divergência CNPJ destinatário: etapa=%s esperado=%s encontrado=%s seletor=%s autocomplete=%s cep=%s cidade_uf=%s",
+            diag["stage"],
+            diag["expected_masked"],
+            diag["found_masked"],
+            diag["selector"],
+            diag["autocomplete_present"],
+            diag["cep_detected_masked"] or "?",
+            diag["cidade_detectada"] or "?",
+        )
+        return diag
+
+    def _receiver_divergence_message(self, *, stage: str, expected: str, found: str) -> str:
+        return (
+            "CNPJ destinatário no portal diverge do romaneio após "
+            f"{stage}: esperado {self._mask_doc(expected)}, encontrado {self._mask_doc(found)}. "
+            "O portal alterou o CNPJ destinatário após blur; cotação bloqueada para evitar destinatário incorreto."
+        )
+
     async def _validate_receiver_cnpj(self, expected: str, *, context: str) -> None:
         found = await self._read_receiver_cnpj_digits()
         logger.info(
@@ -327,10 +394,53 @@ class TranslovatoProvider(ProviderBase):
             self._mask_doc(found),
         )
         if found != expected:
-            raise ValueError(
-                "CNPJ destinatário no portal diverge do romaneio após "
-                f"{context}: esperado {self._mask_doc(expected)}, encontrado {self._mask_doc(found)}"
+            await self._receiver_divergence_diagnostic(
+                stage=context,
+                expected=expected,
+                found=found,
+                selector=self.RECEIVER_CNPJ_SELECTOR,
             )
+            raise ValueError(self._receiver_divergence_message(stage=context, expected=expected, found=found))
+
+    async def _select_receiver_autocomplete_match(self, receiver: str) -> bool:
+        try:
+            return bool(await self._page.evaluate(r"""(expected) => {
+                const digits = (value) => String(value || '').replace(/\D+/g, '');
+                const visible = (el) => {
+                    if (!el) return false;
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+                };
+                const nodes = Array.from(document.querySelectorAll(
+                    '[role="option"], [role="listbox"] *, .autocomplete *, .ui-autocomplete *, .select2-results__option, .dropdown-menu *, ul li'
+                ));
+                const match = nodes.find((el) => visible(el) && digits(el.innerText || el.textContent).includes(expected));
+                if (!match) return false;
+                match.click();
+                return true;
+            }""", receiver))
+        except Exception:
+            return False
+
+    async def _rewrite_receiver_cnpj_fallback(self, receiver: str, *, reason_context: str) -> None:
+        loc = self._page.locator(self.RECEIVER_CNPJ_SELECTOR).first
+        logger.warning(
+            "[TRANSLOVATO] CNPJ destinatário divergente após %s; limpando e preenchendo novamente %s",
+            reason_context,
+            self._mask_doc(receiver),
+        )
+        await loc.fill("")
+        await loc.dispatch_event("input")
+        await loc.dispatch_event("change")
+        await loc.fill(receiver)
+        await loc.dispatch_event("input")
+        await loc.dispatch_event("change")
+        await loc.dispatch_event("blur")
+        await self._page.wait_for_timeout(800)
+        await self._select_receiver_autocomplete_match(receiver)
+        await self._page.wait_for_timeout(700)
+        await self._validate_receiver_cnpj(receiver, context=f"fallback seguro após {reason_context}")
 
     async def _preencher_cnpj_destinatario(self, receiver: str) -> None:
         loc = self._page.locator(self.RECEIVER_CNPJ_SELECTOR).first
@@ -339,7 +449,10 @@ class TranslovatoProvider(ProviderBase):
         await loc.dispatch_event("input")
         await loc.dispatch_event("change")
         await loc.dispatch_event("blur")
-        await self._validate_receiver_cnpj(receiver, context="blur")
+        try:
+            await self._validate_receiver_cnpj(receiver, context="blur")
+        except ValueError:
+            await self._rewrite_receiver_cnpj_fallback(receiver, reason_context="blur")
         await loc.press("Tab")
         await self._page.wait_for_timeout(500)
         await self._validate_receiver_cnpj(receiver, context="tabulação")
