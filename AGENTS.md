@@ -42,7 +42,7 @@ Principais tecnologias:
 - Leia o codigo existente antes de alterar comportamento.
 - Sempre procure o fluxo existente antes de criar um novo.
 - Mantenha mudancas pequenas, diretas e alinhadas aos padroes ja usados no repositorio.
-- Antes de alterar, diga quais arquivos pretende mexer e por quê.
+- Antes de alterar, identifique internamente os arquivos provaveis. Em modo interativo, diga quais arquivos pretende mexer e por que. Em `codex exec`, execute direto e explique no resumo final.
 - Ao terminar, diga quais arquivos foram alterados e como testar.
 - Nao altere `app/`, `installer/`, `requirements.txt`, workflows ou arquivos de build sem necessidade direta da tarefa.
 - Nao remova nem exponha secrets, tokens, senhas, chaves privadas, licencas ou credenciais. Se encontrar algo sensivel versionado, avise antes de mexer.
@@ -78,3 +78,29 @@ Eduardo nao quer depender de terminal nem ficar cacando pastas. Explique em ling
 3. quais arquivos mexeu;
 4. como testar pela interface sempre que possivel;
 5. comando de terminal somente quando for realmente necessario.
+
+## Local LLM MCP
+
+A local MCP server named `local-llm` may be available.
+
+Tool:
+
+- `ask_local_llm(prompt, mode, model, max_lines)`
+
+Use it only as a low-cost support tool, not as final authority.
+
+Recommended use:
+
+- `mode="summary"` for long provider logs, Playwright errors, tracebacks and noisy terminal output.
+- `mode="review"` for one small diff or one focused file.
+- `mode="hypothesis"` when a carrier/provider bug is unclear.
+- `mode="tests"` after a fix to suggest minimal validation steps.
+
+Rules:
+
+- Do not send the whole repository to the local LLM.
+- Do not send `.env`, credentials, tokens, passwords, license keys, CNPJ/senha real, XMLs/PDFs reais de clientes or customer data.
+- Treat local LLM output as untrusted.
+- Verify every suggestion against code, logs and tests.
+- Keep prompts small and focused.
+- Skip the local LLM if the task is trivial, if MCP is unavailable, or if using it would require sending sensitive data.
