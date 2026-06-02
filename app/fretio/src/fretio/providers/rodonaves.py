@@ -75,7 +75,41 @@ class RodonavesProvider(ProviderBase):
         self._active_user_data_dir = ""
         self._passo_atual: str = "inicio"
         self._diagnostic_context: dict[str, Any] = {}
+        self._login_status: dict[str, bool] = {
+            "login_ok": False,
+            "aguardando_captcha": False,
+            "captcha_resolvido": False,
+            "cotacao_ok": False,
+            "login_falhou": False,
+        }
         self._force_visible_session = False
+
+    def _set_login_status(self, state: str, value: bool = True) -> None:
+        """Mantém estados de login/captcha/cotação separados para a UI/orquestrador."""
+        if state not in self._login_status:
+            self._login_status[state] = bool(value)
+        else:
+            self._login_status[state] = bool(value)
+        if state in {"login_ok", "cotacao_ok"} and value:
+            self._logged_in = True
+            self._login_status["login_falhou"] = False
+        if state == "login_falhou" and value and self._login_status.get("cotacao_ok"):
+            self._login_status["login_falhou"] = False
+
+    def _mark_login_failed(self) -> None:
+        if self._login_status.get("cotacao_ok"):
+            return
+        self._logged_in = False
+        self._set_login_status("login_falhou", True)
+        self._login_status["login_ok"] = False
+
+    def _mark_valid_quote(self) -> None:
+        self._set_login_status("login_ok", True)
+        self._set_login_status("cotacao_ok", True)
+
+    @property
+    def login_status(self) -> dict[str, bool]:
+        return dict(self._login_status)
 
     @staticmethod
     def _is_retryable_navigation_error(error: BaseException | str) -> bool:
@@ -1220,7 +1254,7 @@ class RodonavesProvider(ProviderBase):
         except Exception:
             pass
         self._page = None
-        self._logged_in = False
+        self._mark_login_failed()
         if self._context:
             try:
                 self._page = await self._context.new_page()
@@ -1334,6 +1368,7 @@ class RodonavesProvider(ProviderBase):
         }""", {"cpfcnp": login_doc, "password": self.senha})
 
         if not result or not result.get("Success"):
+            self._mark_login_failed()
             error_msg = (
                 (result or {}).get("WarningMessage")
                 or (result or {}).get("ErrorMessage")
@@ -1342,11 +1377,12 @@ class RodonavesProvider(ProviderBase):
             raise RuntimeError(f"Login Rodonaves falhou — {error_msg}")
 
         logger.info(f"[{self.nome}] Login AJAX OK, navegando para cotação...")
+        self._set_login_status("login_ok", True)
 
         # Navega para /Quotation
         await self._navegar_cotacao(_from_login=True)
 
-        self._logged_in = True
+        self._set_login_status("login_ok", True)
         logger.info(f"[{self.nome}] Login OK – formulário visível")
 
     async def pre_login(self):
@@ -1691,6 +1727,7 @@ class RodonavesProvider(ProviderBase):
                 return ""
 
         self._passo_atual = "aguardando_captcha"
+        self._set_login_status("aguardando_captcha", True)
         token = await _captcha_token()
         recaptcha_frames = 0
         try:
@@ -1724,6 +1761,7 @@ class RodonavesProvider(ProviderBase):
         if not self._effective_headless:
             await self._ocultar_janela()
         if token.strip():
+            self._set_login_status("captcha_resolvido", True)
             logger.info(f"[{self.nome}] CAPTCHA resolvido")
         else:
             logger.info(f"[{self.nome}] CAPTCHA nao confirmado, tentando submeter mesmo assim")
@@ -1971,6 +2009,7 @@ class RodonavesProvider(ProviderBase):
                 logger.warning(f"[{self.nome}] {self.last_error}")
                 return None
 
+            self._mark_valid_quote()
             return Cotacao(
                 transportadora=self.nome,
                 prazo_dias=prazo_dias,
@@ -2055,6 +2094,8 @@ class RodonavesProvider(ProviderBase):
             )
             self._passo_atual = "submetendo_cotacao"
             resultado = await self._submeter_e_extrair()
+            if resultado is not None:
+                self._mark_valid_quote()
             if resultado is None and self._should_retry_visible_after_headless_captcha_failure():
                 return await self._retry_visible_after_headless_captcha(
                     origem=origem,
@@ -2088,6 +2129,8 @@ class RodonavesProvider(ProviderBase):
                     preencher_cep_origem=preencher_cep_origem,
                 )
             self.last_error = str(error)
+            if not self._login_status.get("cotacao_ok"):
+                self._mark_login_failed()
             logger.error(f"[{self.nome}] Erro na cotação: {error}""")
             # Detectar browser morto e resetar para próxima tentativa
             browser_morto = False
