@@ -15,6 +15,18 @@ Principais tecnologias:
 - Releases e assets pelo GitHub Actions.
 - Integracao com `RomaneioBeta-server` para licenca, configuracao remota, versao, logs sanitizados, eventos de uso e jobs de cotacao.
 
+## Politica de plataformas
+
+- O produto oficial para cliente continua sendo Windows.
+- O build, instalador, updater, assinatura de update, releases e fluxo de distribuicao oficiais sao Windows por padrao.
+- Linux/Zorin OS pode ser suportado apenas como modo interno de desenvolvimento, depuracao e teste real de providers pelos mantenedores.
+- Linux nao deve virar alvo oficial de produto, instalador de cliente ou release publica sem pedido explicito do Eduardo.
+- Mudancas para Linux devem ser isoladas, opt-in e nunca devem alterar o comportamento padrao do Windows.
+- O modo Linux interno pode ajustar somente itens de ambiente local: caminhos, logs, venv, dependencias do Playwright/Chromium, abertura de navegador visivel e comandos de execucao local.
+- O modo Linux interno nao pode alterar regra de negocio, contrato de provider, calculo de cotacao, licenciamento, updater, API do servidor, workflow de release Windows ou comportamento esperado pelo cliente.
+- Se uma tarefa mencionar Linux sem dizer o contrario, interprete como `Linux dev/test interno`, nao como distribuicao oficial para clientes.
+- Para trabalhos de compatibilidade Linux, documente claramente o que foi feito para Linux e confirme que Windows continua sendo o alvo oficial.
+
 ## Como economizar contexto
 
 - Leia este arquivo primeiro.
@@ -55,6 +67,7 @@ Principais tecnologias:
 - Rode testes focados quando a tarefa tocar codigo.
 - Para mudancas documentais, confirme que os links e caminhos citados existem ou marque como pendente no `PROJECT_MAP.md`.
 - Para mudancas de limpeza documental ou metadados, confirme com `git status` e busca textual que nao sobraram instrucoes ativas de agentes antigos.
+- Para mudancas Linux, confirme que elas sao opt-in, internas de desenvolvimento/teste e que Windows segue como produto oficial.
 
 ## Como responder ao Eduardo
 
