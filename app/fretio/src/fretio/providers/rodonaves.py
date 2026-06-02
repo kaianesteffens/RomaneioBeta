@@ -106,6 +106,13 @@ class RodonavesProvider(ProviderBase):
     def _mark_valid_quote(self) -> None:
         self._set_login_status("login_ok", True)
         self._set_login_status("cotacao_ok", True)
+        self._login_status["login_falhou"] = False
+        if self.last_error and "pre-login" in self.last_error.lower() and "timeout" in self.last_error.lower():
+            logger.info(
+                "[%s] Timeout anterior de pre-login neutralizado após cotação válida",
+                self.nome,
+            )
+            self.last_error = None
 
     @property
     def login_status(self) -> dict[str, bool]:

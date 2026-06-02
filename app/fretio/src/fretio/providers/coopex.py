@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional
 import re
-from playwright.async_api import async_playwright, Page
+from playwright.async_api import async_playwright, Page, TimeoutError as PlaywrightTimeoutError
 from fretio.providers.base import ProviderBase
 from fretio.models import Cotacao
 from fretio.quotation_contract import QuoteRequest, QuoteResponse
@@ -44,6 +44,22 @@ class CoopexProvider(ProviderBase):
         self._playwright = None
         self._logged_in = False
         self._passo_atual: str = "inicio"
+
+    @staticmethod
+    def _is_temporary_network_error(error: Exception | str) -> bool:
+        text = str(error or "").upper()
+        return any(
+            token in text
+            for token in (
+                "ERR_NAME_NOT_RESOLVED",
+                "ERR_CONNECTION",
+                "ERR_TIMED_OUT",
+                "ERR_NETWORK_CHANGED",
+                "ERR_INTERNET_DISCONNECTED",
+                "NET::",
+                "TIMEOUT",
+            )
+        )
 
     async def _init_browser(self):
         """Inicializa browser Playwright."""
@@ -95,8 +111,12 @@ class CoopexProvider(ProviderBase):
             logger.info(f"[{self.nome}] Login OK")
             self._logged_in = True
         except Exception as e:
-            self.last_error = f"Erro no login: {e}"
-            logger.error(f"[{self.nome}] {self.last_error}")
+            if self._is_temporary_network_error(e):
+                self.last_error = f"Erro temporário de rede/DNS no login SSW: {e}"
+                logger.warning(f"[{self.nome}] {self.last_error}")
+            else:
+                self.last_error = f"Erro no login: {e}"
+                logger.error(f"[{self.nome}] {self.last_error}")
             raise
 
     async def pre_login(self):
@@ -156,7 +176,10 @@ class CoopexProvider(ProviderBase):
     async def _navegar_cotacao(self):
         """Navega para a tela de cotação (ssw1608)."""
         self._passo_atual = "navegando_cotacao"
-        await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=60000)
+        try:
+            await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=60000)
+        except PlaywrightTimeoutError as exc:
+            raise RuntimeError("COOPEX: timeout temporário de rede/portal ao abrir tela SSW de cotação") from exc
         await self._page.wait_for_timeout(800)
 
         has_form = await self._page.locator('input[name=f2]').count()
@@ -164,7 +187,10 @@ class CoopexProvider(ProviderBase):
             logger.warning(f"[{self.nome}] Formulário não encontrado, tentando re-login...")
             self._logged_in = False
             await self._login()
-            await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=60000)
+            try:
+                await self._page.goto(self.COTACAO_URL, wait_until='domcontentloaded', timeout=60000)
+            except PlaywrightTimeoutError as exc:
+                raise RuntimeError("COOPEX: timeout temporário de rede/portal ao reabrir tela SSW de cotação") from exc
             await self._page.wait_for_timeout(800)
             has_form = await self._page.locator('input[name=f2]').count()
             if has_form == 0:
@@ -601,7 +627,7 @@ class CoopexProvider(ProviderBase):
                     logger.warning(f"[{self.nome}] XML #{idx+1} capturado ({len(xml)} chars): {xml[:500]}")
             if prazo_str:
                 self.last_error = (
-                    f"Sem valor de frete retornado (prazo={prazo_str!r} encontrado — "
+                    f"Rota não atendida: sem valor de frete retornado (prazo={prazo_str!r} encontrado — "
                     f"rota possivelmente sem precificação automática no SSW)"
                 )
             else:
@@ -698,7 +724,7 @@ class CoopexProvider(ProviderBase):
                                          comprimento_cm, largura_cm, altura_cm,
                                          cnpj_remetente, cnpj_destinatario,
                                          cubagens_cm, cnpj_pagador, tipo_frete)
-            self._passo_atual = "submeter_cotacao"
+            self._passo_atual = "submetendo_cotacao"
             retorno = await self._submeter_e_extrair()
             self._passo_atual = "ler_resultado"
             return retorno

@@ -369,6 +369,11 @@ Cuidados:
 - Mudancas em paths podem quebrar Inno Setup ou update ZIP.
 - Antes de alterar build, verificar impacto no launcher, assets, assinatura e versao.
 
+## Testes locais
+
+- `tests/test_provider_regressions.py`: testes unitarios focados em regressões de providers Playwright sem abrir navegador real; cobre Translovato, RODONAVES, Eucatur, TRD e COOPEX.
+- Para mudanças pontuais em providers, prefira `pytest -q tests/test_provider_regressions.py` antes de rodar a suíte completa.
+
 ## Documentacao existente
 
 - `README.md`: visao geral, stack, fluxo principal e desenvolvimento.
