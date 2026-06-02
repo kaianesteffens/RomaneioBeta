@@ -6,8 +6,10 @@ import pytest
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "app"))
 sys.path.insert(0, str(ROOT / "app" / "fretio" / "src"))
 
+from cotacao.common import ResultadoCotacao, carrier_login_indicator_from_progress_payload
 from fretio.providers.coopex import CoopexProvider
 from fretio.providers.eucatur import EucaturProvider
 from fretio.providers.rodonaves import RodonavesProvider
@@ -86,6 +88,127 @@ def test_rodonaves_valid_quote_neutralizes_prelogin_timeout_status():
     assert provider.login_status["cotacao_ok"] is True
     assert provider.login_status["login_falhou"] is False
     assert provider.last_error is None
+
+
+def test_rodonaves_accepts_form_after_goto_commit_timeout():
+    class Locator:
+        def __init__(self):
+            self.timeouts: list[int] = []
+
+        async def wait_for(self, timeout):
+            self.timeouts.append(timeout)
+            if len(self.timeouts) == 1:
+                raise RuntimeError("form not visible yet")
+            return None
+
+    class Page:
+        def __init__(self):
+            self.url = "https://cliente.rte.com.br/?showLogin=true"
+            self._locator = Locator()
+
+        def locator(self, _selector):
+            return self._locator
+
+    provider = RodonavesProvider("dom", "user", "senha", "12345678000190")
+    page = Page()
+
+    async def ensure_live_page_for_navigation(**_kwargs):
+        return page
+
+    async def goto_with_lifecycle_guard(*_args, **_kwargs):
+        raise PlaywrightTimeoutError("Timeout 12000ms exceeded")
+
+    provider._ensure_live_page_for_navigation = ensure_live_page_for_navigation
+    provider._goto_with_lifecycle_guard = goto_with_lifecycle_guard
+
+    asyncio.run(provider._navegar_cotacao(_from_login=True))
+
+    assert page._locator.timeouts == [3000, 35000]
+
+
+def test_successful_quote_promotes_login_indicator_to_ok():
+    resultado = ResultadoCotacao(
+        transportadora="RODONAVES",
+        status="ok",
+        valor_frete=925.56,
+        prazo_dias=3,
+    )
+
+    assert carrier_login_indicator_from_progress_payload({"resultado": resultado}) == ("RODONAVES", "ok")
+
+
+class _FakeInputLocator:
+    def __init__(self):
+        self.fill_calls: list[str] = []
+        self.dispatched: list[str] = []
+        self.press_calls: list[str] = []
+
+    @property
+    def first(self):
+        return self
+
+    async def wait_for(self, **_kwargs):
+        return None
+
+    async def fill(self, value):
+        self.fill_calls.append(value)
+
+    async def dispatch_event(self, name):
+        self.dispatched.append(name)
+
+    async def press(self, key):
+        self.press_calls.append(key)
+
+
+class _FakeReceiverPage:
+    def __init__(self, locator):
+        self._locator = locator
+
+    def locator(self, _selector):
+        return self._locator
+
+
+def test_translovato_preserves_already_correct_receiver_cnpj():
+    provider = TranslovatoProvider(cnpj="12345678000190", usuario="user", senha="senha")
+    locator = _FakeInputLocator()
+    provider._page = _FakeReceiverPage(locator)
+
+    async def read_receiver():
+        return "12345678000190"
+
+    validated_contexts: list[str] = []
+
+    async def validate_receiver(_expected, *, context):
+        validated_contexts.append(context)
+        return None
+
+    provider._read_receiver_cnpj_digits = read_receiver
+    provider._validate_receiver_cnpj = validate_receiver
+
+    asyncio.run(provider._preencher_cnpj_destinatario("12345678000190"))
+
+    assert locator.fill_calls == []
+    assert locator.press_calls == []
+    assert validated_contexts == ["valor já preenchido"]
+
+
+def test_translovato_calcula_resumo_cubagem_com_fator_padrao():
+    resumo = TranslovatoProvider._calcular_resumo_cubagem(
+        [
+            {
+                "quantidade": 2,
+                "comprimento_cm": 100,
+                "largura_cm": 50,
+                "altura_cm": 40,
+            }
+        ],
+        fator_produto=0,
+    )
+
+    assert resumo["linhas"] == [{"cubagem": "0,4000", "peso_cubado": "120,00"}]
+    assert resumo["total_cubagem"] == "0,4000"
+    assert resumo["total_peso_cubado"] == "120,00"
+    assert resumo["fator_produto"] == 300.0
 
 
 class _CloseRaises:

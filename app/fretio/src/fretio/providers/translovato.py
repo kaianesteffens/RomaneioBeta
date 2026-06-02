@@ -38,6 +38,10 @@ class TranslovatoProvider(ProviderBase):
     HEIGHT_SELECTOR = 'input[name="cubing_height[]"]'
     LENGTH_SELECTOR = 'input[name="cubing_length[]"]'
     DEPTH_SELECTOR = 'input[name="cubing_depth[]"]'
+    CUBING_SELECTOR = 'input[name="cubing[]"]'
+    CUBING_WEIGHT_SELECTOR = 'input[name="cubing_weigth[]"]'
+    CUBING_TOTAL_SELECTOR = 'input[name="cubing_total"]'
+    CUBING_WEIGHT_TOTAL_SELECTOR = 'input[name="cubing_weigth_total"]'
 
     MAIN_SELECTORS = (
         LOGIN_CNPJ_SELECTOR,
@@ -128,6 +132,43 @@ class TranslovatoProvider(ProviderBase):
             meters = 0.0
         text = cls._format_decimal_br(meters, 2)
         return re.sub(r",?0+$", "", text) if "," in text else text
+
+    @classmethod
+    def _calcular_resumo_cubagem(
+        cls,
+        cubagens: list[dict[str, int]],
+        *,
+        fator_produto: float = 300.0,
+    ) -> dict[str, Any]:
+        fator = float(fator_produto or 0.0)
+        if fator <= 0:
+            fator = 300.0
+
+        linhas: list[dict[str, str]] = []
+        total_cubagem = 0.0
+        total_peso_cubado = 0.0
+        for cub in cubagens:
+            qtd = int(cub.get("quantidade", 0) or 0)
+            altura_m = float(cub.get("altura_cm", 0) or 0) / 100.0
+            comprimento_m = float(cub.get("comprimento_cm", 0) or 0) / 100.0
+            largura_m = float(cub.get("largura_cm", 0) or 0) / 100.0
+            cubagem_linha = max(0.0, float(qtd) * altura_m * comprimento_m * largura_m)
+            peso_cubado_linha = max(0.0, cubagem_linha * fator)
+            total_cubagem += cubagem_linha
+            total_peso_cubado += peso_cubado_linha
+            linhas.append(
+                {
+                    "cubagem": cls._format_decimal_br(cubagem_linha, 4),
+                    "peso_cubado": cls._format_decimal_br(peso_cubado_linha, 2),
+                }
+            )
+
+        return {
+            "linhas": linhas,
+            "total_cubagem": cls._format_decimal_br(total_cubagem, 4),
+            "total_peso_cubado": cls._format_decimal_br(total_peso_cubado, 2),
+            "fator_produto": fator,
+        }
 
     @staticmethod
     def _normalizar_cubagens_cm(cubagens: Any, *, volumes: int = 1) -> list[dict[str, int]]:
@@ -311,6 +352,11 @@ class TranslovatoProvider(ProviderBase):
         await loc.fill(str(value))
         await loc.dispatch_event("input")
         await loc.dispatch_event("change")
+        await loc.evaluate(
+            """(el) => {
+                el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Tab' }));
+            }"""
+        )
         await loc.dispatch_event("blur")
 
     async def _read_receiver_cnpj_digits(self) -> str:
@@ -445,6 +491,13 @@ class TranslovatoProvider(ProviderBase):
     async def _preencher_cnpj_destinatario(self, receiver: str) -> None:
         loc = self._page.locator(self.RECEIVER_CNPJ_SELECTOR).first
         await loc.wait_for(state="visible", timeout=12000)
+        if await self._read_receiver_cnpj_digits() == receiver:
+            logger.info(
+                "[TRANSLOVATO] CNPJ destinatário já estava correto no portal; preservando valor automático %s",
+                self._mask_doc(receiver),
+            )
+            await self._validate_receiver_cnpj(receiver, context="valor já preenchido")
+            return
         await loc.fill(receiver)
         await loc.dispatch_event("input")
         await loc.dispatch_event("change")
@@ -613,6 +666,84 @@ class TranslovatoProvider(ProviderBase):
             await self._fill_input(self.DEPTH_SELECTOR, self._cm_to_m_br(cub["largura_cm"]), index=index)
         return detalhes
 
+    async def _read_cubagem_resumo_portal(self) -> dict[str, str]:
+        page = self._page
+        script = r"""() => {
+            const valueOf = (selector, index = 0) => {
+                const nodes = Array.from(document.querySelectorAll(selector));
+                const el = nodes[index];
+                return el ? String(el.value || '').trim() : '';
+            };
+            return {
+                cubagem_linha: valueOf('input[name="cubing[]"]'),
+                peso_cubado_linha: valueOf('input[name="cubing_weigth[]"]'),
+                cubagem_total: valueOf('input[name="cubing_total"]'),
+                peso_cubado_total: valueOf('input[name="cubing_weigth_total"]'),
+            };
+        }"""
+        return dict(await page.evaluate(script) or {})
+
+    async def _fallback_preencher_resumo_cubagem(self, cubagens: list[dict[str, int]]) -> dict[str, Any]:
+        page = self._page
+        factor_script = r"""() => {
+            const factor = document.querySelector('#product-factor');
+            return factor ? String(factor.value || '').trim() : '';
+        }"""
+        factor_raw = str(await page.evaluate(factor_script) or "").replace(",", ".").strip()
+        try:
+            factor = float(factor_raw or 0.0)
+        except Exception:
+            factor = 0.0
+        resumo = self._calcular_resumo_cubagem(cubagens, fator_produto=factor or 300.0)
+        payload = {
+            "linhas": resumo["linhas"],
+            "totalCubagem": resumo["total_cubagem"],
+            "totalPeso": resumo["total_peso_cubado"],
+        }
+        await page.evaluate(
+            r"""(data) => {
+                const setValue = (el, value, key = 'Tab') => {
+                    if (!el) return;
+                    el.value = String(value || '');
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key }));
+                    el.dispatchEvent(new Event('blur', { bubbles: true }));
+                };
+                const cubagemInputs = Array.from(document.querySelectorAll('input[name="cubing[]"]'));
+                const pesoInputs = Array.from(document.querySelectorAll('input[name="cubing_weigth[]"]'));
+                data.linhas.forEach((linha, index) => {
+                    setValue(cubagemInputs[index], linha.cubagem);
+                    setValue(pesoInputs[index], linha.peso_cubado);
+                });
+                setValue(document.querySelector('input[name="cubing_total"]'), data.totalCubagem);
+                setValue(document.querySelector('input[name="cubing_weigth_total"]'), data.totalPeso);
+            }""",
+            payload,
+        )
+        return resumo
+
+    async def _garantir_resumo_cubagem_calculado(self, cubagens: list[dict[str, int]]) -> None:
+        await self._page.wait_for_timeout(700)
+        resumo = await self._read_cubagem_resumo_portal()
+        if any(str(resumo.get(key) or "").strip() not in {"", "0", "0,0", "0,00", "0,000", "0,0000"} for key in ("cubagem_total", "peso_cubado_total")):
+            logger.info(
+                "[TRANSLOVATO] Portal calculou cubagem automaticamente: cubagem_total=%s peso_cubado_total=%s",
+                resumo.get("cubagem_total") or "?",
+                resumo.get("peso_cubado_total") or "?",
+            )
+            return
+
+        fallback = await self._fallback_preencher_resumo_cubagem(cubagens)
+        await self._page.wait_for_timeout(300)
+        resumo_fim = await self._read_cubagem_resumo_portal()
+        logger.warning(
+            "[TRANSLOVATO] Portal não calculou cubagem automaticamente; fallback aplicado. cubagem_total=%s peso_cubado_total=%s fator=%s",
+            resumo_fim.get("cubagem_total") or fallback.get("total_cubagem") or "?",
+            resumo_fim.get("peso_cubado_total") or fallback.get("total_peso_cubado") or "?",
+            fallback.get("fator_produto") or "?",
+        )
+
     async def _preencher_formulario(
         self,
         *,
@@ -651,6 +782,7 @@ class TranslovatoProvider(ProviderBase):
         await self._fill_input(self.VALUE_SELECTOR, self._format_decimal_br(valor, 2))
         await self._fill_input(self.WEIGHT_SELECTOR, self._format_decimal_br(peso, 3))
         detalhes = await self._preencher_cubagens(cubagens)
+        await self._garantir_resumo_cubagem_calculado(cubagens)
         await self._validate_receiver_cnpj(receiver, context="preenchimento final da cotação")
         return detalhes
 

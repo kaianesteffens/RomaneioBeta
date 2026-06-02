@@ -369,6 +369,27 @@ def provider_progress_from_resultado(
         resultado=resultado,
     )
 
+
+def carrier_login_indicator_from_progress_payload(payload: dict[str, Any] | None) -> tuple[str, str] | None:
+    """Promove o indicador visual para OK quando uma cotação já voltou válida."""
+    if not isinstance(payload, dict):
+        return None
+
+    resultado = payload.get("resultado")
+    provider = str(payload.get("provider") or "").strip().upper()
+    if not provider and isinstance(resultado, ResultadoCotacao):
+        provider = str(getattr(resultado, "transportadora", "") or "").strip().upper()
+    if not provider:
+        return None
+
+    if isinstance(resultado, ResultadoCotacao) and str(getattr(resultado, "status", "") or "").strip().lower() == "ok":
+        return provider, "ok"
+
+    if normalize_provider_progress_status(payload.get("status")) == "finalizada":
+        return provider, "ok"
+
+    return None
+
 def _base_dir() -> Path:
     return Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 
