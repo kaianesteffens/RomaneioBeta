@@ -1395,10 +1395,10 @@ class RomaneioWindow(QMainWindow):
         kpi_grid.setHorizontalSpacing(10)
         kpi_grid.setVerticalSpacing(10)
         _kpi_data = [
-            ("ROMANEIOS HOJE", "0",  "nesta sessão",       "KpiValueAccent"),
-            ("VOLUME TOTAL",   "0",  "pacotes",             "KpiValue"),
-            ("MELHOR FRETE",   "—",  "da última cotação",   "KpiValueGreen"),
-            ("TAXA SUCESSO",   "—",  "da última cotação",   "KpiValueAmber"),
+            ("ROMANEIOS", "0", "processados nesta sessão", "KpiValueAccent"),
+            ("VOLUMES", "0", "volumes processados", "KpiValue"),
+            ("MELHOR FRETE", "—", "inicie uma cotação", "KpiValueGreen"),
+            ("SUCESSO COTAÇÃO", "—", "aguardando retorno", "KpiValueAmber"),
         ]
         self._kpi_value_labels: list[QLabel] = []
         self._kpi_sub_labels: list[QLabel] = []
@@ -1438,11 +1438,11 @@ class RomaneioWindow(QMainWindow):
         rh_layout.setContentsMargins(14, 10, 14, 10)
         rh_lbl = QLabel("ROMANEIOS RECENTES")
         rh_lbl.setObjectName("SectionLabel")
-        rh_link = QLabel("ver todos →")
-        rh_link.setObjectName("LinkLabel")
+        rh_context = QLabel("sessão atual")
+        rh_context.setObjectName("SectionHint")
         rh_layout.addWidget(rh_lbl)
         rh_layout.addStretch(1)
-        rh_layout.addWidget(rh_link)
+        rh_layout.addWidget(rh_context)
         recentes_vlayout.addWidget(rh)
 
         sep_rh = QFrame(); sep_rh.setFrameShape(QFrame.HLine); sep_rh.setObjectName("SidebarSep")
@@ -1472,9 +1472,12 @@ class RomaneioWindow(QMainWindow):
         carr_lbl = QLabel("STATUS DAS TRANSPORTADORAS")
         carr_lbl.setObjectName("SectionLabel")
         carr_vlayout.addWidget(carr_lbl)
+        carr_hint = QLabel("Mostra apenas transportadoras habilitadas para cotação.")
+        carr_hint.setObjectName("SectionHint")
+        carr_hint.setWordWrap(True)
+        carr_vlayout.addWidget(carr_hint)
 
         self._home_carrier_info: dict[str, tuple[QFrame, QLabel]] = {}
-        _tag_styles = {"ok": "TagGreen", "fail": "TagRed", "pending": "TagAmber"}
         for nome in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex"):
             _tcfg = transp_cfg.get(nome, {}) if isinstance(transp_cfg, dict) else {}
             if not _tcfg.get("habilitado", False):
@@ -1495,6 +1498,14 @@ class RomaneioWindow(QMainWindow):
             cr_layout.addWidget(cr_tag)
             carr_vlayout.addWidget(cr_row)
             self._home_carrier_info[nome] = (cr_dot, cr_tag)
+
+        if not self._home_carrier_info:
+            carr_vlayout.addWidget(
+                self._criar_estado_vazio_dashboard(
+                    "Nenhuma transportadora habilitada",
+                    "Abra Configurações e habilite as transportadoras que serão usadas nas cotações.",
+                )
+            )
 
         right_col_layout.addWidget(carr_card)
         right_col_layout.addStretch(1)
@@ -2300,6 +2311,10 @@ class RomaneioWindow(QMainWindow):
             #KpiValueAmber {{ font-size: 28px; font-weight: 700; color: {c_amber}; letter-spacing: -0.03em; }}
             #KpiSub {{ font-size: 11px; color: {c_muted}; }}
             #SectionLabel {{ font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: {c_muted}; }}
+            #SectionHint {{ font-size: 11px; color: {c_faint}; }}
+            #DashboardEmpty {{ background: {c_panel2}; border: 1px dashed {c_border}; border-radius: 8px; }}
+            #DashboardEmptyTitle {{ font-size: 12px; font-weight: 700; color: {c_ink2}; }}
+            #DashboardEmptyText {{ font-size: 11px; color: {c_muted}; }}
             #LinkLabel {{ font-size: 11px; font-weight: 500; color: {c_accent}; }}
             #SoftSep {{ background: {c_border_soft}; border: none; max-height: 1px; }}
             #TableMono {{ font-family: 'JetBrains Mono'; font-size: 11px; color: {c_faint}; }}
@@ -3248,39 +3263,67 @@ class RomaneioWindow(QMainWindow):
             "volumes": len(self.pedidos),
         })
 
+    def _criar_estado_vazio_dashboard(self, titulo: str, texto: str) -> QFrame:
+        box = QFrame()
+        box.setObjectName("DashboardEmpty")
+        box_layout = QVBoxLayout(box)
+        box_layout.setContentsMargins(12, 10, 12, 10)
+        box_layout.setSpacing(3)
+
+        title_label = QLabel(titulo)
+        title_label.setObjectName("DashboardEmptyTitle")
+        title_label.setWordWrap(True)
+        text_label = QLabel(texto)
+        text_label.setObjectName("DashboardEmptyText")
+        text_label.setWordWrap(True)
+
+        box_layout.addWidget(title_label)
+        box_layout.addWidget(text_label)
+        return box
+
+    @staticmethod
+    def _formatar_moeda_dashboard(valor: float) -> str:
+        moeda = f"R$ {valor:,.2f}"
+        return moeda.replace(",", "_").replace(".", ",").replace("_", ".")
+
     def _atualizar_dashboard(self) -> None:
         if not hasattr(self, '_kpi_value_labels'):
             return
 
-        # KPI 0: romaneios
         total_rom = len(self._romaneios_processados)
         self._kpi_value_labels[0].setText(str(total_rom))
+        self._kpi_sub_labels[0].setText(
+            "processado nesta sessão" if total_rom == 1 else "processados nesta sessão"
+        )
 
-        # KPI 1: volumes
-        total_vol = sum(r["volumes"] for r in self._romaneios_processados)
+        total_vol = sum(int(r.get("volumes", 0) or 0) for r in self._romaneios_processados)
         self._kpi_value_labels[1].setText(str(total_vol))
+        self._kpi_sub_labels[1].setText(
+            "volume processado" if total_vol == 1 else "volumes processados"
+        )
 
-        # KPI 2 e 3: baseados na última cotação
         ok_results = [
             r for r in self._last_cotacao_results
-            if r.status == "ok" and r.valor_frete is not None
+            if getattr(r, "status", "") == "ok" and getattr(r, "valor_frete", None) is not None
         ]
         if ok_results:
-            melhor = min(r.valor_frete for r in ok_results)
-            self._kpi_value_labels[2].setText(f"R$ {melhor:.2f}")
+            melhor = min(float(r.valor_frete) for r in ok_results)
+            self._kpi_value_labels[2].setText(self._formatar_moeda_dashboard(melhor))
+            self._kpi_sub_labels[2].setText("menor valor da última cotação")
         else:
             self._kpi_value_labels[2].setText("—")
+            self._kpi_sub_labels[2].setText("inicie uma cotação")
 
         total_cot = len(self._last_cotacao_results)
         ok_cot = len(ok_results)
         if total_cot > 0:
             pct = round(ok_cot / total_cot * 100)
             self._kpi_value_labels[3].setText(f"{pct}%")
-            self._kpi_sub_labels[3].setText(f"{ok_cot} de {total_cot} cotações")
+            self._kpi_sub_labels[3].setText(f"{ok_cot} de {total_cot} transportadoras")
         else:
             self._kpi_value_labels[3].setText("—")
+            self._kpi_sub_labels[3].setText("aguardando retorno")
 
-        # Tabela recentes: limpar e reconstruir
         layout = self._recentes_body_layout
         while layout.count():
             item = layout.takeAt(0)
@@ -3289,26 +3332,31 @@ class RomaneioWindow(QMainWindow):
                 w.deleteLater()
 
         if not self._romaneios_processados:
-            ph = QLabel("Nenhum romaneio processado nesta sessão")
-            ph.setObjectName("KpiSub")
-            ph.setContentsMargins(14, 12, 14, 12)
-            layout.addWidget(ph)
+            layout.addWidget(
+                self._criar_estado_vazio_dashboard(
+                    "Nenhum romaneio processado nesta sessão",
+                    "Selecione um PDF de romaneio para preencher esta lista e atualizar os indicadores acima.",
+                )
+            )
             return
 
-        rows = list(reversed(self._romaneios_processados))
+        rows = list(reversed(self._romaneios_processados))[:6]
         for i, r in enumerate(rows):
             row_w = QWidget()
             rw_layout = QHBoxLayout(row_w)
             rw_layout.setContentsMargins(14, 9, 14, 9)
             rw_layout.setSpacing(10)
-            ld = QLabel(r["data"])
+            ld = QLabel(str(r.get("data") or "—"))
             ld.setObjectName("TableMono")
-            ld.setFixedWidth(36)
-            ln = QLabel(r["nome"])
+            ld.setFixedWidth(42)
+            ln = QLabel(str(r.get("nome") or "—"))
             ln.setObjectName("TableMono2")
-            lde = QLabel(r["destino"])
+            ln.setToolTip(str(r.get("nome") or ""))
+            lde = QLabel(str(r.get("destino") or "—"))
             lde.setObjectName("TableText")
-            lv = QLabel(f'{r["volumes"]}v')
+            lde.setToolTip(str(r.get("destino") or ""))
+            volumes = int(r.get("volumes", 0) or 0)
+            lv = QLabel(f"{volumes} vol.")
             lv.setObjectName("TableMono")
             lv.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             rw_layout.addWidget(ld)
@@ -3321,6 +3369,13 @@ class RomaneioWindow(QMainWindow):
                 sep_r.setFrameShape(QFrame.HLine)
                 sep_r.setObjectName("SoftSep")
                 layout.addWidget(sep_r)
+
+        ocultos = len(self._romaneios_processados) - len(rows)
+        if ocultos > 0:
+            resumo = QLabel(f"+ {ocultos} romaneio(s) anterior(es) nesta sessão")
+            resumo.setObjectName("SectionHint")
+            resumo.setContentsMargins(14, 8, 14, 10)
+            layout.addWidget(resumo)
 
     def _formatar_linha_progresso(self, resultado: ResultadoCotacao) -> str:
         nome = (resultado.transportadora or "GERAL").strip().upper()
