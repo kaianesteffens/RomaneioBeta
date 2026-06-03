@@ -1538,8 +1538,8 @@ class RomaneioWindow(QMainWindow):
         btn_row_pdf.addStretch(1)
         tab_pdf_layout.addLayout(btn_row_pdf)
 
-        self.btn_quote_colado = QPushButton("Cotar frete")
-        self.btn_quote_colado.setObjectName("SecondaryButton")
+        self.btn_quote_colado = QPushButton("Iniciar cotação")
+        self.btn_quote_colado.setObjectName("PrimaryButton")
         self.btn_quote_colado.setEnabled(False)
         self.btn_quote_colado.clicked.connect(self._cotar_romaneio_colado)
 
@@ -1552,10 +1552,16 @@ class RomaneioWindow(QMainWindow):
         left_card = QFrame()
         left_card.setObjectName("Card")
         left_layout = QVBoxLayout(left_card)
-        left_layout.setContentsMargins(12, 12, 12, 12)
-        left_layout.setSpacing(8)
-        lbl_colado = QLabel("Cole aqui seu romaneio:")
-        lbl_colado.setObjectName("SubtitleLabel")
+        left_layout.setContentsMargins(14, 14, 14, 14)
+        left_layout.setSpacing(10)
+        lbl_colado = QLabel("1. Cole ou revise o romaneio")
+        lbl_colado.setObjectName("CotacaoCardTitle")
+        lbl_colado_desc = QLabel("Use o texto processado do PDF ou cole o romaneio completo antes de iniciar.")
+        lbl_colado_desc.setObjectName("SubtitleLabel")
+        lbl_colado_desc.setWordWrap(True)
+        self.cotacao_input_hint = QLabel("Aguardando romaneio para liberar a cotação.")
+        self.cotacao_input_hint.setObjectName("CotacaoHintLabel")
+        self.cotacao_input_hint.setWordWrap(True)
         self.romaneio_colado_text = QPlainTextEdit()
         self.romaneio_colado_text.setObjectName("InputText")
         self.romaneio_colado_text.setPlaceholderText(
@@ -1568,8 +1574,14 @@ class RomaneioWindow(QMainWindow):
         )
         self.romaneio_colado_text.textChanged.connect(self._atualizar_estado_romaneio_colado)
         left_layout.addWidget(lbl_colado)
+        left_layout.addWidget(lbl_colado_desc)
         left_layout.addWidget(self.romaneio_colado_text, 1)
+        left_layout.addWidget(self.cotacao_input_hint)
         left_layout.addWidget(self.btn_quote_colado, 0, Qt.AlignLeft)
+        self.cotacao_run_status = QLabel("Pronto para cotar assim que houver romaneio.")
+        self.cotacao_run_status.setObjectName("CotacaoStatusLabel")
+        self.cotacao_run_status.setWordWrap(True)
+        left_layout.addWidget(self.cotacao_run_status)
         self.progress_bar = IndeterminateBar()
         self.progress_bar.setVisible(False)
         left_layout.addWidget(self.progress_bar)
@@ -1578,11 +1590,11 @@ class RomaneioWindow(QMainWindow):
         right_card = QFrame()
         right_card.setObjectName("Card")
         right_layout = QVBoxLayout(right_card)
-        right_layout.setContentsMargins(12, 12, 12, 12)
-        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(14, 14, 14, 14)
+        right_layout.setSpacing(10)
         result_header = QHBoxLayout()
-        lbl_resultado = QLabel("Resultado da cotação:")
-        lbl_resultado.setObjectName("SubtitleLabel")
+        lbl_resultado = QLabel("2. Acompanhe e leia o resultado")
+        lbl_resultado.setObjectName("CotacaoCardTitle")
         btn_copiar_result = QPushButton("Copiar")
         btn_copiar_result.setObjectName("MiniButton")
         btn_copiar_result.setFixedWidth(70)
@@ -1594,8 +1606,13 @@ class RomaneioWindow(QMainWindow):
         self.result_text.setReadOnly(True)
         self.result_text.setObjectName("ResultText")
         self.result_text.setPlainText("")
+        self.result_text.setPlaceholderText("O resultado calculado pelas transportadoras aparecerá aqui.")
+        self.cotacao_summary_label = QLabel("Nenhuma cotação iniciada nesta tela.")
+        self.cotacao_summary_label.setObjectName("CotacaoSummaryLabel")
+        self.cotacao_summary_label.setWordWrap(True)
         self.cotacao_status_table = self._criar_tabela_status_cotacao()
         right_layout.addLayout(result_header)
+        right_layout.addWidget(self.cotacao_summary_label)
         right_layout.addWidget(self.cotacao_status_table, 0)
         right_layout.addWidget(self.result_text, 1)
 
@@ -2272,6 +2289,10 @@ class RomaneioWindow(QMainWindow):
             #FooterLabel {{ font-size: 11px; color: {c_muted}; }}
             #Card {{ background: {c_panel}; border: 1px solid {c_border}; border-radius: 8px; }}
             #SubtitleLabel {{ font-size: 12px; color: {c_muted}; }}
+            #CotacaoCardTitle {{ font-size: 15px; font-weight: 700; color: {c_ink}; }}
+            #CotacaoHintLabel {{ background: {c_panel2}; color: {c_muted}; border: 1px solid {c_border}; border-radius: 7px; padding: 7px 9px; font-size: 12px; }}
+            #CotacaoStatusLabel {{ color: {c_muted}; font-size: 12px; font-weight: 600; }}
+            #CotacaoSummaryLabel {{ background: {c_accent2}; color: {c_ink2}; border: 1px solid {c_accent_border}; border-radius: 8px; padding: 8px 10px; font-size: 12px; font-weight: 600; }}
             #KpiLabel {{ font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: {c_muted}; }}
             #KpiValue {{ font-size: 28px; font-weight: 700; color: {c_ink}; letter-spacing: -0.03em; }}
             #KpiValueAccent {{ font-size: 28px; font-weight: 700; color: {c_accent}; letter-spacing: -0.03em; }}
@@ -2285,8 +2306,8 @@ class RomaneioWindow(QMainWindow):
             #TableMono2 {{ font-family: 'JetBrains Mono'; font-size: 11px; color: {c_ink2}; }}
             #TableText {{ font-size: 12px; color: {c_muted}; }}
             #TableMonoBold {{ font-family: 'JetBrains Mono'; font-size: 13px; font-weight: 600; color: {c_ink}; }}
-            #CotacaoStatusTable {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 8px; gridline-color: {c_border_soft}; font-size: 11px; }}
-            #CotacaoStatusTable::item {{ padding: 4px; }}
+            #CotacaoStatusTable {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 8px; gridline-color: {c_border_soft}; font-size: 12px; }}
+            #CotacaoStatusTable::item {{ padding: 5px; }}
             #CotacaoStatusTable::item:selected {{ background: {c_accent2}; color: {c_ink}; }}
             #CotacaoStatusTable QHeaderView::section {{ background: {c_panel3}; color: {c_muted}; border: none; border-bottom: 1px solid {c_border}; padding: 5px 7px; font-size: 10px; font-weight: 700; }}
             #CarrierRowName {{ font-family: 'JetBrains Mono'; font-size: 12px; color: {c_ink2}; }}
@@ -2548,11 +2569,24 @@ class RomaneioWindow(QMainWindow):
 
     def _atualizar_estado_romaneio_colado(self):
         texto = (self.romaneio_colado_text.toPlainText() or "").strip()
-        self.btn_quote_colado.setEnabled(bool(texto))
+        pronto = bool(texto)
+        self.btn_quote_colado.setEnabled(pronto)
+        if hasattr(self, "cotacao_input_hint"):
+            if pronto:
+                linhas = len([linha for linha in texto.splitlines() if linha.strip()])
+                self.cotacao_input_hint.setText(
+                    f"Romaneio preenchido com {linhas} linha(s). Confira os dados e clique em Iniciar cotação."
+                )
+            else:
+                self.cotacao_input_hint.setText("Aguardando romaneio para liberar a cotação.")
+        if hasattr(self, "cotacao_run_status") and (not hasattr(self, "progress_bar") or not self.progress_bar.isVisible()):
+            self.cotacao_run_status.setText(
+                "Pronto para iniciar." if pronto else "Pronto para cotar assim que houver romaneio."
+            )
 
     def _criar_tabela_status_cotacao(self) -> QTableWidget:
         table = QTableWidget(0, 5)
-        table.setHorizontalHeaderLabels(["Transportadora", "Status", "Etapa", "Mensagem", "Tempo"])
+        table.setHorizontalHeaderLabels(["Transportadora", "Situação", "Etapa", "Mensagem", "Tempo"])
         table.setObjectName("CotacaoStatusTable")
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setSelectionMode(QAbstractItemView.NoSelection)
@@ -2575,6 +2609,66 @@ class RomaneioWindow(QMainWindow):
         rows = self._forn_cotacao_status_rows if fornecedor else self._cotacao_status_rows
         rows.clear()
         table.setRowCount(0)
+        if not fornecedor and hasattr(self, "cotacao_summary_label"):
+            self.cotacao_summary_label.setText("Cotação iniciada. As transportadoras aparecerão conforme o fluxo avançar.")
+
+    def _resumir_progresso_cotacao(self, total: int, concluidas: int, resultado: Any = None) -> str:
+        if total <= 0:
+            return "Preparando transportadoras para cotação."
+        pendentes = max(0, total - concluidas)
+        if concluidas >= total:
+            return f"Cotação finalizada: {concluidas} de {total} transportadora(s) concluída(s)."
+        if isinstance(resultado, ResultadoCotacao):
+            nome = (resultado.transportadora or "Transportadora").strip().upper()
+            return f"{nome} respondeu. Faltam {pendentes} de {total} transportadora(s)."
+        return f"Cotando: {concluidas} de {total} transportadora(s) concluída(s)."
+
+    def _rotulos_status_cotacao(self, status: str, mensagem: str, resultado: Any = None) -> tuple[str, str, str]:
+        raw_status = str(status or "").strip().lower()
+        result_status = str(getattr(resultado, "status", "") or "").strip().lower() if isinstance(resultado, ResultadoCotacao) else ""
+        mensagem_lower = str(mensagem or "").lower()
+        if result_status == "ok":
+            status_key = "ok"
+        elif result_status in {"sem_cotacao", "sem cotacao", "sem cotação"} or "sem cot" in mensagem_lower:
+            status_key = "sem_cotacao"
+        elif result_status == "nao_atendido" or raw_status == "nao_atendido":
+            status_key = "nao_atendido"
+        elif result_status == "desabilitada" or raw_status == "desabilitada":
+            status_key = "desabilitada"
+        elif "configura" in result_status or "configura" in mensagem_lower:
+            status_key = "configuracao"
+        elif raw_status in {"login", "cotando", "aguardando"}:
+            status_key = raw_status
+        elif raw_status == "finalizada":
+            status_key = "finalizada"
+        else:
+            status_key = "erro" if raw_status == "erro" or result_status else (raw_status or "aguardando")
+
+        labels = {
+            "aguardando": "Aguardando",
+            "login": "Acessando portal",
+            "cotando": "Cotando",
+            "finalizada": "Concluída",
+            "ok": "Sucesso",
+            "sem_cotacao": "Sem cotação",
+            "nao_atendido": "Não atende",
+            "desabilitada": "Indisponível",
+            "configuracao": "Configuração",
+            "erro": "Erro",
+        }
+        colors = {
+            "aguardando": "#6b7280",
+            "login": "#1f6feb",
+            "cotando": "#1f6feb",
+            "finalizada": "#067647",
+            "ok": "#067647",
+            "sem_cotacao": "#b54708",
+            "nao_atendido": "#b54708",
+            "desabilitada": "#6b7280",
+            "configuracao": "#b54708",
+            "erro": "#b42318",
+        }
+        return status_key, labels.get(status_key, labels["aguardando"]), colors.get(status_key, "#344054")
 
     def _atualizar_tabela_status_cotacao(self, payload: dict[str, Any], *, fornecedor: bool = False) -> None:
         provider = str(payload.get("provider") or "").strip().upper()
@@ -2606,18 +2700,10 @@ class RomaneioWindow(QMainWindow):
             if duration_ms is None:
                 duration_ms = resultado.duration_ms
 
-        status_label = {
-            "aguardando": "Aguardando",
-            "login": "Login",
-            "cotando": "Cotando",
-            "finalizada": "Finalizada",
-            "erro": "Erro",
-            "desabilitada": "Desabilitada",
-            "nao_atendido": "Não atendida",
-        }.get(status, status or "Aguardando")
+        status_key, status_label, color = self._rotulos_status_cotacao(status, mensagem, resultado)
         stage_label = {
             "aguardando": "Aguardando",
-            "login": "Login",
+            "login": "Acesso",
             "cotacao": "Cotação",
             "resultado": "Resultado",
             "finalizado": "Finalizada",
@@ -2628,6 +2714,17 @@ class RomaneioWindow(QMainWindow):
         if not mensagem:
             mensagem = status_label
         mensagem = re.sub(r"\s+", " ", mensagem).strip()
+        mensagem_lower = mensagem.lower()
+        if status_key == "configuracao":
+            mensagem = "Configuração incompleta"
+        elif status_key == "sem_cotacao":
+            mensagem = "Sem cotação retornada"
+        elif status_key == "nao_atendido":
+            mensagem = "UF não atendida"
+        elif status_key == "desabilitada":
+            mensagem = "Transportadora indisponível pela licença/configuração"
+        elif "timeout" in mensagem_lower:
+            mensagem = "Tempo limite aguardando resultado"
         if len(mensagem) > 160:
             mensagem = mensagem[:157] + "..."
 
@@ -2639,16 +2736,6 @@ class RomaneioWindow(QMainWindow):
             tempo = ""
 
         values = [provider, status_label, stage_label, mensagem, tempo]
-        status_colors = {
-            "aguardando": "#6b7280",
-            "login": "#1f6feb",
-            "cotando": "#1f6feb",
-            "finalizada": "#067647",
-            "erro": "#b42318",
-            "desabilitada": "#6b7280",
-            "nao_atendido": "#b54708",
-        }
-        color = status_colors.get(status, "#344054")
         for col, value in enumerate(values):
             item = table.item(row, col)
             if item is None:
@@ -2675,7 +2762,11 @@ class RomaneioWindow(QMainWindow):
         self._resetar_tabela_status_cotacao(fornecedor=False)
         self.progress_bar.setVisible(True)
         self.progress_bar.start_anim()
-        self.result_text.setPlainText("Iniciando cotações...\nAguardando primeiras respostas...")
+        self.result_text.setPlainText("Cotação em andamento. As respostas serão listadas aqui conforme cada transportadora finalizar.")
+        if hasattr(self, "cotacao_run_status"):
+            self.cotacao_run_status.setText("Cotação em andamento. Aguarde as respostas das transportadoras.")
+        if hasattr(self, "cotacao_summary_label"):
+            self.cotacao_summary_label.setText("Preparando transportadoras para cotação.")
         self._show_page(2)
         self.label_info.setText("Executando cotações de transportadoras...")
         self.label_info.setStyleSheet("color: #1f6feb;")
@@ -2800,7 +2891,7 @@ class RomaneioWindow(QMainWindow):
         self._resetar_tabela_status_cotacao(fornecedor=True)
         self.forn_progress_bar.setVisible(True)
         self.forn_progress_bar.start_anim()
-        self.forn_result_text.setPlainText("Iniciando cota\u00e7\u00f5es...\nAguardando primeiras respostas...")
+        self.forn_result_text.setPlainText("Cotação em andamento. As respostas serão listadas conforme cada transportadora finalizar.")
         self.label_info.setText("Cotando frete fornecedor...")
         self.label_info.setStyleSheet("color: #1f6feb;")
         self._run_async_cotacao()
@@ -3082,10 +3173,24 @@ class RomaneioWindow(QMainWindow):
             _result.setPlainText(event.result)
             if not is_forn:
                 self._show_page(2)
+                if hasattr(self, "cotacao_summary_label"):
+                    total = len(getattr(self, "_last_cotacao_results", []) or [])
+                    ok_count = len([
+                        r for r in getattr(self, "_last_cotacao_results", []) or []
+                        if getattr(r, "status", "") == "ok" and getattr(r, "valor_frete", None) is not None
+                    ])
+                    if total > 0:
+                        self.cotacao_summary_label.setText(
+                            f"Resultado final: {ok_count} de {total} transportadora(s) com cotação válida."
+                        )
+                    else:
+                        self.cotacao_summary_label.setText("Cotação finalizada sem retorno de transportadoras.")
+                if hasattr(self, "cotacao_run_status"):
+                    self.cotacao_run_status.setText("Cotação finalizada. Confira o resultado ao lado.")
             if event.result == CHROME_MISSING_USER_MESSAGE:
                 self._mostrar_chrome_ausente()
             else:
-                self.label_info.setText("Cota\u00e7\u00f5es finalizadas")
+                self.label_info.setText("Cotações finalizadas")
                 self.label_info.setStyleSheet("color: #067647;")
             self._verificar_erro_divergencia_uf(event.result)
         elif isinstance(event, CotacaoProgressEvent):
@@ -3102,6 +3207,11 @@ class RomaneioWindow(QMainWindow):
                 self._cotacao_total = total
                 self._cotacao_concluidas = concluidas
             if total > 0:
+                resumo_progresso = self._resumir_progresso_cotacao(total, concluidas, resultado)
+                if not is_forn and hasattr(self, "cotacao_summary_label"):
+                    self.cotacao_summary_label.setText(resumo_progresso)
+                if not is_forn and hasattr(self, "cotacao_run_status"):
+                    self.cotacao_run_status.setText(resumo_progresso)
                 if concluidas < total:
                     self.label_info.setText(f"Cotando transportadoras... {concluidas}/{total}")
                     self.label_info.setStyleSheet("color: #1f6feb;")
