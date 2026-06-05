@@ -6,6 +6,7 @@ import os
 import re
 import socket
 import subprocess
+import time
 from playwright.async_api import async_playwright
 from fretio.providers.base import ProviderBase, find_chrome, _find_free_port, _kill_proc, _register_owned_proc
 from fretio.providers._win_taskbar import (
@@ -44,6 +45,14 @@ class RodonavesProvider(ProviderBase):
     CAPTCHA_MAX_WAIT_S = 45
     _digits = staticmethod(_digits)
 
+    @property
+    def portal_entry_url(self) -> str:
+        return self.login_url or f"{self.BASE_URL}/?showLogin=true"
+
+    @property
+    def quotation_url(self) -> str:
+        return self.cotacao_url or self.PORTAL_URL
+
     def __init__(
         self,
         dominio: str,
@@ -62,7 +71,7 @@ class RodonavesProvider(ProviderBase):
         self.login_url = str(login_url or "").strip()
         self.cotacao_url = str(cotacao_url or "").strip()
         self.headless = bool(headless)
-        self._effective_headless = bool(headless)
+        self._effective_headless = False
         self.last_error: str | None = None
         self._browser = None
         self._context = None
@@ -75,6 +84,7 @@ class RodonavesProvider(ProviderBase):
         self._active_user_data_dir = ""
         self._passo_atual: str = "inicio"
         self._diagnostic_context: dict[str, Any] = {}
+        self._stage_started_at: float | None = None
         self._login_status: dict[str, bool] = {
             "login_ok": False,
             "aguardando_captcha": False,
@@ -82,7 +92,6 @@ class RodonavesProvider(ProviderBase):
             "cotacao_ok": False,
             "login_falhou": False,
         }
-        self._force_visible_session = False
 
     def _set_login_status(self, state: str, value: bool = True) -> None:
         """Mantém estados de login/captcha/cotação separados para a UI/orquestrador."""
@@ -95,6 +104,18 @@ class RodonavesProvider(ProviderBase):
             self._login_status["login_falhou"] = False
         if state == "login_falhou" and value and self._login_status.get("cotacao_ok"):
             self._login_status["login_falhou"] = False
+
+    def _start_stage(self, stage: str) -> float:
+        self._passo_atual = stage
+        started_at = time.monotonic()
+        self._stage_started_at = started_at
+        logger.info("[%s] Etapa iniciada: %s", self.nome, stage)
+        return started_at
+
+    def _finish_stage(self, stage: str, started_at: float, *, details: str = "") -> None:
+        elapsed = time.monotonic() - started_at
+        suffix = f" ({details})" if details else ""
+        logger.info("[%s] Etapa concluída: %s em %.2fs%s", self.nome, stage, elapsed, suffix)
 
     def _mark_login_failed(self) -> None:
         if self._login_status.get("cotacao_ok"):
@@ -330,12 +351,207 @@ class RodonavesProvider(ProviderBase):
         raise RuntimeError(str(last_error) if last_error else f"Falha ao navegar para {target_url}")
 
     async def _wait_for_quotation_form(self, page: Any, *, timeout: int, success_message: str) -> bool:
+        deadline = time.monotonic() + max(timeout, 0) / 1000
+        while True:
+            receiver_visible = await self._locator_looks_ready(page, "#ReceiverTaxId")
+            destination_visible = await self._locator_looks_ready(page, "#destinationZipCode")
+            calculate_visible = await self._locator_looks_ready(page, "#calculateQuotationBtn")
+            if calculate_visible and (receiver_visible or destination_visible):
+                logger.info(f"[{self.nome}] {success_message}")
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            if hasattr(page, "wait_for_timeout"):
+                await page.wait_for_timeout(250)
+            else:
+                await asyncio.sleep(0.25)
+
+    async def _locator_looks_ready(self, page: Any, selector: str) -> bool:
+        locator = page.locator(selector)
+        is_visible = getattr(locator, "is_visible", None)
+        if callable(is_visible):
+            try:
+                return bool(await is_visible(timeout=250))
+            except TypeError:
+                try:
+                    return bool(await is_visible())
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        count = getattr(locator, "count", None)
+        if callable(count):
+            try:
+                if int(await count()) <= 0:
+                    return False
+            except Exception:
+                pass
+        wait_for = getattr(locator, "wait_for", None)
+        if callable(wait_for):
+            try:
+                await wait_for(timeout=250)
+                return True
+            except Exception:
+                return False
+        return False
+
+    async def _has_login_prompt(self, page: Any) -> bool:
+        return await self._locator_looks_ready(page, "#cpfcnp")
+
+    async def _open_portal_entrypoint(self):
+        target_url = self.portal_entry_url
+        page = await self._ensure_live_page_for_navigation(
+            stage="abrindo_portal",
+            target_url=target_url,
+        )
+        if await self._wait_for_quotation_form(
+            page,
+            timeout=1000,
+            success_message="Formulário de cotação já visível no entrypoint",
+        ):
+            return page
+
+        last_error: Exception | None = None
+        for candidate_url in (target_url, self.BASE_URL):
+            try:
+                page = await self._goto_with_lifecycle_guard(
+                    candidate_url,
+                    stage="abrindo_portal",
+                    wait_until="domcontentloaded",
+                    timeout=15000,
+                    attempts=1,
+                )
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    f"[{self.nome}] Entry point {candidate_url} não carregou de forma limpa: {exc}"
+                )
+                page = await self._ensure_live_page_for_navigation(
+                    stage="abrindo_portal",
+                    target_url=candidate_url,
+                )
+            if await self._wait_for_quotation_form(
+                page,
+                timeout=3000,
+                success_message=f"Entry point {candidate_url} abriu direto a cotação",
+            ):
+                return page
+            if await self._has_login_prompt(page):
+                logger.info(f"[{self.nome}] Entry point carregado com tela de login: {candidate_url}")
+                return page
+
+        if last_error is not None:
+            raise RuntimeError(
+                f"Entry point Rodonaves não carregou corretamente (URL: {self._safe_current_url()})"
+            ) from last_error
+        raise RuntimeError(
+            f"Entry point Rodonaves não exibiu login nem formulário de cotação (URL: {self._safe_current_url()})"
+        )
+
+    async def _perform_ajax_login(self, page: Any) -> None:
+        logger.info(f"[{self.nome}] Iniciando login...")
+        for _jquery_attempt in range(2):
+            try:
+                await page.wait_for_function(
+                    "typeof jQuery !== 'undefined' && typeof jQuery.ajax === 'function'",
+                    timeout=10000,
+                )
+                break
+            except Exception:
+                if _jquery_attempt == 0:
+                    logger.warning(f"[{self.nome}] jQuery não carregou, recarregando página...")
+                    try:
+                        await page.reload(wait_until="domcontentloaded", timeout=10000)
+                    except Exception:
+                        pass
+                    continue
+                raise RuntimeError(f"Login Rodonaves falhou — jQuery não carregou (URL: {page.url})")
+
+        login_doc = self._digits(self.usuario) or self._digits(self.dominio) or self.cnpj_pagador
+        logger.info(f"[{self.nome}] Login AJAX com doc={login_doc[:4]}***{login_doc[-2:]}")
+
+        result = await page.evaluate("""({cpfcnp, password}) => {
+            return new Promise((resolve) => {
+                const root = typeof rootPath !== 'undefined' ? rootPath : '';
+                jQuery.ajax({
+                    type: "POST",
+                    url: root + "/CustomerAccount/LogIn",
+                    dataType: "json",
+                    contentType: "application/json; charset=utf-8",
+                    data: JSON.stringify({ Cpfcnp: cpfcnp, Password: password }),
+                    success: function(r) { resolve(r); },
+                    error: function(xhr, status, err) {
+                        resolve({ Success: false, ErrorMessage: err || status || 'AJAX error' });
+                    }
+                });
+            });
+        }""", {"cpfcnp": login_doc, "password": self.senha})
+
+        if not result or not result.get("Success"):
+            self._mark_login_failed()
+            error_msg = (
+                (result or {}).get("WarningMessage")
+                or (result or {}).get("ErrorMessage")
+                or "resposta inesperada do servidor"
+            )
+            raise RuntimeError(f"Login Rodonaves falhou — {error_msg}")
+
+        self._set_login_status("login_ok", True)
+
+    async def _go_to_quotation_after_login(self):
+        """Vai para a cotação após login e aceita sucesso por elementos reais do formulário."""
+        quotation_url = self.quotation_url
+        page = await self._ensure_live_page_for_navigation(
+            stage="navegando_cotacao",
+            target_url=quotation_url,
+        )
+
+        if await self._wait_for_quotation_form(
+            page,
+            timeout=3000,
+            success_message="Formulário já visível após login",
+        ):
+            return page
+
+        logger.info(f"[{self.nome}] Navegando para cotação... URL atual: {page.url}")
+
+        goto_error: Exception | None = None
         try:
-            await page.locator("#ReceiverTaxId").wait_for(timeout=timeout)
-            logger.info(f"[{self.nome}] {success_message}")
-            return True
-        except Exception:
-            return False
+            page = await self._goto_with_lifecycle_guard(
+                quotation_url,
+                stage="navegando_cotacao",
+                wait_until="commit",
+                timeout=12000,
+                attempts=1,
+            )
+        except Exception as exc:
+            goto_error = exc
+            logger.warning(
+                f"[{self.nome}] goto {quotation_url} não confirmou commit imediatamente: {exc}. "
+                "Aguardando formulário da cotação na mesma página..."
+            )
+            page = await self._ensure_live_page_for_navigation(
+                stage="navegando_cotacao",
+                target_url=quotation_url,
+            )
+
+        if await self._wait_for_quotation_form(
+            page,
+            timeout=35000,
+            success_message="Formulário visível após navegação da cotação",
+        ):
+            return page
+
+        current_url = (getattr(page, "url", "") or "").lower()
+        if await self._has_login_prompt(page) or "showlogin" in current_url:
+            raise RuntimeError(
+                f"Cotação Rodonaves voltou para login/entrypoint sem formulário (URL: {page.url})"
+            )
+        if goto_error is not None:
+            raise RuntimeError(
+                f"Formulário de cotação não carregou após navegação pendente (URL: {page.url})"
+            ) from goto_error
+        raise RuntimeError(f"Formulário de cotação não carregou (URL: {page.url})")
 
     # ── helpers ────────────────────────────────────────────────────────
 
@@ -379,8 +595,9 @@ class RodonavesProvider(ProviderBase):
 
     async def _fill_field(self, page, field_id: str, value: str) -> None:
         """Fill campo por ID via Playwright, com fallback JS se overlay bloquear."""
+        timeout_ms = 1200 if self._effective_headless else 5000
         try:
-            await page.locator(f"#{field_id}").fill(value, timeout=5000)
+            await page.locator(f"#{field_id}").fill(value, timeout=timeout_ms)
         except Exception:
             logger.warning(f"[{self.nome}] fill #{field_id} bloqueado, usando JS")
             await page.evaluate(
@@ -516,8 +733,8 @@ class RodonavesProvider(ProviderBase):
 
     @staticmethod
     def _user_data_dir() -> str:
-        """Diretório persistente para cache do navegador (evita redownload)."""
-        base = os.path.join(os.path.expanduser("~"), ".fretio", "browser_data")
+        """Diretório persistente exclusivo da Rodonaves para a sessão CDP."""
+        base = os.path.join(os.path.expanduser("~"), ".fretio", "rodonaves_browser_data")
         os.makedirs(base, exist_ok=True)
         return base
 
@@ -745,6 +962,7 @@ class RodonavesProvider(ProviderBase):
             if self._chrome_proc and self._chrome_proc.poll() is not None:
                 if self._has_live_browser_session():
                     logger.info(f"[{self.nome}] Launcher saiu, mas sessão CDP segue ativa; reutilizando browser")
+                    await self._ocultar_janela()
                     return
                 logger.warning(f"[{self.nome}] Chrome process morreu (exit={self._chrome_proc.returncode}), reinicializando...")
                 await self.cleanup()
@@ -752,28 +970,21 @@ class RodonavesProvider(ProviderBase):
                 logger.warning(f"[{self.nome}] Browser desconectado, reinicializando...")
                 await self.cleanup()
             else:
+                await self._ocultar_janela()
                 return
         await self._init_browser_inner()
 
     async def _init_browser_inner(self):
-        """Lanca Chrome e conecta via CDP, com retry + limpeza de perfil em caso de crash."""
+        """Lanca Chrome headful/off-screen e conecta via CDP na mesma sessao persistente."""
         import shutil as _shutil
         chrome_path = find_chrome()
-        requested_headless = bool(self.headless) and not bool(self._force_visible_session)
 
         for launch_attempt in range(2):
-            launch_headless = requested_headless if launch_attempt == 0 else False
             port = _find_free_port()
-
-            if launch_headless:
-                import tempfile
-                self._profile_tmp = tempfile.mkdtemp(prefix="fretio_rodo_")
-                udd = self._profile_tmp
-            else:
-                udd = self._user_data_dir()
-                self._kill_stale_chrome(udd)
-                self._fix_preferences(udd)
-                self._profile_tmp = None
+            udd = self._user_data_dir()
+            self._kill_stale_chrome(udd)
+            self._fix_preferences(udd)
+            self._profile_tmp = None
 
             launch_args = [
                 chrome_path,
@@ -783,22 +994,17 @@ class RodonavesProvider(ProviderBase):
                 "--no-default-browser-check",
                 "--no-sandbox",
                 "--disable-blink-features=AutomationControlled",
+                "--window-position=-32000,-32000",
+                "--window-size=1920,1080",
+                "--disable-session-crashed-bubble",
+                "--disable-features=InfiniteSessionRestore",
+                "--hide-crash-restore-bubble",
+                "--noerrdialogs",
+                "--disable-infobars",
+                "--enable-features=NetworkService,NetworkServiceInProcess",
+                "--disable-features=IsolateOrigins,site-per-process,TranslateUI",
+                "--disable-component-extensions-with-background-pages",
             ]
-            if launch_headless:
-                launch_args.append("--headless=new")
-            else:
-                launch_args.extend([
-                    "--window-position=-3000,-3000",
-                    "--window-size=1920,1080",
-                    "--disable-session-crashed-bubble",
-                    "--disable-features=InfiniteSessionRestore",
-                    "--hide-crash-restore-bubble",
-                    "--noerrdialogs",
-                    "--disable-infobars",
-                    "--enable-features=NetworkService,NetworkServiceInProcess",
-                    "--disable-features=IsolateOrigins,site-per-process,TranslateUI",
-                    "--disable-component-extensions-with-background-pages",
-                ])
 
             self._chrome_proc = subprocess.Popen(
                 launch_args,
@@ -824,28 +1030,15 @@ class RodonavesProvider(ProviderBase):
                     break
 
             if chrome_ok:
-                self._effective_headless = launch_headless
+                self._effective_headless = False
                 self._active_user_data_dir = udd
-                break  # Chrome iniciou OK, sai do loop de retry
+                break
 
-            # Chrome crashou -- tenta limpar perfil e relancar
             exit_code = self._chrome_proc.returncode if self._chrome_proc.poll() is not None else None
             _kill_proc(self._chrome_proc)
             self._chrome_proc = None
 
-            if launch_attempt == 0 and launch_headless:
-                logger.warning(
-                    f"[{self.nome}] Chrome headless saiu com exit {exit_code}; "
-                    "tentando relançar em modo visível..."
-                )
-                try:
-                    _shutil.rmtree(udd, ignore_errors=True)
-                except Exception:
-                    pass
-                await asyncio.sleep(0.5)
-                continue
-
-            if launch_attempt == 0 and not launch_headless:
+            if launch_attempt == 0:
                 logger.warning(
                     f"[{self.nome}] Chrome crashou (exit {exit_code}), "
                     f"limpando perfil e tentando novamente..."
@@ -866,12 +1059,12 @@ class RodonavesProvider(ProviderBase):
         for _attempt in range(3):
             try:
                 self._playwright = await async_playwright().start()
-                self._browser = await self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}""")
+                self._browser = await self._playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
                 logger.info(f"[{self.nome}] Chrome conectado via CDP porta {port} (headless={self._effective_headless})")
                 break
             except Exception as e:
                 last_err = e
-                logger.warning(f"[{self.nome}] CDP tentativa {_attempt+1}/3 falhou: {e}""")
+                logger.warning(f"[{self.nome}] CDP tentativa {_attempt+1}/3 falhou: {e}")
                 try:
                     if self._playwright:
                         await self._playwright.stop()
@@ -882,7 +1075,7 @@ class RodonavesProvider(ProviderBase):
                     await asyncio.sleep(1 + _attempt)
         else:
             _kill_proc(self._chrome_proc)
-            raise RuntimeError(f"Falha ao conectar CDP apos 3 tentativas: {last_err}""")
+            raise RuntimeError(f"Falha ao conectar CDP apos 3 tentativas: {last_err}")
 
         self._context = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context(
             viewport={"width": 1920, "height": 1080},
@@ -892,24 +1085,18 @@ class RodonavesProvider(ProviderBase):
         await self._sync_active_page()
         if self._page is None:
             self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
-        if not self._effective_headless:
-            # Forca janela off-screen via CDP (--window-position pode ser ignorado pelo persistent context)
-            try:
-                self._cdp_session = await self._context.new_cdp_session(self._page)
-                resp = await self._cdp_session.send("Browser.getWindowForTarget")
-                self._window_id = resp.get("windowId")
-                if self._window_id:
-                    await self._cdp_session.send("Browser.setWindowBounds", {
-                        "windowId": self._window_id,
-                        "bounds": {"windowState": "normal"},
-                    })
-                    await self._cdp_session.send("Browser.setWindowBounds", {
-                        "windowId": self._window_id,
-                        "bounds": {"left": -3000, "top": -3000, "width": 1920, "height": 1080},
-                    })
-            except Exception as e:
-                logger.debug(f"[{self.nome}] Falha ao mover janela off-screen via CDP: {e}""")
-            await ocultar_taskbar_por_pagina(self._page)
+        try:
+            self._cdp_session = await self._context.new_cdp_session(self._page)
+            resp = await self._cdp_session.send("Browser.getWindowForTarget")
+            self._window_id = resp.get("windowId")
+            if self._window_id:
+                await self._cdp_session.send("Browser.setWindowBounds", {
+                    "windowId": self._window_id,
+                    "bounds": {"left": -32000, "top": -32000, "width": 1920, "height": 1080},
+                })
+        except Exception as e:
+            logger.debug(f"[{self.nome}] Falha ao mover janela off-screen via CDP: {e}")
+        await ocultar_taskbar_por_pagina(self._page)
         # Stealth script: injetar em todas as paginas (funciona tambem para persistent context)
         await self._context.add_init_script(_STEALTH_JS)
         # Injetar no primeiro page ja existente (add_init_script so afeta navegacoes futuras)
@@ -922,49 +1109,20 @@ class RodonavesProvider(ProviderBase):
         """Move a janela para coordenadas fora da tela (invisível)."""
         try:
             await self._sync_active_page()
-            moved = False
             if not self._cdp_session:
                 self._cdp_session = await self._context.new_cdp_session(self._page)
             if not self._window_id:
                 resp = await self._cdp_session.send("Browser.getWindowForTarget")
                 self._window_id = resp.get("windowId")
             if self._window_id:
-                # Primeiro tira do modo maximizado (necessário para reposicionar)
                 await self._cdp_session.send("Browser.setWindowBounds", {
                     "windowId": self._window_id,
-                    "bounds": {"windowState": "normal"},
-                })
-                # Move para fora da tela com tamanho grande (página renderiza normalmente)
-                await self._cdp_session.send("Browser.setWindowBounds", {
-                    "windowId": self._window_id,
-                    "bounds": {"left": -3000, "top": -3000, "width": 1920, "height": 1080},
+                    "bounds": {"left": -32000, "top": -32000, "width": 1920, "height": 1080},
                 })
                 logger.debug(f"[{self.nome}] Janela movida off-screen")
-                moved = True
-            if not moved:
-                moved = await self._reposicionar_janela_win32(
-                    left=-3000,
-                    top=-3000,
-                    width=1920,
-                    height=1080,
-                    bring_to_front=False,
-                )
-                if moved:
-                    logger.debug(f"[{self.nome}] Janela movida off-screen via Win32")
             await ocultar_taskbar_por_pagina(self._page)
         except Exception as e:
-            moved = await self._reposicionar_janela_win32(
-                left=-3000,
-                top=-3000,
-                width=1920,
-                height=1080,
-                bring_to_front=False,
-            )
-            if moved:
-                logger.debug(f"[{self.nome}] Janela movida off-screen via Win32 após falha CDP")
-                await ocultar_taskbar_por_pagina(self._page)
-                return
-            logger.warning(f"[{self.nome}] Falha ao ocultar janela: {e}""")
+            logger.warning(f"[{self.nome}] Falha ao ocultar janela: {e}")
 
     async def _mostrar_janela(self):
         """Mostra janela compacta centralizada na tela, só para o CAPTCHA."""
@@ -996,10 +1154,20 @@ class RodonavesProvider(ProviderBase):
                     "windowId": self._window_id,
                     "bounds": {"left": left, "top": top, "width": w, "height": h},
                 })
-                # Traz a janela para frente de todas as outras
                 await self._page.bring_to_front()
+                await ocultar_taskbar_por_pagina(self._page)
+                moved = await posicionar_janela_por_pagina(
+                    self._page,
+                    left=left,
+                    top=top,
+                    width=w,
+                    height=h,
+                    bring_to_front=True,
+                )
                 await trazer_janela_frente(self._page)
-                logger.debug(f"[{self.nome}] Janela compacta (CAPTCHA) visível em ({left},{top}) tela {screen_w}x{screen_h}""")
+                logger.debug(
+                    f"[{self.nome}] Janela compacta (CAPTCHA) visível em ({left},{top}) tela {screen_w}x{screen_h}"
+                )
                 shown = True
 
             # Scroll para o captcha/botão Calcular ficar visível
@@ -1014,7 +1182,7 @@ class RodonavesProvider(ProviderBase):
             except Exception:
                 pass
         except Exception as e:
-            logger.warning(f"[{self.nome}] Falha ao mostrar janela via CDP: {e}""")
+            logger.warning(f"[{self.nome}] Falha ao mostrar janela via CDP: {e}")
 
         if shown:
             return True
@@ -1035,7 +1203,8 @@ class RodonavesProvider(ProviderBase):
             bring_to_front=True,
         )
         if shown:
-            logger.debug(f"[{self.nome}] Janela compacta (CAPTCHA) visível via Win32 em ({left},{top}) tela {screen_w}x{screen_h}""")
+            await ocultar_taskbar_por_pagina(self._page)
+            logger.debug(f"[{self.nome}] Janela compacta (CAPTCHA) visível via Win32 em ({left},{top}) tela {screen_w}x{screen_h}")
             return True
         return False
 
@@ -1063,10 +1232,10 @@ class RodonavesProvider(ProviderBase):
             pass
         # Marca sessão como limpa para evitar "Restaurar páginas?" na próxima abertura
         try:
-            self._fix_preferences(self._user_data_dir())
+            profile_dir = self._active_user_data_dir or self._user_data_dir()
+            self._fix_preferences(profile_dir)
         except Exception:
             pass
-        # Limpa perfil temporario (headless)
         if getattr(self, "_profile_tmp", None):
             import shutil as _shutil
             _shutil.rmtree(self._profile_tmp, ignore_errors=True)
@@ -1202,52 +1371,6 @@ class RodonavesProvider(ProviderBase):
         logger.info(f"[{self.nome}] Diagnóstico seguro Rodonaves ({reason}): {snapshot}")
         return snapshot
 
-    def _should_retry_visible_after_headless_captcha_failure(self) -> bool:
-        if self._force_visible_session or not self._effective_headless:
-            return False
-        text = str(self.last_error or "").lower()
-        return "recaptcha" in text and "headless" in text
-
-    async def _retry_visible_after_headless_captcha(
-        self,
-        *,
-        origem: str,
-        destino: str,
-        peso: float,
-        valor: float,
-        volumes: int,
-        comprimento_cm: int,
-        largura_cm: int,
-        altura_cm: int,
-        cnpj_remetente: str,
-        cnpj_destinatario: str,
-        cubagens: Optional[list[dict]],
-        preencher_cep_origem: bool,
-    ) -> Optional[Cotacao]:
-        previous_error = self.last_error or "reCAPTCHA pendente em headless"
-        logger.warning(
-            f"[{self.nome}] {previous_error}. Refazendo a cotação em modo visível somente para RODONAVES."
-        )
-        self._diagnostic_context["rodonaves_headless_retry_reason"] = previous_error
-        await self.cleanup()
-        self._force_visible_session = True
-        self._logged_in = False
-        return await self.coteir(
-            origem=origem,
-            destino=destino,
-            peso=peso,
-            valor=valor,
-            volumes=volumes,
-            cubagem_m3=0.0,
-            comprimento_cm=comprimento_cm,
-            largura_cm=largura_cm,
-            altura_cm=altura_cm,
-            cnpj_remetente=cnpj_remetente,
-            cnpj_destinatario=cnpj_destinatario,
-            cubagens=cubagens,
-            preencher_cep_origem=preencher_cep_origem,
-        )
-
     async def _reset_page_for_retry(self, error: Exception) -> None:
         """Recria a página (mas não o browser) para erros transitórios de frame/page."""
         err_str = str(error).lower()
@@ -1279,143 +1402,45 @@ class RodonavesProvider(ProviderBase):
     # ── login ──────────────────────────────────────────────────────────
 
     async def _navegar_cotacao(self, _from_login: bool = False):
-        """Navega para /Quotation e aguarda o formulário ficar visível."""
-        page = await self._ensure_live_page_for_navigation(
-            stage="navegando_cotacao",
-            target_url=self.PORTAL_URL,
-        )
-
-        # Verifica se o formulário já está na página atual
-        if await self._wait_for_quotation_form(
-            page,
-            timeout=3000,
-            success_message="Formulário já visível na página atual",
-        ):
+        """Navegação pós-login para a cotação; nunca inicia sessão nova em /Quotation."""
+        if not _from_login and not self._logged_in:
+            await self._login()
             return
-
-        logger.info(f"[{self.nome}] Navegando para /Quotation... URL atual: {page.url}""")
-
-        goto_error: Exception | None = None
-        try:
-            page = await self._goto_with_lifecycle_guard(
-                self.PORTAL_URL,
-                stage="navegando_cotacao",
-                wait_until="commit",
-                timeout=12000,
-                attempts=1,
-            )
-        except Exception as exc:
-            goto_error = exc
-            logger.warning(
-                f"[{self.nome}] goto {self.PORTAL_URL} não confirmou commit imediatamente: {exc}. "
-                "Aguardando formulário da cotação na mesma página..."
-            )
-            page = await self._ensure_live_page_for_navigation(
-                stage="navegando_cotacao",
-                target_url=self.PORTAL_URL,
-            )
-
-        if await self._wait_for_quotation_form(
-            page,
-            timeout=35000,
-            success_message="Formulário visível após goto /Quotation",
-        ):
-            return
-
-        # Sessão provavelmente expirou — detecta login modal ou redirect
-        # Só tenta re-login se NÃO estamos sendo chamados de dentro do _login()
-        # para evitar recursão infinita: _login → _navegar_cotacao → _login → ...
-        if not _from_login:
-            url_atual = page.url.lower()
-            tem_login = await page.locator("#cpfcnp").count() > 0
-            if tem_login or "showlogin" in url_atual or "/quotation" not in url_atual:
-                logger.warning(f"[{self.nome}] Sessão expirada (URL: {page.url}), refazendo login...")
-                self._logged_in = False
-                await self._login()
-                return
-
-        if goto_error is not None:
-            raise RuntimeError(
-                f"Formulário de cotação não carregou após navegação pendente (URL: {page.url})"
-            ) from goto_error
-
-        raise RuntimeError(f"Formulário de cotação não carregou (URL: {page.url})")
+        await self._go_to_quotation_after_login()
 
     async def _login(self):
         if self._logged_in:
             return
-        login_url = self.login_url or f"{self.BASE_URL}/?showLogin=true"
-        page = await self._ensure_live_page_for_navigation(
-            stage="login",
-            target_url=login_url,
-        )
-        logger.info(f"[{self.nome}] Iniciando login...")
-
-        # Acessa página de login para estabelecer sessão/cookies
-        page = await self._goto_with_lifecycle_guard(
-            login_url,
-            stage="login",
-            wait_until="domcontentloaded",
-            timeout=15000,
-        )
-
-        # Aguarda jQuery estar disponível (necessário para o AJAX)
-        for _jquery_attempt in range(2):
+        last_error: Exception | None = None
+        for attempt in range(2):
             try:
-                await page.wait_for_function(
-                    "typeof jQuery !== 'undefined' && typeof jQuery.ajax === 'function'",
-                    timeout=10000,
-                )
-                break
-            except Exception:
-                if _jquery_attempt == 0:
-                    logger.warning(f"[{self.nome}] jQuery não carregou, recarregando página...")
-                    try:
-                        await page.reload(wait_until="domcontentloaded", timeout=10000)
-                    except Exception:
-                        pass
+                page = await self._open_portal_entrypoint()
+                if not await self._wait_for_quotation_form(
+                    page,
+                    timeout=1000,
+                    success_message="Formulário visível sem precisar reenviar login",
+                ):
+                    await self._perform_ajax_login(page)
+                    logger.info(f"[{self.nome}] Login AJAX OK, confirmando sessão e indo para cotação...")
+                else:
+                    self._set_login_status("login_ok", True)
+
+                await self._go_to_quotation_after_login()
+                self._set_login_status("login_ok", True)
+                logger.info(f"[{self.nome}] Login OK – formulário visível")
+                return
+            except Exception as exc:
+                last_error = exc
+                self._mark_login_failed()
+                if attempt == 0:
+                    logger.warning(
+                        f"[{self.nome}] Fluxo pós-login/cotação falhou ({exc}). "
+                        "Reabrindo a entrada inicial do portal e tentando mais uma vez..."
+                    )
                     continue
-                raise RuntimeError(f"Login Rodonaves falhou — jQuery não carregou (URL: {page.url})")
-
-        # Chama API de login diretamente via AJAX (bypassa formulário, validações,
-        # cookie banners, overlays e problemas de fill/click do Playwright)
-        login_doc = self._digits(self.usuario) or self._digits(self.dominio) or self.cnpj_pagador
-        logger.info(f"[{self.nome}] Login AJAX com doc={login_doc[:4]}***{login_doc[-2:]}")
-
-        result = await page.evaluate("""({cpfcnp, password}) => {
-            return new Promise((resolve) => {
-                const root = typeof rootPath !== 'undefined' ? rootPath : '';
-                jQuery.ajax({
-                    type: "POST",
-                    url: root + "/CustomerAccount/LogIn",
-                    dataType: "json",
-                    contentType: "application/json; charset=utf-8",
-                    data: JSON.stringify({ Cpfcnp: cpfcnp, Password: password }),
-                    success: function(r) { resolve(r); },
-                    error: function(xhr, status, err) {
-                        resolve({ Success: false, ErrorMessage: err || status || 'AJAX error' });
-                    }
-                });
-            });
-        }""", {"cpfcnp": login_doc, "password": self.senha})
-
-        if not result or not result.get("Success"):
-            self._mark_login_failed()
-            error_msg = (
-                (result or {}).get("WarningMessage")
-                or (result or {}).get("ErrorMessage")
-                or "resposta inesperada do servidor"
-            )
-            raise RuntimeError(f"Login Rodonaves falhou — {error_msg}")
-
-        logger.info(f"[{self.nome}] Login AJAX OK, navegando para cotação...")
-        self._set_login_status("login_ok", True)
-
-        # Navega para /Quotation
-        await self._navegar_cotacao(_from_login=True)
-
-        self._set_login_status("login_ok", True)
-        logger.info(f"[{self.nome}] Login OK – formulário visível")
+                raise
+        if last_error is not None:
+            raise last_error
 
     async def pre_login(self):
         self._passo_atual = "pre_login"
@@ -1425,19 +1450,8 @@ class RodonavesProvider(ProviderBase):
             return True
         except Exception as e:
             self.last_error = str(e)
-            logger.warning(f"[{self.nome}] Pre-login falhou: {e}, tentando novamente...")
-            await self.cleanup()
-            # Retry: reinicializa browser e tenta login de novo
-            try:
-                await self._init_browser()
-                await self._login()
-                logger.info(f"[{self.nome}] Pre-login OK no retry")
-                return True
-            except Exception as e2:
-                self.last_error = str(e2)
-                logger.warning(f"[{self.nome}] Pre-login retry também falhou: {e2}")
-                await self.cleanup()
-                return False
+            logger.warning(f"[{self.nome}] Pre-login falhou: {e}")
+            return False
 
     # ── preenchimento do formulário (seletores por ID do HTML real) ───
 
@@ -1462,7 +1476,7 @@ class RodonavesProvider(ProviderBase):
                 const nav = document.getElementById('mainNav');
                 if (nav) nav.style.position = 'relative';
                 // Remove qualquer modal-backdrop residual
-                document.querySelectorAll('.modal-backdrop, .overlay, [class*="overlay"], [class*="modal"]').forEach(el => {
+                document.querySelectorAll('.modal-backdrop, .overlay, #overlay, [id*="overlay"], [class*="overlay"], [class*="modal"]').forEach(el => {
                     if (el.tagName.toLowerCase() !== 'html' && el.tagName.toLowerCase() !== 'body') {
                         el.remove();
                     }
@@ -1608,7 +1622,9 @@ class RodonavesProvider(ProviderBase):
 
         # ─── Tipo embalagem ───
         try:
-            await page.locator("#packageType").select_option("1", timeout=10000)
+            await page.locator(
+                "#packageType"
+            ).select_option("1", timeout=1500 if self._effective_headless else 10000)
         except Exception:
             logger.warning(f"[{self.nome}] select_option #packageType falhou, usando JS")
             await page.evaluate("""() => {
@@ -1680,152 +1696,33 @@ class RodonavesProvider(ProviderBase):
     # ── submissão e extração de resultado ──────────────────────────────
 
     async def _submeter_e_extrair(self) -> Optional[Cotacao]:
+        stage_started = self._start_stage("submetendo_e_extraindo")
         page = self._page
         self.last_error = None
         await self._capture_safe_diagnostic_snapshot(reason="inicio_submissao", stage="submetendo_cotacao")
+        api_result: dict[str, Any] = {}
+        submit_started = False
 
-        # ─── E-mail ───
-        try:
-            cb = page.locator("#cbSendEmail")
-            await cb.scroll_into_view_if_needed(timeout=3000)
-            await cb.click(timeout=3000)
-        except Exception:
-            # Fallback: clique via JS (checkbox pode estar encoberto por overlay)
+        def _is_quotation_api_url(url: str | None) -> bool:
+            lowered = str(url or "").lower()
+            return "quotation" in lowered or "calculate" in lowered or "cotacao" in lowered
+
+        async def _capture_quotation_request(request):
+            nonlocal submit_started
             try:
-                await page.evaluate("document.getElementById('cbSendEmail')?.click()")
+                if _is_quotation_api_url(getattr(request, "url", "")):
+                    submit_started = True
             except Exception:
-                logger.warning(f"[{self.nome}] Não conseguiu clicar no checkbox de e-mail")
-
-        # ─── reCAPTCHA ───
-        janela_visivel = True
-        if not self._effective_headless:
-            janela_visivel = await self._mostrar_janela()
-        await page.wait_for_timeout(300)
-        try:
-            await page.locator("#calculateQuotationBtn").scroll_into_view_if_needed()
-            await page.wait_for_timeout(300)
-        except Exception:
-            pass
-        if not self._effective_headless:
-            if janela_visivel:
-                logger.info(f"[{self.nome}] Janela compacta visível para CAPTCHA")
-            else:
-                logger.warning(f"[{self.nome}] Não foi possível tornar a janela visível para o CAPTCHA")
-
-        # Simula interação natural antes de clicar no captcha:
-        # mover mouse pela página, scroll suave, pausa aleatória.
-        # reCAPTCHA monitora eventos de mouse/teclado para reduzir dificuldade.
-        try:
-            await self._simular_interacao_humana(page)
-        except Exception:
-            pass
-
-        try:
-            captcha_frame = page.frame_locator("iframe[title*='reCAPTCHA'], iframe[src*='recaptcha']")
-            chk_captcha = captcha_frame.get_by_role("checkbox", name="Não sou um robô")
-            if await chk_captcha.count() > 0:
-                # Move o mouse para perto do checkbox antes de clicar (trajetória natural)
-                try:
-                    box = await chk_captcha.bounding_box()
-                    if box:
-                        # Aproxima de um ponto aleatório da página até o checkbox
-                        start_x = random.randint(200, 500)
-                        start_y = random.randint(200, 400)
-                        await page.mouse.move(start_x, start_y, steps=random.randint(8, 15))
-                        await page.wait_for_timeout(random.randint(200, 500))
-                        # Move até perto do checkbox com pequeno offset aleatório
-                        target_x = box["x"] + box["width"] / 2 + random.randint(-3, 3)
-                        target_y = box["y"] + box["height"] / 2 + random.randint(-3, 3)
-                        await page.mouse.move(target_x, target_y, steps=random.randint(15, 30))
-                        await page.wait_for_timeout(random.randint(300, 800))
-                except Exception:
-                    pass
-                await chk_captcha.click(timeout=5000)
-                await page.wait_for_timeout(random.randint(1000, 2500))
-        except Exception:
-            pass
-
-        async def _captcha_token() -> str:
-            try:
-                return str(await page.evaluate("""() => {
-                    const el = document.querySelector('textarea[name="g-recaptcha-response"]');
-                    if (el && el.value) return String(el.value);
-                    if (typeof grecaptcha !== 'undefined') {
-                        try { const r = grecaptcha.getResponse(); if (r) return String(r); } catch(e) {}
-                    }
-                    return '';
-                }""") or "")
-            except Exception:
-                return ""
-
-        self._passo_atual = "aguardando_captcha"
-        self._set_login_status("aguardando_captcha", True)
-        token = await _captcha_token()
-        recaptcha_frames = 0
-        try:
-            recaptcha_frames = await page.locator("iframe[title*='reCAPTCHA'], iframe[src*='recaptcha']").count()
-        except Exception:
-            recaptcha_frames = 0
-        if not token.strip() and self._effective_headless and recaptcha_frames > 0:
-            await self._capture_safe_diagnostic_snapshot(
-                reason="recaptcha_pendente_headless",
-                stage="aguardando_captcha",
-            )
-            self._set_last_error_with_diagnostic(
-                "Rodonaves: reCAPTCHA pendente em headless; será necessário refazer em modo visível",
-                stage="aguardando_captcha",
-            )
-            logger.warning(f"[{self.nome}] {self.last_error}")
-            return None
-        if not token.strip() and not self._effective_headless:
-            logger.warning(
-                f"[{self.nome}] reCAPTCHA: resolva manualmente no navegador; aguardando até {self.CAPTCHA_MAX_WAIT_S}s..."
-            )
-            for _ in range(self.CAPTCHA_MAX_WAIT_S):
-                await page.wait_for_timeout(1000)
-                token = await _captcha_token()
-                if token.strip():
-                    break
-            if not token.strip():
-                logger.warning(f"[{self.nome}] reCAPTCHA: timeout {self.CAPTCHA_MAX_WAIT_S}s — tentando submeter mesmo assim")
-
-        # Oculta a janela novamente (só se não headless)
-        if not self._effective_headless:
-            await self._ocultar_janela()
-        if token.strip():
-            self._set_login_status("captcha_resolvido", True)
-            logger.info(f"[{self.nome}] CAPTCHA resolvido")
-        else:
-            logger.info(f"[{self.nome}] CAPTCHA nao confirmado, tentando submeter mesmo assim")
-
-        # Log de debug: estado dos campos antes de submeter
-        try:
-            form_state = await page.evaluate("""() => {
-                const fields = {};
-                const ids = ['contactName', 'ReceiverTaxId', 'destinationZipCode', 'destinationNumber'];
-                for (const id of ids) {
-                    const el = document.getElementById(id);
-                    fields[id] = el ? el.value : '(not found)';
-                }
-                // Captcha token
-                const cap = document.querySelector('textarea[name="g-recaptcha-response"]');
-                fields['captcha_token_len'] = cap && cap.value ? cap.value.length : 0;
-                return fields;
-            }""")
-            logger.info(f"[{self.nome}] Estado do formulário antes de Calcular: {form_state}""")
-        except Exception as e:
-            logger.warning(f"[{self.nome}] Não foi possível logar estado do formulário: {e}""")
-
-        # Interceptor de resposta da API
-        # Captura a resposta XHR da cotacao ANTES de clicar Calcular.
-        api_result: dict = {}
+                pass
 
         async def _capture_quotation_response(response):
+            nonlocal submit_started
             try:
                 url = response.url.lower()
                 if response.status != 200:
                     return
-                if "quotation" in url or "calculate" in url or "cotacao" in url:
+                if _is_quotation_api_url(url):
+                    submit_started = True
                     ct = response.headers.get("content-type", "")
                     if "json" in ct:
                         try:
@@ -1845,27 +1742,162 @@ class RodonavesProvider(ProviderBase):
             except Exception:
                 pass
 
-        handler = lambda r: asyncio.ensure_future(_capture_quotation_response(r))
-        page.on("response", handler)
+        request_handler = lambda r: asyncio.ensure_future(_capture_quotation_request(r))
+        response_handler = lambda r: asyncio.ensure_future(_capture_quotation_response(r))
+        page.on("request", request_handler)
+        page.on("response", response_handler)
 
         try:
-            calc_btn = page.locator("#calculateQuotationBtn")
             try:
-                await calc_btn.wait_for(state="visible", timeout=15000)
+                cb = page.locator("#cbSendEmail")
+                await cb.scroll_into_view_if_needed(timeout=3000)
+                await cb.click(timeout=3000)
             except Exception:
-                logger.warning(f"[{self.nome}] Botao Calcular nao visivel, aguardando...")
-                await page.wait_for_timeout(3000)
-            for _click_attempt in range(3):
                 try:
-                    await calc_btn.click(timeout=15000)
-                    break
-                except Exception as click_err:
-                    if _click_attempt == 2:
-                        raise
-                    logger.warning(f"[{self.nome}] Click no Calcular falhou (tentativa {_click_attempt+1}): {click_err}")
-                    await page.wait_for_timeout(2000)
+                    await page.evaluate("document.getElementById('cbSendEmail')?.click()")
+                except Exception:
+                    logger.warning(f"[{self.nome}] Não conseguiu clicar no checkbox de e-mail")
+
+            janela_visivel = await self._mostrar_janela()
+            await page.wait_for_timeout(300)
+            try:
+                await page.locator("#calculateQuotationBtn").scroll_into_view_if_needed()
+                await page.wait_for_timeout(300)
+            except Exception:
+                pass
+            if janela_visivel:
+                logger.info(f"[{self.nome}] Janela compacta visível para CAPTCHA")
+            else:
+                logger.warning(f"[{self.nome}] Não foi possível tornar a janela visível para o CAPTCHA")
+
+            try:
+                await self._simular_interacao_humana(page)
+            except Exception:
+                pass
+
+            try:
+                captcha_frame = page.frame_locator("iframe[title*='reCAPTCHA'], iframe[src*='recaptcha']")
+                chk_captcha = captcha_frame.get_by_role("checkbox", name="Não sou um robô")
+                if await chk_captcha.count() > 0:
+                    try:
+                        box = await chk_captcha.bounding_box()
+                        if box:
+                            start_x = random.randint(200, 500)
+                            start_y = random.randint(200, 400)
+                            await page.mouse.move(start_x, start_y, steps=random.randint(8, 15))
+                            await page.wait_for_timeout(random.randint(200, 500))
+                            target_x = box["x"] + box["width"] / 2 + random.randint(-3, 3)
+                            target_y = box["y"] + box["height"] / 2 + random.randint(-3, 3)
+                            await page.mouse.move(target_x, target_y, steps=random.randint(15, 30))
+                            await page.wait_for_timeout(random.randint(300, 800))
+                    except Exception:
+                        pass
+                    await chk_captcha.click(timeout=5000)
+                    await page.wait_for_timeout(random.randint(1000, 2500))
+            except Exception:
+                pass
+
+            async def _captcha_token() -> str:
+                try:
+                    return str(await page.evaluate("""() => {
+                        const el = document.querySelector('textarea[name="g-recaptcha-response"]');
+                        if (el && el.value) return String(el.value);
+                        if (typeof grecaptcha !== 'undefined') {
+                            try { const r = grecaptcha.getResponse(); if (r) return String(r); } catch(e) {}
+                        }
+                        return '';
+                    }""") or "")
+                except Exception:
+                    return ""
+
+            async def _resultado_ou_submit_ja_apareceu() -> bool:
+                if submit_started:
+                    return True
+                if api_result:
+                    return True
+                try:
+                    detected = await page.evaluate("""() => {
+                        if (document.querySelectorAll('td.col-result').length > 0) return true;
+                        const qr = document.getElementById('quotationResult');
+                        return !!(qr && qr.innerHTML.trim().length > 50);
+                    }""")
+                    return bool(detected)
+                except Exception:
+                    return False
+
+            self._passo_atual = "aguardando_captcha"
+            self._set_login_status("aguardando_captcha", True)
+            token = await _captcha_token()
+            recaptcha_frames = 0
+            try:
+                recaptcha_frames = await page.locator("iframe[title*='reCAPTCHA'], iframe[src*='recaptcha']").count()
+            except Exception:
+                recaptcha_frames = 0
+
+            manual_submit_detected = False
+            if recaptcha_frames > 0 and not token.strip():
+                logger.warning(
+                    f"[{self.nome}] reCAPTCHA: resolva manualmente e clique em Calcular na mesma janela; aguardando até {self.CAPTCHA_MAX_WAIT_S}s..."
+                )
+                for _ in range(self.CAPTCHA_MAX_WAIT_S):
+                    await page.wait_for_timeout(1000)
+                    token = await _captcha_token()
+                    if token.strip():
+                        break
+                    if await _resultado_ou_submit_ja_apareceu():
+                        manual_submit_detected = True
+                        break
+                if not token.strip() and not manual_submit_detected:
+                    logger.warning(f"[{self.nome}] reCAPTCHA: timeout {self.CAPTCHA_MAX_WAIT_S}s — tentando submeter na mesma sessão")
+
+            if token.strip():
+                self._set_login_status("captcha_resolvido", True)
+                logger.info(f"[{self.nome}] CAPTCHA resolvido")
+                if await _resultado_ou_submit_ja_apareceu():
+                    manual_submit_detected = True
+            elif manual_submit_detected:
+                logger.info(f"[{self.nome}] CAPTCHA/submissão concluídos manualmente na mesma sessão")
+            else:
+                logger.info(f"[{self.nome}] CAPTCHA nao confirmado, tentando submeter mesmo assim")
+
+            try:
+                form_state = await page.evaluate("""() => {
+                    const fields = {};
+                    const ids = ['contactName', 'ReceiverTaxId', 'destinationZipCode', 'destinationNumber'];
+                    for (const id of ids) {
+                        const el = document.getElementById(id);
+                        fields[id] = el ? el.value : '(not found)';
+                    }
+                    const cap = document.querySelector('textarea[name="g-recaptcha-response"]');
+                    fields['captcha_token_len'] = cap && cap.value ? cap.value.length : 0;
+                    return fields;
+                }""")
+                logger.info(f"[{self.nome}] Estado do formulário antes de Calcular: {form_state}")
+            except Exception as e:
+                logger.warning(f"[{self.nome}] Não foi possível logar estado do formulário: {e}")
+
+            calc_btn = page.locator("#calculateQuotationBtn")
+            if not manual_submit_detected:
+                try:
+                    await calc_btn.wait_for(state="visible", timeout=15000)
+                except Exception:
+                    logger.warning(f"[{self.nome}] Botao Calcular nao visivel, aguardando...")
+                    await page.wait_for_timeout(3000)
+                for _click_attempt in range(3):
+                    try:
+                        await calc_btn.click(timeout=15000)
+                        break
+                    except Exception as click_err:
+                        if _click_attempt == 2:
+                            raise
+                        logger.warning(f"[{self.nome}] Click no Calcular falhou (tentativa {_click_attempt+1}): {click_err}")
+                        await page.wait_for_timeout(2000)
+            await self._ocultar_janela()
             self._passo_atual = "aguardando_resultado_api"
-            logger.info(f"[{self.nome}] Botao Calcular clicado, aguardando resultado...")
+            if manual_submit_detected:
+                logger.info(f"[{self.nome}] Resultado em andamento após interação manual, aguardando retorno...")
+            else:
+                logger.info(f"[{self.nome}] Botao Calcular clicado, aguardando resultado...")
 
             for _poll in range(120):
                 if api_result:
@@ -1987,7 +2019,7 @@ class RodonavesProvider(ProviderBase):
 
             # Estratégia 5: aguardar mais tempo se o DOM ainda pode estar carregando
             if valor_frete is None and not page.is_closed() and not api_result:
-                logger.info(f"[{self.nome}] Nenhum resultado encontrado, aguardando mais 10s...")
+                logger.info(f"[{self.nome}] Portal externo lento; nenhum resultado após %.2fs. Aguardando mais 10s...", time.monotonic() - stage_started)
                 for _extra_poll in range(20):
                     await page.wait_for_timeout(500)
                     try:
@@ -2042,6 +2074,11 @@ class RodonavesProvider(ProviderBase):
                 return None
 
             self._mark_valid_quote()
+            self._finish_stage(
+                "submetendo_e_extraindo",
+                stage_started,
+                details=f"valor={float(valor_frete):.2f} prazo={prazo_dias}d",
+            )
             return Cotacao(
                 transportadora=self.nome,
                 prazo_dias=prazo_dias,
@@ -2049,7 +2086,8 @@ class RodonavesProvider(ProviderBase):
                 restricoes="Cotacao via portal cliente.rte.com.br",
             )
         finally:
-            page.remove_listener("response", handler)
+            page.remove_listener("request", request_handler)
+            page.remove_listener("response", response_handler)
 
 
     # ── orquestração ───────────────────────────────────────────────────
@@ -2077,7 +2115,7 @@ class RodonavesProvider(ProviderBase):
                 soma = sum(int(c["quantidade"]) for c in cubagens_cm)
                 if int(volumes or 0) > 0 and int(volumes) != soma:
                     self.last_error = f"VOL ({volumes}) diverge da soma das cubagens ({soma})"
-                    logger.error(f"[{self.nome}] {self.last_error}""")
+                    logger.error(f"[{self.nome}] {self.last_error}")
                     return None
                 volumes = soma
             elif volumes > 0 and comprimento_cm > 0 and largura_cm > 0 and altura_cm > 0:
@@ -2094,7 +2132,7 @@ class RodonavesProvider(ProviderBase):
                     f"Cubagens ausentes/inválidas (volumes={volumes}, "
                     f"dims_cm={comprimento_cm}x{largura_cm}x{altura_cm})"
                 )
-                logger.error(f"[{self.nome}] {self.last_error}""")
+                logger.error(f"[{self.nome}] {self.last_error}")
                 return None
 
             cnpj_dest = self._digits(cnpj_destinatario)
@@ -2104,18 +2142,19 @@ class RodonavesProvider(ProviderBase):
             if len(cep_dest) != 8:
                 raise RuntimeError("CEP de destino inválido")
 
-            self._passo_atual = "init_browser"
+            stage_start = self._start_stage("init_browser")
             await self._init_browser()
-            logger.info(f"[{self.nome}] Browser inicializado OK")
-            self._passo_atual = "login"
+            self._finish_stage("init_browser", stage_start, details=f"headless={self._effective_headless}")
+            stage_start = self._start_stage("login")
             await self._login()
-            logger.info(f"[{self.nome}] Login OK")
+            self._finish_stage("login", stage_start)
 
             # Na segunda cotação em diante, navega de volta ao formulário
-            self._passo_atual = "navegando_cotacao"
+            stage_start = self._start_stage("navegando_cotacao")
             await self._navegar_cotacao()
+            self._finish_stage("navegando_cotacao", stage_start)
 
-            self._passo_atual = "preenchendo_formulario"
+            stage_start = self._start_stage("preenchendo_formulario")
             cep_orig = self._digits(origem) if preencher_cep_origem else ""
             await self._preencher_cotacao(
                 valor=valor,
@@ -2124,46 +2163,17 @@ class RodonavesProvider(ProviderBase):
                 cep_destino=cep_dest,
                 cep_origem=cep_orig,
             )
+            self._finish_stage("preenchendo_formulario", stage_start, details=f"linhas_cubagem={len(cubagens_cm)}")
             self._passo_atual = "submetendo_cotacao"
             resultado = await self._submeter_e_extrair()
             if resultado is not None:
                 self._mark_valid_quote()
-            if resultado is None and self._should_retry_visible_after_headless_captcha_failure():
-                return await self._retry_visible_after_headless_captcha(
-                    origem=origem,
-                    destino=destino,
-                    peso=peso,
-                    valor=valor,
-                    volumes=volumes,
-                    comprimento_cm=comprimento_cm,
-                    largura_cm=largura_cm,
-                    altura_cm=altura_cm,
-                    cnpj_remetente=cnpj_remetente,
-                    cnpj_destinatario=cnpj_destinatario,
-                    cubagens=cubagens,
-                    preencher_cep_origem=preencher_cep_origem,
-                )
             return resultado
         except Exception as error:
-            if self._should_retry_visible_after_headless_captcha_failure():
-                return await self._retry_visible_after_headless_captcha(
-                    origem=origem,
-                    destino=destino,
-                    peso=peso,
-                    valor=valor,
-                    volumes=volumes,
-                    comprimento_cm=comprimento_cm,
-                    largura_cm=largura_cm,
-                    altura_cm=altura_cm,
-                    cnpj_remetente=cnpj_remetente,
-                    cnpj_destinatario=cnpj_destinatario,
-                    cubagens=cubagens,
-                    preencher_cep_origem=preencher_cep_origem,
-                )
             self.last_error = str(error)
             if not self._login_status.get("cotacao_ok"):
                 self._mark_login_failed()
-            logger.error(f"[{self.nome}] Erro na cotação: {error}""")
+            logger.error(f"[{self.nome}] Erro na cotação: {error}")
             # Detectar browser morto e resetar para próxima tentativa
             browser_morto = False
             if self._browser and not self._browser.is_connected():

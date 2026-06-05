@@ -56,6 +56,19 @@ Principais tecnologias:
 - Nao remover validacao de assinatura de update nem mudar repositorio de releases sem autorizacao explicita.
 - Ao mover instrucoes antigas de agentes, use `backup-agent-instructions/` em vez de apagar diretamente quando houver conteudo reutilizavel.
 
+## Política de comentários no código
+
+Evite adicionar comentários novos no código.
+
+Comentários só são permitidos quando explicarem:
+- regra de negócio não evidente;
+- fluxo frágil de portal/transportadora;
+- comportamento relacionado a captcha ou interação humana;
+- decisão técnica que não fica clara pelo próprio código;
+- workaround necessário para seletor, timing ou instabilidade externa.
+
+Não adicionar comentários que apenas descrevem o que o código já faz.
+
 ## Responsabilidades entre repositorios
 
 - `RomaneioBeta`: aplicativo desktop, UI, automacoes locais, providers, updater e build Windows.
@@ -104,3 +117,4 @@ Rules:
 - Verify every suggestion against code, logs and tests.
 - Keep prompts small and focused.
 - Skip the local LLM if the task is trivial, if MCP is unavailable, or if using it would require sending sensitive data.
+

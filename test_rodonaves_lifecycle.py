@@ -1,4 +1,5 @@
 import asyncio
+import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -7,14 +8,27 @@ from types import ModuleType
 def _install_playwright_test_stub():
     if "playwright.async_api" in sys.modules:
         return
+    try:
+        if importlib.util.find_spec("playwright.async_api") is not None:
+            return
+    except (ImportError, ModuleNotFoundError, ValueError):
+        pass
     playwright_module = ModuleType("playwright")
+    playwright_module.__path__ = []
     async_api_module = ModuleType("playwright.async_api")
-
-    def async_playwright():
-        raise RuntimeError("Playwright não está instalado neste ambiente de teste")
 
     class PlaywrightTimeoutError(TimeoutError):
         pass
+
+    class _AsyncPlaywrightStub:
+        async def start(self):
+            return self
+
+        async def stop(self):
+            return None
+
+    def async_playwright():
+        return _AsyncPlaywrightStub()
 
     class Page:
         pass
@@ -26,6 +40,7 @@ def _install_playwright_test_stub():
     async_api_module.Page = Page
     async_api_module.Frame = Frame
     async_api_module.async_playwright = async_playwright
+    playwright_module.async_api = async_api_module
     sys.modules.setdefault("playwright", playwright_module)
     sys.modules["playwright.async_api"] = async_api_module
 
@@ -217,7 +232,7 @@ def test_rodonaves_safe_diagnostic_snapshot_redacts_documents():
     asyncio.run(run())
 
 
-def test_rodonaves_retries_visible_when_headless_recaptcha_blocks(monkeypatch):
+def test_rodonaves_does_not_retry_visible_when_headless_recaptcha_blocks(monkeypatch):
     async def run():
         provider = _provider()
         provider._effective_headless = True
@@ -237,21 +252,14 @@ def test_rodonaves_retries_visible_when_headless_recaptcha_blocks(monkeypatch):
 
         async def fake_submeter():
             calls.append("submeter")
-            provider.last_error = "Rodonaves: reCAPTCHA pendente em headless; será necessário refazer em modo visível"
+            provider.last_error = "Rodonaves: reCAPTCHA não resolvido ou bloqueio antifraude impediu a cotação"
             return None
-
-        async def fake_retry_visible(**kwargs):
-            calls.append("retry_visible")
-            assert kwargs["volumes"] == 23
-            assert kwargs["preencher_cep_origem"] is True
-            return Cotacao(transportadora="RODONAVES", prazo_dias=3, valor_frete=123.45)
 
         monkeypatch.setattr(provider, "_init_browser", fake_init_browser)
         monkeypatch.setattr(provider, "_login", fake_login)
         monkeypatch.setattr(provider, "_navegar_cotacao", fake_navegar)
         monkeypatch.setattr(provider, "_preencher_cotacao", fake_preencher)
         monkeypatch.setattr(provider, "_submeter_e_extrair", fake_submeter)
-        monkeypatch.setattr(provider, "_retry_visible_after_headless_captcha", fake_retry_visible)
 
         result = await provider.coteir(
             origem="01001000",
@@ -270,9 +278,9 @@ def test_rodonaves_retries_visible_when_headless_recaptcha_blocks(monkeypatch):
             preencher_cep_origem=True,
         )
 
-        assert result is not None
-        assert result.valor_frete == 123.45
-        assert calls == ["init", "login", "navegar", "preencher", "submeter", "retry_visible"]
+        assert result is None
+        assert calls == ["init", "login", "navegar", "preencher", "submeter"]
+        assert provider.last_error == "Rodonaves: reCAPTCHA não resolvido ou bloqueio antifraude impediu a cotação"
 
     asyncio.run(run())
 

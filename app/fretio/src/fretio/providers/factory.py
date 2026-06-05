@@ -223,7 +223,7 @@ def _build_rodonaves(config: dict[str, Any]) -> dict[str, Any] | None:
         "cnpj_pagador": cnpj_pagador,
         "login_url": _text(config.get("login_url")),
         "cotacao_url": _text(config.get("cotacao_url")),
-        "headless": bool(config.get("headless", False)),
+        "headless": False,
     }
 
 

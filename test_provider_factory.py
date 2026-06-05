@@ -1,3 +1,4 @@
+import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,14 +10,27 @@ from types import ModuleType
 def _install_playwright_test_stub():
     if "playwright.async_api" in sys.modules:
         return
+    try:
+        if importlib.util.find_spec("playwright.async_api") is not None:
+            return
+    except (ImportError, ModuleNotFoundError, ValueError):
+        pass
     playwright_module = ModuleType("playwright")
+    playwright_module.__path__ = []
     async_api_module = ModuleType("playwright.async_api")
 
     class PlaywrightTimeoutError(TimeoutError):
         pass
 
+    class _AsyncPlaywrightStub:
+        async def start(self):
+            return self
+
+        async def stop(self):
+            return None
+
     def async_playwright():
-        raise RuntimeError("Playwright não está instalado neste ambiente de teste")
+        return _AsyncPlaywrightStub()
 
     class Page:
         pass
@@ -28,6 +42,7 @@ def _install_playwright_test_stub():
     async_api_module.Page = Page
     async_api_module.Frame = Frame
     async_api_module.async_playwright = async_playwright
+    playwright_module.async_api = async_api_module
     sys.modules.setdefault("playwright", playwright_module)
     sys.modules["playwright.async_api"] = async_api_module
 

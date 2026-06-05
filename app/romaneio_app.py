@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QInputDialog,
     QCheckBox,
+    QComboBox,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -1894,35 +1895,113 @@ class RomaneioWindow(QMainWindow):
         page = QWidget()
         page.setObjectName("PageContent")
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         self._cfg_ufs_cbs: dict = {}
         self._cfg_hab_checks: dict = {}
         self._cfg_cred_fields: dict = {}
         self._cfg_cred_warnings: dict = {}
-        tabs = QTabWidget()
-        tabs.setObjectName("MainTabs")
-        tabs.addTab(self._build_tab_empresa_inline(), "Empresa")
-        tabs.addTab(self._build_tab_ufs_inline(), "UFs Atendidas")
-        tabs.addTab(self._build_tab_credenciais_inline(), "Credenciais")
-        layout.addWidget(tabs, 1)
-        return page
 
-    def _build_tab_empresa_inline(self) -> QWidget:
+        header = QFrame()
+        header.setObjectName("SettingsHero")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(20, 18, 20, 16)
+        header_layout.setSpacing(14)
+
+        btn_voltar = QPushButton("← Voltar")
+        btn_voltar.setObjectName("BackButton")
+        btn_voltar.clicked.connect(lambda: self._show_page(0))
+        header_layout.addWidget(btn_voltar, 0, Qt.AlignTop)
+
+        gear = QLabel()
+        gear.setObjectName("SettingsGear")
+        gear.setPixmap(svg_icon(NAV_ICONS["cog"], 24, "#ffffff"))
+        gear.setFixedSize(44, 44)
+        gear.setAlignment(Qt.AlignCenter)
+        header_layout.addWidget(gear, 0, Qt.AlignTop)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(4)
+        title = QLabel("CONFIGURAÇÕES")
+        title.setObjectName("SettingsTitle")
+        subtitle = QLabel("Gerencie empresa, aparência, transportadoras e credenciais operacionais.")
+        subtitle.setObjectName("SettingsSubtitle")
+        title_col.addWidget(title)
+        title_col.addWidget(subtitle)
+        header_layout.addLayout(title_col, 1)
+        layout.addWidget(header)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setObjectName("SettingsScroll")
         content = QWidget()
-        vbox = QVBoxLayout(content)
-        vbox.setSpacing(10)
-        vbox.setContentsMargins(8, 8, 8, 8)
+        content.setObjectName("SettingsSurface")
+        grid = QGridLayout(content)
+        grid.setContentsMargins(20, 18, 20, 20)
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(14)
 
+        grid.addWidget(self._build_card_empresa_inline(), 0, 0)
+        grid.addWidget(self._build_card_aparencia_inline(), 0, 1)
+        grid.addWidget(self._build_card_transportadoras_inline(), 1, 0)
+        grid.addWidget(self._build_card_credenciais_inline(), 1, 1)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        grid.setRowStretch(1, 1)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+        return page
+
+    def _settings_card(self, title: str, subtitle: str) -> tuple[QFrame, QVBoxLayout]:
         card = QFrame()
-        card.setObjectName("Card")
-        form = QFormLayout(card)
-        form.setContentsMargins(14, 14, 14, 14)
-        form.setSpacing(8)
+        card.setObjectName("SettingsCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 15, 16, 16)
+        layout.setSpacing(12)
+        header = QVBoxLayout()
+        header.setSpacing(3)
+        title_lbl = QLabel(title)
+        title_lbl.setObjectName("SettingsCardTitle")
+        sub_lbl = QLabel(subtitle)
+        sub_lbl.setObjectName("SettingsCardSubtitle")
+        sub_lbl.setWordWrap(True)
+        header.addWidget(title_lbl)
+        header.addWidget(sub_lbl)
+        layout.addLayout(header)
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setObjectName("SoftSep")
+        layout.addWidget(sep)
+        return card, layout
+
+    def _setting_field_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("SettingsFieldLabel")
+        return label
+
+    def _transportadora_status_text(self, nome: str, tcfg: dict[str, Any]) -> tuple[str, str]:
+        if not tcfg.get("habilitado", False):
+            return "Desabilitada", "TagAmber"
+        validation = validate_provider_minimum_config(nome, tcfg)
+        if validation.valid:
+            return "Pronta", "TagGreen"
+        return "Pendente", "TagRed"
+
+    def _provider_user_key(self, nome: str) -> str | None:
+        for chave, label, eh_senha in CAMPOS_CREDENCIAIS.get(nome, []):
+            label_l = str(label).lower()
+            if not eh_senha and ("usu" in label_l or "email" in label_l or chave in ("usuario", "email", "cnpj")):
+                return chave
+        campos = CAMPOS_CREDENCIAIS.get(nome, [])
+        return campos[0][0] if campos else None
+
+    def _build_card_empresa_inline(self) -> QFrame:
+        card, layout = self._settings_card(
+            "EMPRESA",
+            "Dados usados como padrão nas cotações e identificação da empresa ativa.",
+        )
         cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
         rom_cfg = cfg.get("romaneio", {}) or {}
         fb_cfg = cfg.get("fretio", {}) or {}
@@ -1930,129 +2009,187 @@ class RomaneioWindow(QMainWindow):
         self._cfg_cep_origem.setObjectName("InputField")
         self._cfg_cnpj_pagador_padrao = QLineEdit(str(rom_cfg.get("cnpj_pagador_padrao", "") or ""))
         self._cfg_cnpj_pagador_padrao.setObjectName("InputField")
-        self._cfg_cnpj_pagador_padrao.setPlaceholderText(
-            "CNPJ/CPF usado por Eucatur e Coopex quando a transportadora não tiver valor próprio"
-        )
+        self._cfg_cnpj_pagador_padrao.setPlaceholderText("CNPJ/CPF padrão para transportadoras sem documento próprio")
         self._cfg_paralelo = QLineEdit(str(int(fb_cfg.get("max_paralelo", 3) or 3)))
         self._cfg_paralelo.setObjectName("InputField")
-        self._cfg_paralelo.setMaximumWidth(80)
+        self._cfg_paralelo.setMaximumWidth(110)
         self._cfg_nome_empresa = QLineEdit(self.empresa_nome)
         self._cfg_nome_empresa.setObjectName("InputField")
-        form.addRow("Empresa", self._cfg_nome_empresa)
-        form.addRow("CEP origem", self._cfg_cep_origem)
-        form.addRow("Documento pagador padrão", self._cfg_cnpj_pagador_padrao)
-        form.addRow("Cotações paralelas", self._cfg_paralelo)
+
+        form = QGridLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(9)
+        fields = [
+            ("Nome da empresa", self._cfg_nome_empresa),
+            ("CEP de origem", self._cfg_cep_origem),
+            ("Documento pagador padrão", self._cfg_cnpj_pagador_padrao),
+            ("Cotações paralelas", self._cfg_paralelo),
+        ]
+        for row, (label, widget) in enumerate(fields):
+            form.addWidget(self._setting_field_label(label), row, 0)
+            form.addWidget(widget, row, 1)
+        form.setColumnStretch(1, 1)
+        layout.addLayout(form)
+
         actions = QHBoxLayout()
-        btn_salvar = QPushButton("Salvar")
-        btn_salvar.clicked.connect(self._salvar_config_embutido)
+        actions.setSpacing(8)
         btn_trocar = QPushButton("Trocar empresa")
         btn_trocar.setObjectName("SecondaryButton")
         btn_trocar.clicked.connect(self._trocar_empresa_embutido)
+        btn_salvar = QPushButton("Salvar")
+        btn_salvar.clicked.connect(self._salvar_config_embutido)
         actions.addWidget(btn_trocar)
         actions.addStretch(1)
         actions.addWidget(btn_salvar)
-        form.addRow(actions)
+        layout.addLayout(actions)
+        return card
 
-        vbox.addWidget(card)
-        vbox.addStretch(1)
-        scroll.setWidget(content)
-        wrapper = QWidget()
-        wl = QVBoxLayout(wrapper)
-        wl.setContentsMargins(0, 0, 0, 0)
-        wl.addWidget(scroll)
-        return wrapper
+    def _build_card_aparencia_inline(self) -> QFrame:
+        card, layout = self._settings_card(
+            "APARÊNCIA",
+            "Ajustes visuais locais. A alternância claro/escuro continua disponível na sidebar.",
+        )
+        cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
+        fb = cfg.get("fretio", {}) or {}
 
-    def _build_tab_ufs_inline(self) -> QWidget:
-        """Aba UFs Atendidas para a página de configurações inline."""
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        content = QWidget()
-        vbox = QVBoxLayout(content)
-        vbox.setSpacing(10)
+        theme_row = QHBoxLayout()
+        theme_row.setSpacing(8)
+        self._cfg_theme_buttons: dict[str, QPushButton] = {}
+        for mode, text in (("claro", "Claro"), ("escuro", "Escuro"), ("sistema", "Sistema")):
+            btn = QPushButton(text)
+            btn.setObjectName("ThemeOptionActive" if self._theme_mode == mode else "ThemeOption")
+            btn.setCheckable(True)
+            btn.setChecked(self._theme_mode == mode)
+            btn.clicked.connect(lambda _checked=False, m=mode: self._set_theme_mode_from_settings(m))
+            self._cfg_theme_buttons[mode] = btn
+            theme_row.addWidget(btn)
+        layout.addWidget(self._setting_field_label("Tema"))
+        layout.addLayout(theme_row)
+
+        controls = QGridLayout()
+        controls.setHorizontalSpacing(10)
+        controls.setVerticalSpacing(9)
+        self._cfg_densidade = QComboBox()
+        self._cfg_densidade.setObjectName("SettingsCombo")
+        self._cfg_densidade.addItems(["Confortável", "Compacta"])
+        self._cfg_densidade.setCurrentText(str(fb.get("ui_densidade", "Confortável") or "Confortável"))
+        self._cfg_idioma = QComboBox()
+        self._cfg_idioma.setObjectName("SettingsCombo")
+        self._cfg_idioma.addItems(["Português (Brasil)"])
+        self._cfg_idioma.setCurrentText(str(fb.get("ui_idioma", "Português (Brasil)") or "Português (Brasil)"))
+        self._cfg_dicas_toggle = ToggleWidget(checked=bool(fb.get("ui_dicas", True)))
+        controls.addWidget(self._setting_field_label("Densidade"), 0, 0)
+        controls.addWidget(self._cfg_densidade, 0, 1)
+        controls.addWidget(self._setting_field_label("Idioma"), 1, 0)
+        controls.addWidget(self._cfg_idioma, 1, 1)
+        controls.addWidget(self._setting_field_label("Mostrar dicas"), 2, 0)
+        controls.addWidget(self._cfg_dicas_toggle, 2, 1, Qt.AlignLeft)
+        controls.setColumnStretch(1, 1)
+        layout.addLayout(controls)
+
+        btn_salvar = QPushButton("Salvar aparência")
+        btn_salvar.clicked.connect(self._salvar_aparencia_embutido)
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        footer.addWidget(btn_salvar)
+        layout.addLayout(footer)
+        return card
+
+    def _build_card_transportadoras_inline(self) -> QFrame:
+        card, layout = self._settings_card(
+            "TRANSPORTADORAS",
+            "Habilite transportadoras e mantenha as UFs atendidas para cotação.",
+        )
         cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
         transp_cfg = cfg.get("transportadoras", {}) or {}
+        rows = QVBoxLayout()
+        rows.setSpacing(8)
         for nome in sorted(TRANSPORTADORAS_CONFIGURAVEIS):
             tcfg = transp_cfg.get(nome, {}) or {}
+            row_card = QFrame()
+            row_card.setObjectName("SettingsRowCard")
+            row = QVBoxLayout(row_card)
+            row.setContentsMargins(10, 8, 10, 9)
+            row.setSpacing(8)
+            top = QHBoxLayout()
+            top.setSpacing(8)
+            name = QLabel(nome.upper())
+            name.setObjectName("SettingsCarrierName")
+            cb_hab = QCheckBox("Ativa")
+            cb_hab.setChecked(bool(tcfg.get("habilitado", False)))
+            self._cfg_hab_checks[nome] = cb_hab
+            status_text, status_obj = self._transportadora_status_text(nome, tcfg)
+            status = QLabel(status_text)
+            status.setObjectName(status_obj)
+            top.addWidget(name, 1)
+            top.addWidget(status)
+            top.addWidget(cb_hab)
+            row.addLayout(top)
+
             ufs_atuais = tcfg.get("ufs_atendidas", [])
             if isinstance(ufs_atuais, str):
                 ufs_atuais = [u.strip().upper() for u in ufs_atuais.split(",") if u.strip()]
             else:
                 ufs_atuais = [u.upper() for u in (ufs_atuais or [])]
-            group = QGroupBox()
-            group.setObjectName("SettingsGroup")
-            grid = QGridLayout(group)
-            grid.setSpacing(4)
-            lbl_nome = ConfiguracoesDialog._criar_label_transportadora(nome)
-            grid.addWidget(lbl_nome, 0, 0, 1, 9)
+            uf_grid = QGridLayout()
+            uf_grid.setHorizontalSpacing(3)
+            uf_grid.setVerticalSpacing(2)
             cbs: dict = {}
             for i, uf in enumerate(TODAS_UFS):
                 cb = QCheckBox(uf)
+                cb.setObjectName("UfChip")
                 cb.setChecked(uf in ufs_atuais)
-                grid.addWidget(cb, 1 + i // 9, i % 9)
+                uf_grid.addWidget(cb, i // 9, i % 9)
                 cbs[uf] = cb
             self._cfg_ufs_cbs[nome] = cbs
-            btn_row_ufs = QHBoxLayout()
+            row.addLayout(uf_grid)
+            quick = QHBoxLayout()
+            quick.addStretch(1)
             btn_all = QPushButton("Todas")
-            btn_all.setFixedHeight(24)
             btn_all.setObjectName("MiniButton")
             btn_none = QPushButton("Nenhuma")
-            btn_none.setFixedHeight(24)
             btn_none.setObjectName("MiniButton")
-            btn_row_ufs.addStretch(1)
-            btn_row_ufs.addWidget(btn_all)
-            btn_row_ufs.addWidget(btn_none)
-            last_row = 1 + (len(TODAS_UFS) - 1) // 9 + 1
-            spacer = QLabel("")
-            spacer.setFixedHeight(6)
-            grid.addWidget(spacer, last_row, 0, 1, 9)
-            grid.addLayout(btn_row_ufs, last_row + 1, 0, 1, 9)
             btn_all.clicked.connect(lambda _, c=cbs: [v.setChecked(True) for v in c.values()])
             btn_none.clicked.connect(lambda _, c=cbs: [v.setChecked(False) for v in c.values()])
-            vbox.addWidget(group)
-        btn_salvar_ufs = QPushButton("Salvar UFs Atendidas")
+            quick.addWidget(btn_all)
+            quick.addWidget(btn_none)
+            row.addLayout(quick)
+            rows.addWidget(row_card)
+        layout.addLayout(rows)
+        btn_salvar_ufs = QPushButton("Salvar transportadoras")
         btn_salvar_ufs.clicked.connect(self._salvar_ufs_embutido)
         footer = QHBoxLayout()
         footer.addStretch(1)
         footer.addWidget(btn_salvar_ufs)
-        vbox.addLayout(footer)
-        vbox.addStretch(1)
-        scroll.setWidget(content)
-        wrapper = QWidget()
-        wl = QVBoxLayout(wrapper)
-        wl.setContentsMargins(0, 0, 0, 0)
-        wl.addWidget(scroll)
-        return wrapper
+        layout.addLayout(footer)
+        return card
 
-    def _build_tab_credenciais_inline(self) -> QWidget:
-        """Aba Credenciais para a página de configurações inline."""
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        content = QWidget()
-        vbox = QVBoxLayout(content)
-        vbox.setSpacing(10)
+    def _build_card_credenciais_inline(self) -> QFrame:
+        card, layout = self._settings_card(
+            "CREDENCIAIS",
+            "Tabela de acessos por transportadora, sem expor senhas na interface.",
+        )
         cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
         transp_cfg = cfg.get("transportadoras", {}) or {}
-        for nome in sorted(CAMPOS_CREDENCIAIS):
+        table = QGridLayout()
+        table.setHorizontalSpacing(8)
+        table.setVerticalSpacing(7)
+        headers = ["Transportadora", "Usuário", "Status", "Última verificação"]
+        for col, header in enumerate(headers):
+            lbl = QLabel(header)
+            lbl.setObjectName("SettingsTableHeader")
+            table.addWidget(lbl, 0, col)
+        for row_idx, nome in enumerate(sorted(CAMPOS_CREDENCIAIS), start=1):
             campos = CAMPOS_CREDENCIAIS[nome]
             tcfg = transp_cfg.get(nome, {}) or {}
-            group = QGroupBox()
-            group.setObjectName("SettingsGroup")
-            form = QFormLayout(group)
-            form.setSpacing(6)
-            lbl_nome_cred = ConfiguracoesDialog._criar_label_transportadora(nome)
-            form.addRow(lbl_nome_cred)
-            cb_hab = QCheckBox("Habilitado")
-            cb_hab.setChecked(bool(tcfg.get("habilitado", False)))
-            form.addRow("", cb_hab)
-            self._cfg_hab_checks[nome] = cb_hab
-            warning = QLabel("")
-            warning.setObjectName("ConfigWarning")
-            warning.setWordWrap(True)
-            form.addRow("", warning)
-            self._cfg_cred_warnings[nome] = warning
+            name = QLabel(nome.upper())
+            name.setObjectName("SettingsCarrierName")
+            table.addWidget(name, row_idx * 2 - 1, 0)
             fields: dict = {}
+            user_key = self._provider_user_key(nome)
+            user_edit = None
+            extra = QHBoxLayout()
+            extra.setSpacing(6)
             for chave, label, eh_senha in campos:
                 le = QLineEdit()
                 valor = str(tcfg.get(chave, "") or "")
@@ -2064,27 +2201,97 @@ class RomaneioWindow(QMainWindow):
                 if eh_senha:
                     le.setEchoMode(QLineEdit.Password)
                 le.setObjectName("CredField")
-                form.addRow(f"{label}:", le)
                 fields[chave] = le
+                if chave == user_key:
+                    user_edit = le
+                else:
+                    mini_wrap = QVBoxLayout()
+                    mini_wrap.setSpacing(2)
+                    mini_label = QLabel(label)
+                    mini_label.setObjectName("SettingsMiniLabel")
+                    mini_wrap.addWidget(mini_label)
+                    mini_wrap.addWidget(le)
+                    extra.addLayout(mini_wrap)
+            if user_edit is None:
+                user_edit = QLineEdit()
+                user_edit.setObjectName("CredField")
+            table.addWidget(user_edit, row_idx * 2 - 1, 1)
             self._cfg_cred_fields[nome] = fields
-            cb_hab.toggled.connect(lambda _checked, n=nome: self._atualizar_aviso_credencial_embutido(n))
+            warning = QLabel("")
+            warning.setObjectName("ConfigWarning")
+            warning.setWordWrap(True)
+            self._cfg_cred_warnings[nome] = warning
+            status_text, status_obj = self._transportadora_status_text(nome, tcfg)
+            status = QLabel(status_text)
+            status.setObjectName(status_obj)
+            table.addWidget(status, row_idx * 2 - 1, 2)
+            ultima = QLabel(str(tcfg.get("ultima_verificacao", "Nunca") or "Nunca"))
+            ultima.setObjectName("SettingsMutedText")
+            table.addWidget(ultima, row_idx * 2 - 1, 3)
+            if extra.count():
+                table.addLayout(extra, row_idx * 2, 1, 1, 3)
+            table.addWidget(warning, row_idx * 2, 0, 1, 4)
+            cb_hab = self._cfg_hab_checks.get(nome)
+            if cb_hab is not None:
+                cb_hab.toggled.connect(lambda _checked, n=nome: self._atualizar_aviso_credencial_embutido(n))
             for le in fields.values():
                 le.textChanged.connect(lambda _text, n=nome: self._atualizar_aviso_credencial_embutido(n))
             self._atualizar_aviso_credencial_embutido(nome)
-            vbox.addWidget(group)
-        btn_salvar_cred = QPushButton("Salvar Credenciais")
+        table.setColumnStretch(1, 1)
+        layout.addLayout(table)
+        btn_salvar_cred = QPushButton("Salvar credenciais")
         btn_salvar_cred.clicked.connect(self._salvar_credenciais_embutido)
         footer = QHBoxLayout()
         footer.addStretch(1)
         footer.addWidget(btn_salvar_cred)
-        vbox.addLayout(footer)
-        vbox.addStretch(1)
-        scroll.setWidget(content)
+        layout.addLayout(footer)
+        return card
+
+    def _build_tab_empresa_inline(self) -> QWidget:
         wrapper = QWidget()
-        wl = QVBoxLayout(wrapper)
-        wl.setContentsMargins(0, 0, 0, 0)
-        wl.addWidget(scroll)
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._build_card_empresa_inline())
         return wrapper
+
+    def _build_tab_ufs_inline(self) -> QWidget:
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._build_card_transportadoras_inline())
+        return wrapper
+
+    def _build_tab_credenciais_inline(self) -> QWidget:
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._build_card_credenciais_inline())
+        return wrapper
+
+    def _set_theme_mode_from_settings(self, mode: str) -> None:
+        if mode not in ("claro", "escuro", "sistema"):
+            return
+        self._theme_mode = mode
+        for key, btn in getattr(self, "_cfg_theme_buttons", {}).items():
+            btn.setChecked(key == mode)
+            btn.setObjectName("ThemeOptionActive" if key == mode else "ThemeOption")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+        cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
+        fb = cfg.setdefault("fretio", {})
+        fb["ui_tema"] = mode
+        _escrever_config_toml(cfg, self._config_path)
+        self._apply_style()
+
+    def _salvar_aparencia_embutido(self):
+        cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
+        fb = cfg.setdefault("fretio", {})
+        fb["ui_tema"] = self._theme_mode
+        fb["ui_densidade"] = self._cfg_densidade.currentText()
+        fb["ui_idioma"] = self._cfg_idioma.currentText()
+        fb["ui_dicas"] = self._cfg_dicas_toggle.isChecked()
+        _escrever_config_toml(cfg, self._config_path)
+        self.label_info.setText("Aparência salva.")
 
     def _salvar_ufs_embutido(self):
         cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
@@ -2092,8 +2299,11 @@ class RomaneioWindow(QMainWindow):
         for nome, cbs in self._cfg_ufs_cbs.items():
             tcfg = transp_cfg.setdefault(nome, {})
             tcfg["ufs_atendidas"] = [uf for uf, cb in cbs.items() if cb.isChecked()]
+            cb_hab = self._cfg_hab_checks.get(nome)
+            if cb_hab is not None:
+                tcfg["habilitado"] = cb_hab.isChecked()
         _escrever_config_toml(cfg, self._config_path)
-        self.label_info.setText("UFs atendidas salvas.")
+        self.label_info.setText("Transportadoras salvas.")
 
     def _config_credencial_embutida_atual(self, nome: str) -> dict[str, Any]:
         cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
@@ -2152,6 +2362,11 @@ class RomaneioWindow(QMainWindow):
 
     def _on_toggle_tema(self, dark: bool) -> None:
         self._theme_mode = "escuro" if dark else "claro"
+        for key, btn in getattr(self, "_cfg_theme_buttons", {}).items():
+            btn.setChecked(key == self._theme_mode)
+            btn.setObjectName("ThemeOptionActive" if key == self._theme_mode else "ThemeOption")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
         cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
         fb = cfg.setdefault("fretio", {})
         fb["ui_tema"] = self._theme_mode
@@ -2299,6 +2514,27 @@ class RomaneioWindow(QMainWindow):
             #ChromeWarningLabel {{ color: {c_ink}; font-size: 12px; font-weight: 600; }}
             #FooterLabel {{ font-size: 11px; color: {c_muted}; }}
             #Card {{ background: {c_panel}; border: 1px solid {c_border}; border-radius: 8px; }}
+            #SettingsHero {{ background: {c_panel}; border-bottom: 1px solid {c_border}; }}
+            #SettingsGear {{ background: {c_accent}; border-radius: 12px; }}
+            #SettingsTitle {{ font-size: 22px; font-weight: 800; letter-spacing: 0.08em; color: {c_ink}; }}
+            #SettingsSubtitle {{ font-size: 12px; color: {c_muted}; }}
+            #SettingsSurface {{ background: {c_bg}; }}
+            #SettingsCard {{ background: {c_panel}; border: 1px solid {c_border}; border-radius: 14px; }}
+            #SettingsRowCard {{ background: {c_panel2}; border: 1px solid {c_border_soft}; border-radius: 10px; }}
+            #SettingsCardTitle {{ font-size: 12px; font-weight: 800; letter-spacing: 0.12em; color: {c_ink}; }}
+            #SettingsCardSubtitle {{ font-size: 11px; color: {c_muted}; }}
+            #SettingsFieldLabel {{ font-size: 11px; font-weight: 700; color: {c_muted}; }}
+            #SettingsCarrierName {{ font-size: 11px; font-weight: 800; letter-spacing: 0.08em; color: {c_ink2}; }}
+            #SettingsTableHeader {{ font-size: 10px; font-weight: 800; letter-spacing: 0.07em; color: {c_muted}; padding-bottom: 4px; }}
+            #SettingsMutedText {{ font-size: 11px; color: {c_muted}; }}
+            #SettingsMiniLabel {{ font-size: 10px; color: {c_faint}; }}
+            QPushButton#ThemeOption, QPushButton#ThemeOptionActive {{ border: 1px solid {c_border}; border-radius: 9px; padding: 8px 12px; font-weight: 700; }}
+            QPushButton#ThemeOption {{ background: {c_panel2}; color: {c_ink2}; }}
+            QPushButton#ThemeOption:hover {{ background: {c_panel3}; border-color: {c_accent_border}; }}
+            QPushButton#ThemeOptionActive {{ background: {c_accent2}; color: {c_accent}; border-color: {c_accent_border}; }}
+            QComboBox#SettingsCombo {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 6px; padding: 6px 8px; }}
+            QComboBox#SettingsCombo::drop-down {{ border: none; width: 22px; }}
+            QCheckBox#UfChip {{ font-size: 10px; color: {c_ink2}; spacing: 2px; }}
             #SubtitleLabel {{ font-size: 12px; color: {c_muted}; }}
             #CotacaoCardTitle {{ font-size: 15px; font-weight: 700; color: {c_ink}; }}
             #CotacaoHintLabel {{ background: {c_panel2}; color: {c_muted}; border: 1px solid {c_border}; border-radius: 7px; padding: 7px 9px; font-size: 12px; }}
@@ -2419,6 +2655,8 @@ class RomaneioWindow(QMainWindow):
             icon_body = NAV_ICONS['moon'] if dark else NAV_ICONS['sun']
             self._theme_icon_lbl.setPixmap(svg_icon(icon_body, 16, c_muted))
             self._theme_mode_lbl.setText("Modo escuro" if dark else "Modo claro")
+        if hasattr(self, '_cfg_dicas_toggle'):
+            self._cfg_dicas_toggle.refresh_theme(c_accent, c_faint)
 
         # Refresh CmdK search icon
         if hasattr(self, '_cmd_icon_lbl'):

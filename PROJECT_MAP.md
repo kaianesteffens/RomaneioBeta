@@ -231,6 +231,11 @@ Campos minimos por provider:
 - `agex`: `email`, `senha`
 - `eucatur`: login mínimo `dominio`, `usuario`, `senha`; `cnpj_pagador` é resolvido só na cotação, primeiro na transportadora e depois em `romaneio.cnpj_pagador_padrao`.
 - `rodonaves`: `dominio`, `usuario`, `senha`, `cnpj_pagador`
+
+Observacao operacional:
+
+- Rodonaves deve abrir primeiro o entrypoint canônico do portal (`login_url` configurado ou `https://cliente.rte.com.br/?showLogin=true`) para estabelecer sessão/login; `/Quotation` deve ser tratado apenas como destino pós-login, com sucesso validado por elementos reais do formulário e não só pela URL.
+- Rodonaves roda em Chrome real conectado por CDP com `user-data-dir` exclusivo `~/.fretio/rodonaves_browser_data`; a janela nasce headful/off-screen, só aparece para CAPTCHA/interação humana e volta a ficar oculta sem recriar browser/context/page.
 - `alfa`: `login`, `senha`
 - `coopex`: login mínimo `dominio`, `usuario`, `senha`; `cnpj_pagador` é resolvido só na cotação, primeiro na transportadora e depois em `romaneio.cnpj_pagador_padrao`.
 - `translovato`: `cnpj`, `usuario`, `senha`
@@ -373,6 +378,13 @@ Cuidados:
 
 - `tests/test_provider_regressions.py`: testes unitarios focados em regressões de providers Playwright sem abrir navegador real; cobre Translovato, RODONAVES, Eucatur, TRD e COOPEX.
 - Para mudanças pontuais em providers, prefira `pytest -q tests/test_provider_regressions.py` antes de rodar a suíte completa.
+
+## Testes VM Windows
+
+- `scripts/opencode/vm-test.sh`: dispara a task `Fretio_VM_Test` na VM Windows via SSH, grava o `run.log` em `logs/vm/latest-<modo>.log` e espera `status.txt` em `C:/fretio-vm/results/<run-id>/`.
+- `scripts/opencode/vm-commands/open-app.cmd`: chama `scripts/opencode/windows/open-app.ps1` para abrir o app real via `scripts/opencode/windows/app-command.txt` e salvar evidências em `FRETIO_VM_RESULT_DIR`.
+- `scripts/opencode/vm-commands/real-rodonaves.cmd` e `scripts/opencode/vm-commands/real-translovato.cmd`: chamam `scripts/opencode/windows/run-real-provider.py` para executar providers reais na VM com Playwright/browser local e salvar `*-real.log`, `*-result.json` e tail do `fretio.log` em `FRETIO_VM_RESULT_DIR`.
+- `scripts/opencode/windows/real-provider-inputs.json`: payload versionado e seguro para os modos reais; pode ser sobrescrito na VM por `%APPDATA%\Fretio\vm-test-inputs.json` ou por `FRETIO_VM_TEST_INPUTS`.
 
 ## Documentacao existente
 
