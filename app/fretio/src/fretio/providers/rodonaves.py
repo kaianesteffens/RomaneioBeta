@@ -1693,6 +1693,14 @@ class RodonavesProvider(ProviderBase):
         except Exception:
             pass
 
+    async def _click_calcular_via_js(self, page) -> bool:
+        return bool(await page.evaluate("""() => {
+            const el = document.getElementById('calculateQuotationBtn');
+            if (!el) return false;
+            el.click();
+            return true;
+        }"""))
+
     # ── submissão e extração de resultado ──────────────────────────────
 
     async def _submeter_e_extrair(self) -> Optional[Cotacao]:
@@ -1878,6 +1886,7 @@ class RodonavesProvider(ProviderBase):
 
             calc_btn = page.locator("#calculateQuotationBtn")
             if not manual_submit_detected:
+                click_succeeded = False
                 try:
                     await calc_btn.wait_for(state="visible", timeout=15000)
                 except Exception:
@@ -1886,12 +1895,27 @@ class RodonavesProvider(ProviderBase):
                 for _click_attempt in range(3):
                     try:
                         await calc_btn.click(timeout=15000)
+                        click_succeeded = True
                         break
                     except Exception as click_err:
                         if _click_attempt == 2:
-                            raise
+                            break
                         logger.warning(f"[{self.nome}] Click no Calcular falhou (tentativa {_click_attempt+1}): {click_err}")
                         await page.wait_for_timeout(2000)
+                if not click_succeeded:
+                    try:
+                        await calc_btn.click(timeout=15000, force=True)
+                        click_succeeded = True
+                    except Exception as force_click_err:
+                        logger.warning(f"[{self.nome}] Click forçado no Calcular falhou: {force_click_err}")
+                if not click_succeeded:
+                    logger.warning(f"[{self.nome}] Click no Calcular bloqueado, usando JS")
+                    try:
+                        click_succeeded = await self._click_calcular_via_js(page)
+                    except Exception as js_click_err:
+                        raise RuntimeError(f"Falha ao acionar Calcular via JS: {js_click_err}") from js_click_err
+                    if not click_succeeded:
+                        raise RuntimeError("Falha ao acionar Calcular via JS: botão Calcular não encontrado")
             await self._ocultar_janela()
             self._passo_atual = "aguardando_resultado_api"
             if manual_submit_detected:

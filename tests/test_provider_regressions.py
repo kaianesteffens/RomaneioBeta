@@ -310,6 +310,34 @@ def test_rodonaves_does_not_expose_headless_retry_helper():
     assert hasattr(RodonavesProvider, "_retry_visible_after_headless_captcha") is False
 
 
+def test_rodonaves_js_calculate_click_uses_single_native_click():
+    provider = RodonavesProvider("dom", "user", "senha", "12345678000190")
+
+    class Page:
+        def __init__(self):
+            self.script = ""
+
+        async def evaluate(self, script):
+            self.script = script
+            return True
+
+    page = Page()
+
+    assert asyncio.run(provider._click_calcular_via_js(page)) is True
+    assert "el.click();" in page.script
+    assert ".trigger(" not in page.script
+
+
+def test_rodonaves_js_calculate_click_reports_missing_button():
+    provider = RodonavesProvider("dom", "user", "senha", "12345678000190")
+
+    class Page:
+        async def evaluate(self, _script):
+            return False
+
+    assert asyncio.run(provider._click_calcular_via_js(Page())) is False
+
+
 def test_successful_quote_promotes_login_indicator_to_ok():
     resultado = ResultadoCotacao(
         transportadora="RODONAVES",
