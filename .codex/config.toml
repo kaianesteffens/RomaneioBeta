@@ -1,0 +1,8 @@
+[[hooks.SessionStart]]
+matcher = "startup|resume|clear|compact"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = '/usr/bin/python3 "$(git rev-parse --show-toplevel)/.codex/hooks/session_start.py"'
+timeout = 30
+statusMessage = "Carregando regras fixas do Fretio"

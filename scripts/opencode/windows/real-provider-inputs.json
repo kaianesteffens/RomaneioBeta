@@ -1,0 +1,28 @@
+{
+  "defaults": {
+    "origem": "99740000",
+    "destino": "01001000",
+    "cep_origem": "99740000",
+    "cep_destino": "01001000",
+    "cidade_destino": "SAO PAULO",
+    "uf_destino": "SP",
+    "cnpj_destinatario": "03770000000175",
+    "peso": 12.5,
+    "valor": 1500.0,
+    "volumes": 1,
+    "cubagens": [
+      {
+        "quantidade": 1,
+        "comprimento_cm": 40,
+        "largura_cm": 30,
+        "altura_cm": 20,
+        "peso_por_volume_kg": 12.5
+      }
+    ]
+  },
+  "rodonaves": {
+    "preencher_cep_origem": true,
+    "headless": false
+  },
+  "translovato": {}
+}

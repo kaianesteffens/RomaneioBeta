@@ -86,3 +86,8 @@ TAREFA_CONCLUIDA.txt
 /dev.bat
 Fretio_data/empresas/default/CONFIG.toml
 Fretio_data/ultima_empresa.txt
+
+# Local sync/editor artifacts
+.stfolder/
+opencode.jsonc.save
+logs/vm/

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
 from typing import Any
 
@@ -84,6 +85,7 @@ class TranslovatoProvider(ProviderBase):
         self._page = None
         self._logged_in = False
         self._last_receiver_diagnostic: dict[str, Any] = {}
+        self._stage_started_at: float | None = None
 
     @staticmethod
     def _mask_doc(value: str) -> str:
@@ -91,6 +93,18 @@ class TranslovatoProvider(ProviderBase):
         if len(digits) <= 6:
             return "***"
         return f"{digits[:4]}***{digits[-2:]}"
+
+    def _start_stage(self, stage: str) -> float:
+        self._passo_atual = stage
+        started_at = time.monotonic()
+        self._stage_started_at = started_at
+        logger.info("[TRANSLOVATO] Etapa iniciada: %s", stage)
+        return started_at
+
+    def _finish_stage(self, stage: str, started_at: float, *, details: str = "") -> None:
+        elapsed = time.monotonic() - started_at
+        suffix = f" ({details})" if details else ""
+        logger.info("[TRANSLOVATO] Etapa concluída: %s em %.2fs%s", stage, elapsed, suffix)
 
 
     @staticmethod
@@ -255,12 +269,113 @@ class TranslovatoProvider(ProviderBase):
     async def _aceitar_cookies(self) -> None:
         clicked = await self._click_if_present("Ok, entendi!", by_text=True, timeout=1500)
         if clicked:
-            await self._page.wait_for_timeout(300)
+            try:
+                await self._page.wait_for_load_state("domcontentloaded", timeout=1000)
+            except Exception:
+                pass
+
+    async def _quote_form_visible(self) -> bool:
+        try:
+            sender = self._page.locator(self.SENDER_CNPJ_SELECTOR).first
+            receiver = self._page.locator(self.RECEIVER_CNPJ_SELECTOR).first
+            return bool(
+                await sender.is_visible(timeout=400)
+                and await receiver.is_visible(timeout=400)
+            )
+        except Exception:
+            return False
+
+    async def _wait_for_logged_in_state(self, *, timeout_ms: int = 12000) -> bool:
+        page = self._page
+        started_at = time.monotonic()
+        while (time.monotonic() - started_at) * 1000 < timeout_ms:
+            current_url = page.url.lower()
+            try:
+                body_text = await page.locator("body").inner_text(timeout=1500)
+            except Exception:
+                body_text = ""
+            lowered = body_text.lower()
+            if (
+                "minhas cotações" in lowered
+                or "minhas cotacoes" in lowered
+                or "solicitar nova cotação" in lowered
+                or "solicitar nova cotacao" in lowered
+                or "sair" in lowered
+                or "minhas-cotacoes" in current_url
+                or await self._quote_form_visible()
+            ):
+                return True
+            await page.wait_for_timeout(250)
+        return False
+
+    async def _receiver_autocomplete_visible(self) -> bool:
+        try:
+            return bool(await self._page.evaluate(r"""() => {
+                const visible = (el) => {
+                    if (!el) return false;
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
+                };
+                return Array.from(document.querySelectorAll(
+                    '[role="listbox"], [role="option"], .autocomplete, .ui-autocomplete, .select2-results, .dropdown-menu'
+                )).some(visible);
+            }"""))
+        except Exception:
+            return False
+
+    async def _wait_for_receiver_resolution(
+        self,
+        receiver: str,
+        *,
+        context: str,
+        timeout_ms: int = 5000,
+        allow_autocomplete_click: bool = True,
+    ) -> str:
+        started_at = time.monotonic()
+        clicked_autocomplete = False
+        while (time.monotonic() - started_at) * 1000 < timeout_ms:
+            current = await self._read_receiver_cnpj_digits()
+            if current == receiver and not await self._receiver_autocomplete_visible():
+                return current
+            if allow_autocomplete_click and not clicked_autocomplete and await self._receiver_autocomplete_visible():
+                clicked_autocomplete = await self._select_receiver_autocomplete_match(receiver)
+                if clicked_autocomplete:
+                    logger.info(
+                        "[TRANSLOVATO] Autocomplete do destinatário confirmado após %s para %s",
+                        context,
+                        self._mask_doc(receiver),
+                    )
+            await self._page.wait_for_timeout(200)
+        return await self._read_receiver_cnpj_digits()
+
+    async def _wait_for_form_ready(self, *, timeout_ms: int = 15000) -> None:
+        await self._page.locator(self.SENDER_CNPJ_SELECTOR).first.wait_for(state="visible", timeout=timeout_ms)
+
+    async def _wait_for_quote_result(self, *, timeout_ms: int = 30000) -> tuple[str, float | None, int | None]:
+        page = self._page
+        started_at = time.monotonic()
+        warned_slow_portal = False
+        last_text = ""
+        while (time.monotonic() - started_at) * 1000 < timeout_ms:
+            try:
+                last_text = await page.locator("body").inner_text(timeout=3000)
+            except Exception:
+                last_text = ""
+            valor = self._extract_valor(last_text)
+            prazo = self._extract_prazo(last_text)
+            if valor is not None and prazo is not None:
+                return last_text, valor, prazo
+            if not warned_slow_portal and time.monotonic() - started_at >= 8:
+                warned_slow_portal = True
+                logger.info("[TRANSLOVATO] Portal externo ainda processando a cotação após %.2fs", time.monotonic() - started_at)
+            await page.wait_for_timeout(500)
+        return last_text, None, None
 
     async def _login(self) -> bool:
         if self._logged_in:
             return True
-        self._passo_atual = "login"
+        started_at = self._start_stage("login")
         page = self._page
         logger.info("[TRANSLOVATO] Fazendo login")
 
@@ -280,24 +395,13 @@ class TranslovatoProvider(ProviderBase):
                 button.click();
             }"""
         )
-        lowered = ""
-        current_url = ""
-        for _ in range(12):
-            await page.wait_for_timeout(500)
-            current_url = page.url.lower()
-            try:
-                body_text = await page.locator("body").inner_text(timeout=2500)
-            except Exception:
-                body_text = ""
-            lowered = body_text.lower()
-            if "minhas cotações" in lowered or "minhas cotacoes" in lowered or "sair" in lowered:
-                break
-        if "minhas-cotacoes" not in current_url and "solicitar nova cotação" not in lowered and "sair" not in lowered:
+        if not await self._wait_for_logged_in_state(timeout_ms=12000):
             self.last_error = "Login falhou ou portal não confirmou acesso"
             logger.warning("[TRANSLOVATO] %s", self.last_error)
             return False
 
         self._logged_in = True
+        self._finish_stage("login", started_at)
         logger.info("[TRANSLOVATO] Login OK")
         return True
 
@@ -334,7 +438,7 @@ class TranslovatoProvider(ProviderBase):
         self._logged_in = False
 
     async def _abrir_nova_cotacao(self) -> None:
-        self._passo_atual = "abrindo_nova_cotacao"
+        started_at = self._start_stage("abrindo_nova_cotacao")
         page = self._page
         await page.goto(self.MINHAS_COTACOES_URL, wait_until="domcontentloaded", timeout=60000)
         await self._aceitar_cookies()
@@ -344,7 +448,8 @@ class TranslovatoProvider(ProviderBase):
         except Exception:
             await page.get_by_text(re.compile(r"solicitar nova cota[çc][aã]o", re.I)).first.click(timeout=15000)
         await page.wait_for_load_state("domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(800)
+        await self._wait_for_form_ready(timeout_ms=15000)
+        self._finish_stage("abrindo_nova_cotacao", started_at)
 
     async def _fill_input(self, selector: str, value: str, *, index: int = 0, timeout: int = 12000) -> None:
         loc = self._page.locator(selector).nth(index)
@@ -386,20 +491,7 @@ class TranslovatoProvider(ProviderBase):
             zip_digits = await self._read_delivery_zip_digits()
         except Exception:
             pass
-        try:
-            autocomplete_present = bool(await self._page.evaluate(r"""() => {
-                const visible = (el) => {
-                    if (!el) return false;
-                    const style = window.getComputedStyle(el);
-                    const rect = el.getBoundingClientRect();
-                    return style.visibility !== 'hidden' && style.display !== 'none' && rect.width > 0 && rect.height > 0;
-                };
-                return Array.from(document.querySelectorAll(
-                    '[role="listbox"], [role="option"], .autocomplete, .ui-autocomplete, .select2-results, .dropdown-menu, ul li'
-                )).some(visible);
-            }"""))
-        except Exception:
-            autocomplete_present = False
+        autocomplete_present = await self._receiver_autocomplete_visible()
         diag = {
             "stage": str(stage or "")[:80],
             "expected_masked": self._mask_doc(expected),
@@ -483,9 +575,12 @@ class TranslovatoProvider(ProviderBase):
         await loc.dispatch_event("input")
         await loc.dispatch_event("change")
         await loc.dispatch_event("blur")
-        await self._page.wait_for_timeout(800)
-        await self._select_receiver_autocomplete_match(receiver)
-        await self._page.wait_for_timeout(700)
+        await self._wait_for_receiver_resolution(
+            receiver,
+            context=f"fallback seguro após {reason_context}",
+            timeout_ms=2500,
+            allow_autocomplete_click=True,
+        )
         await self._validate_receiver_cnpj(receiver, context=f"fallback seguro após {reason_context}")
 
     async def _preencher_cnpj_destinatario(self, receiver: str) -> None:
@@ -502,12 +597,24 @@ class TranslovatoProvider(ProviderBase):
         await loc.dispatch_event("input")
         await loc.dispatch_event("change")
         await loc.dispatch_event("blur")
+        resolved_after_blur = await self._wait_for_receiver_resolution(
+            receiver,
+            context="blur",
+            timeout_ms=2500,
+            allow_autocomplete_click=True,
+        )
         try:
             await self._validate_receiver_cnpj(receiver, context="blur")
         except ValueError:
             await self._rewrite_receiver_cnpj_fallback(receiver, reason_context="blur")
-        await loc.press("Tab")
-        await self._page.wait_for_timeout(500)
+        if resolved_after_blur != receiver or await self._receiver_autocomplete_visible():
+            await loc.press("Tab")
+            await self._wait_for_receiver_resolution(
+                receiver,
+                context="tabulação",
+                timeout_ms=2000,
+                allow_autocomplete_click=False,
+            )
         await self._validate_receiver_cnpj(receiver, context="tabulação")
 
     async def _read_delivery_zip_digits(self) -> str:
@@ -581,12 +688,13 @@ class TranslovatoProvider(ProviderBase):
         detected_city = ""
         detected_uf = ""
 
+        started_at = time.monotonic()
         for _ in range(24):
-            await self._page.wait_for_timeout(300)
             detected_zip = await self._read_delivery_zip_digits()
             detected_raw, detected_city, detected_uf = await self._read_delivery_city_uf()
             if (not expected_cep or detected_zip == expected_cep) and (detected_city or detected_uf):
                 break
+            await self._page.wait_for_timeout(250)
 
         await self._validate_receiver_cnpj(expected_receiver, context="autopreenchimento do endereço")
         logger.info(
@@ -615,6 +723,7 @@ class TranslovatoProvider(ProviderBase):
                 "[TRANSLOVATO] Cidade/UF do destino não detectadas com segurança; seguindo com endereço automático do portal. CNPJ=%s",
                 self._mask_doc(expected_receiver),
             )
+            logger.info("[TRANSLOVATO] Autopreenchimento do portal estabilizado em %.2fs", time.monotonic() - started_at)
             return
         if expected_uf_norm and detected_uf and detected_uf != expected_uf_norm:
             raise ValueError(
@@ -626,6 +735,7 @@ class TranslovatoProvider(ProviderBase):
                 "Cidade de entrega preenchida pelo portal diverge do romaneio: "
                 f"esperada {expected_city_norm}, detectada {detected_city}."
             )
+        logger.info("[TRANSLOVATO] Autopreenchimento do portal estabilizado em %.2fs", time.monotonic() - started_at)
 
     async def _ensure_cubagem_rows(self, desired_rows: int) -> int:
         page = self._page
@@ -724,8 +834,18 @@ class TranslovatoProvider(ProviderBase):
         return resumo
 
     async def _garantir_resumo_cubagem_calculado(self, cubagens: list[dict[str, int]]) -> None:
-        await self._page.wait_for_timeout(700)
-        resumo = await self._read_cubagem_resumo_portal()
+        resumo = {}
+        started_at = time.monotonic()
+        while time.monotonic() - started_at < 3:
+            resumo = await self._read_cubagem_resumo_portal()
+            if any(str(resumo.get(key) or "").strip() not in {"", "0", "0,0", "0,00", "0,000", "0,0000"} for key in ("cubagem_total", "peso_cubado_total")):
+                logger.info(
+                    "[TRANSLOVATO] Portal calculou cubagem automaticamente: cubagem_total=%s peso_cubado_total=%s",
+                    resumo.get("cubagem_total") or "?",
+                    resumo.get("peso_cubado_total") or "?",
+                )
+                return
+            await self._page.wait_for_timeout(200)
         if any(str(resumo.get(key) or "").strip() not in {"", "0", "0,0", "0,00", "0,000", "0,0000"} for key in ("cubagem_total", "peso_cubado_total")):
             logger.info(
                 "[TRANSLOVATO] Portal calculou cubagem automaticamente: cubagem_total=%s peso_cubado_total=%s",
@@ -735,7 +855,7 @@ class TranslovatoProvider(ProviderBase):
             return
 
         fallback = await self._fallback_preencher_resumo_cubagem(cubagens)
-        await self._page.wait_for_timeout(300)
+        await self._page.wait_for_timeout(200)
         resumo_fim = await self._read_cubagem_resumo_portal()
         logger.warning(
             "[TRANSLOVATO] Portal não calculou cubagem automaticamente; fallback aplicado. cubagem_total=%s peso_cubado_total=%s fator=%s",
@@ -787,7 +907,7 @@ class TranslovatoProvider(ProviderBase):
         return detalhes
 
     async def _simular_e_extrair(self, detalhes_extra: str = "") -> Cotacao | None:
-        self._passo_atual = "simulando_cotacao"
+        started_at = self._start_stage("simulando_cotacao")
         page = self._page
         await page.get_by_role("button", name=re.compile(r"simular\s+cota[çc][aã]o", re.I)).click(timeout=20000)
         try:
@@ -796,21 +916,13 @@ class TranslovatoProvider(ProviderBase):
             pass
 
         self._passo_atual = "extraindo_resultado"
-        text = ""
-        valor = None
-        prazo = None
-        for _ in range(30):
-            await page.wait_for_timeout(1000)
-            text = await page.locator("body").inner_text(timeout=15000)
-            valor = self._extract_valor(text)
-            prazo = self._extract_prazo(text)
-            if valor is not None and prazo is not None:
-                break
+        text, valor, prazo = await self._wait_for_quote_result(timeout_ms=30000)
         if valor is None or prazo is None:
             self.last_error = "Portal respondeu sem valor ou prazo de cotação"
             logger.warning("[TRANSLOVATO] %s", self.last_error)
             return None
         detalhes = detalhes_extra or None
+        self._finish_stage("simulando_cotacao", started_at, details=f"valor={valor:.2f} prazo={prazo}d")
         return Cotacao(
             transportadora="TRANSLOVATO",
             prazo_dias=int(prazo),
@@ -850,11 +962,13 @@ class TranslovatoProvider(ProviderBase):
             if origem_cep and len(origem_cep) != 8:
                 raise ValueError("CEP de origem inválido para TRANSLOVATO")
 
-            self._passo_atual = "init_browser"
+            stage_start = self._start_stage("init_browser")
             await self._init_browser()
+            self._finish_stage("init_browser", stage_start)
             if not await self._login():
                 return None
             await self._abrir_nova_cotacao()
+            stage_start = self._start_stage("preenchendo_formulario")
             detalhes = await self._preencher_formulario(
                 origem=origem_cep,
                 destino=destino_cep,
@@ -867,6 +981,7 @@ class TranslovatoProvider(ProviderBase):
                 cidade_destino=cidade_destino,
                 uf_destino=uf_destino,
             )
+            self._finish_stage("preenchendo_formulario", stage_start, details=f"linhas_cubagem={len(cubagens_validas)}")
             return await self._simular_e_extrair(detalhes)
         except Exception as exc:
             self.last_error = f"Falha na cotação TRANSLOVATO ({self._passo_atual or 'desconhecido'}): {exc}"
