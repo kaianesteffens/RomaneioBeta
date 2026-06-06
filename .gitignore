@@ -91,3 +91,5 @@ Fretio_data/ultima_empresa.txt
 .stfolder/
 opencode.jsonc.save
 logs/vm/
+.claude/
+/CLAUDE.md

@@ -326,7 +326,9 @@ class ProviderFactory:
         if isinstance(nested, dict) and nested:
             return dict(nested)
         legacy = config.get(provider_name, {}) if isinstance(config, dict) else {}
-        return dict(legacy) if isinstance(legacy, dict) else {}
+        if isinstance(legacy, dict) and legacy:
+            return dict(legacy)
+        return {"habilitado": False}
 
     @classmethod
     def get_provider_class(cls, name: str) -> type[Any] | None:
