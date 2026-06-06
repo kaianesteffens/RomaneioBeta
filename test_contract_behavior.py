@@ -42,6 +42,7 @@ def test_contract_parse_romaneio_colado_preserves_shipping_payload():
     assert ct._dados_envio_romaneio_colado(romaneio) == {
         "destino_cep": "90010123",
         "uf_destino": "RS",
+        "cidade_destino": "Porto Alegre",
         "cnpj_destinatario": "12345678000190",
         "peso": 9.9,
         "valor": 1250.75,
