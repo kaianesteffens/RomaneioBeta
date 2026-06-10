@@ -1128,6 +1128,8 @@ async def _executar_cotacoes_com_dados(
             import traceback
             tb = ''.join(traceback.format_exception(type(erro), erro, erro.__traceback__))
             _log_diag(f"Erro em cotação {nome_task}: {type(erro).__name__}: {erro}\n{tb}")
+            if sessao is not None:
+                sessao.record_quote_failure(nome_task)
             # Falhas transitórias de provider (timeout, rede, browser fechado) são esperadas
             # e não devem poluir a API de erros com ruído técnico.
             if not _is_expected_transient_failure(erro):
@@ -1233,6 +1235,8 @@ async def _executar_cotacoes_com_dados(
             resultados.append(r)
             concluidas += 1
             if r.status == "ok":
+                if sessao is not None:
+                    sessao.record_quote_success(nome_task)
                 try:
                     _log_diag(
                         f"✅ {r.transportadora}: R$ {float(r.valor_frete or 0.0):.2f} - "
@@ -1246,6 +1250,8 @@ async def _executar_cotacoes_com_dados(
                     f"{r.detalhes or 'sem detalhes'}"
                 )
                 if r.status == "erro":
+                    if sessao is not None:
+                        sessao.record_quote_failure(nome_task)
                     response_stage = quote_response.stage or getattr(provider_task, "_passo_atual", None) or "ler_resultado"
                     diagnostic = _diagnostico_erro_cotacao(
                         nome_task,
@@ -1314,6 +1320,8 @@ async def _executar_cotacoes_com_dados(
                 valor_frete=valor_frete, prazo_dias=prazo_dias, detalhes=detalhes,
                 duration_ms=duration_ms,
             )
+            if sessao is not None:
+                sessao.record_quote_success(nome_task)
             resultados.append(r)
             concluidas += 1
             _log_diag(f"✅ {transportadora}: R$ {valor_frete:.2f} - {prazo_dias} dias")
@@ -1375,6 +1383,8 @@ async def _executar_cotacoes_com_dados(
 
             # Normaliza a mensagem removendo partes variáveis (ex: paths de diagnóstico TRD)
             # para que o rate-limiter do error_reporter deduplique corretamente entre execuções.
+            if sessao is not None:
+                sessao.record_quote_failure(nome_task)
             detalhe_report = re.sub(r'\s*\(diagnóstico salvo em:[^)]*\)', '', str(detalhe or "")).strip()
             if not detalhe_report:
                 detalhe_report = str(detalhe or "Sem resultado")

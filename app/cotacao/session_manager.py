@@ -315,14 +315,19 @@ class TransportadoraSession:
         provider, created = await self._provider_sessions.ensure(nome, factory)
         if created:
             await self._executar_lazy_prelogin(nome, provider)
-        # Record success em ambos os casos (novo ou pré-existente) para garantir
-        # comportamento correto após transição half-open.
-        self._circuit_breaker.record_success(nome)
         _logger.debug(
             "Provider obtido da sessão",
             extra={"operation": "session_ensure", "provider": nome},
         )
         return provider
+
+    def record_quote_success(self, nome: str) -> None:
+        """Registra sucesso de cotação e fecha o circuito para o provider."""
+        self._circuit_breaker.record_success(nome)
+
+    def record_quote_failure(self, nome: str) -> None:
+        """Registra falha real de cotação; abre o circuito após N falhas consecutivas."""
+        self._circuit_breaker.record_failure(nome)
 
     async def _executar_lazy_prelogin(self, nome: str, provider: Any) -> None:
         nome_normalizado = str(nome).strip().lower()
