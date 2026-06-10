@@ -557,6 +557,14 @@ class TransportadoraSession:
 
             _pre_login_semaforo = asyncio.Semaphore(2)
             providers_snapshot = await self.listar_providers()
+            # Pré-aquece o login das mais lentas primeiro (mesma prioridade da
+            # cotação): elas adquirem o semáforo antes e ganham mais tempo de
+            # background, encurtando o caminho crítico total.
+            providers_snapshot = sorted(
+                providers_snapshot,
+                key=lambda item: _PRIORIDADE_LENTIDAO.get(str(item[0]).upper(), 0),
+                reverse=True,
+            )
             total_providers = len(providers_snapshot)
             _log_diag(f"Iniciando pre-login em {total_providers} transportadoras (máx 2 simultâneos)...")
             if callback:
