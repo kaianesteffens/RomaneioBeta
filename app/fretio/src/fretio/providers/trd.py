@@ -1,13 +1,16 @@
 """Provider TRD Transportes - Plataforma Senior X."""
+from __future__ import annotations
 from datetime import datetime
-from typing import Optional, Any
+from typing import TYPE_CHECKING, Optional, Any
 import asyncio
 import json
 import re
 import time
 import tempfile
 from pathlib import Path
-from playwright.async_api import async_playwright, Frame, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+if TYPE_CHECKING:
+    from playwright.async_api import Frame
 from fretio.providers.base import ProviderBase
 from fretio.providers.provider_utils import _digits, _fmt_peso, get_stealth_script
 from fretio.models import Cotacao
