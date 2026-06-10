@@ -40,7 +40,7 @@ jobs:
     runs-on: windows-latest
     env:
       HAS_RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN != '' }}
-      PUBLISH_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || github.event.client_payload.publish_release != false }}
+      PUBLISH_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || (github.event_name != 'workflow_dispatch' && github.event.client_payload.publish_release != 'false') }}
       HAS_UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_B64 != '' }}
       RELEASE_REPO: ${{ vars.RELEASE_REPO || 'kaianesteffens/RomaneioBeta-releases' }}
       RELEASE_REPO_ALIASES: ${{ vars.RELEASE_REPO_ALIASES }}
