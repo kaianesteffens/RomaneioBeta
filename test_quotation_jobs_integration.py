@@ -1,5 +1,7 @@
 import asyncio
 import sys
+import threading
+import time
 from pathlib import Path
 from urllib.error import URLError
 
@@ -207,3 +209,43 @@ def test_cotacao_updates_job_running_and_finished(monkeypatch):
     final_payload = updates[-1][1]["result"]
     assert final_payload["success_count"] == 1
     assert final_payload["transportadoras"][0]["provider"] == "braspress"
+
+
+def test_create_quotation_job_best_effort_does_not_block_when_slow(monkeypatch):
+    """Uma criação de job lenta (rede travada) não deve atrasar o início da cotação.
+
+    A espera é limitada por ``_JOB_CREATE_WAIT_S``; ao estourar retornamos sem
+    job_id e a cotação segue, enquanto a chamada HTTP termina em background.
+    """
+    jobs = ct._jobs_mod
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_create(*args, **kwargs):
+        started.set()
+        # Simula uma chamada HTTP travada (DNS/servidor lento).
+        release.wait(timeout=5)
+        return {"job_id": 999}
+
+    monkeypatch.setattr(jobs, "create_quotation_job", slow_create)
+    monkeypatch.setattr(jobs, "_JOB_CREATE_WAIT_S", 0.2)
+
+    inicio = time.monotonic()
+    job_id = jobs._create_quotation_job_best_effort("manual", {"modo": "romaneio_colado"})
+    elapsed = time.monotonic() - inicio
+
+    assert job_id is None
+    assert started.is_set()
+    # Não pode aguardar a chamada completa: deve respeitar o limite curto.
+    assert elapsed < 2.0
+    release.set()
+
+
+def test_create_quotation_job_best_effort_returns_job_id_when_fast(monkeypatch):
+    jobs = ct._jobs_mod
+    monkeypatch.setattr(jobs, "create_quotation_job", lambda *a, **k: {"job_id": 321})
+    monkeypatch.setattr(jobs, "_JOB_CREATE_WAIT_S", 2.0)
+
+    job_id = jobs._create_quotation_job_best_effort("manual", {"modo": "romaneio_colado"})
+
+    assert job_id == 321

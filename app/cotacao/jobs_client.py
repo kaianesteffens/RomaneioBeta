@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 import re
+import threading
 
 from .common import *
 from .telemetry import _usage_status_from_result, _value_cents_from_frete, _carrier_usage_defaults
@@ -77,20 +78,47 @@ def _quotation_job_start_payload(
     return payload
 
 
+# Tempo máximo (s) que o início da cotação espera pela criação remota do job.
+# A chamada HTTP é best-effort, mas é síncrona e o timeout de socket não cobre
+# resolução de DNS — em redes lentas/instáveis ela pode travar por minutos e
+# atrasar o início das cotações. Limitamos a espera e seguimos sem job_id quando
+# estourar (a criação continua em background, apenas sem rastreamento de status).
+_JOB_CREATE_WAIT_S = 4.0
+
+
 def _create_quotation_job_best_effort(source_type: str, payload: dict[str, Any]) -> Any:
-    try:
-        result = create_quotation_job(source_type, payload=payload, wait=True)
-        job_id = result.get("job_id") if isinstance(result, dict) else None
-        if not job_id:
-            status_code = result.get("status_code") if isinstance(result, dict) else None
-            if status_code:
-                _log_diag(f"Job de cotação não criado (HTTP {status_code})")
-            else:
-                _log_diag("Job de cotação não criado; cotação local continuará")
-        return job_id
-    except Exception as exc:
-        _log_diag(f"Falha ao criar job de cotação; cotação local continuará: {exc}")
+    holder: dict[str, Any] = {}
+
+    def _criar() -> None:
+        try:
+            holder["result"] = create_quotation_job(source_type, payload=payload, wait=True)
+        except Exception as exc:  # noqa: BLE001 - best-effort, nunca propaga
+            holder["error"] = exc
+
+    thread = threading.Thread(target=_criar, name="FretioQuotationJobCreate", daemon=True)
+    thread.start()
+    thread.join(_JOB_CREATE_WAIT_S)
+
+    if thread.is_alive():
+        _log_diag(
+            f"Criação do job de cotação excedeu {_JOB_CREATE_WAIT_S:.0f}s; "
+            "iniciando cotação sem aguardar (job seguirá em background)"
+        )
         return None
+
+    if "error" in holder:
+        _log_diag(f"Falha ao criar job de cotação; cotação local continuará: {holder['error']}")
+        return None
+
+    result = holder.get("result")
+    job_id = result.get("job_id") if isinstance(result, dict) else None
+    if not job_id:
+        status_code = result.get("status_code") if isinstance(result, dict) else None
+        if status_code:
+            _log_diag(f"Job de cotação não criado (HTTP {status_code})")
+        else:
+            _log_diag("Job de cotação não criado; cotação local continuará")
+    return job_id
 
 
 def _quotation_job_provider_status(status: Any) -> str:

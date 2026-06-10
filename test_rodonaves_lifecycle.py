@@ -930,3 +930,45 @@ def test_rodonaves_error_handler_resets_page_on_frame_detached(monkeypatch):
         assert provider._logged_in is False
 
     asyncio.run(run())
+
+
+def test_rodonaves_ignores_legacy_ssw_cotacao_url():
+    """Config antiga apontando para o SSW legado deve cair no portal moderno."""
+    provider = RodonavesProvider(
+        dominio="RTE",
+        usuario="12345678000190",
+        senha="senha_teste",
+        cnpj_pagador="12345678000190",
+        cotacao_url="https://sistema.rte.com.br/bin/ssw1608",
+        login_url="https://sistema.rte.com.br/bin/ssw0422",
+    )
+
+    assert provider.quotation_url == RodonavesProvider.PORTAL_URL
+    assert provider.portal_entry_url == f"{RodonavesProvider.BASE_URL}/?showLogin=true"
+
+
+def test_rodonaves_honors_modern_portal_override():
+    """URLs válidas do portal cliente.rte.com.br continuam respeitadas."""
+    provider = RodonavesProvider(
+        dominio="RTE",
+        usuario="12345678000190",
+        senha="senha_teste",
+        cnpj_pagador="12345678000190",
+        cotacao_url="https://cliente.rte.com.br/Quotation/Nova",
+        login_url="https://cliente.rte.com.br/Account/Login",
+    )
+
+    assert provider.quotation_url == "https://cliente.rte.com.br/Quotation/Nova"
+    assert provider.portal_entry_url == "https://cliente.rte.com.br/Account/Login"
+
+
+def test_rodonaves_uses_defaults_when_urls_empty():
+    provider = RodonavesProvider(
+        dominio="RTE",
+        usuario="12345678000190",
+        senha="senha_teste",
+        cnpj_pagador="12345678000190",
+    )
+
+    assert provider.quotation_url == RodonavesProvider.PORTAL_URL
+    assert provider.portal_entry_url == f"{RodonavesProvider.BASE_URL}/?showLogin=true"
