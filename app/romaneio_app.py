@@ -997,15 +997,6 @@ class ConfiguracoesDialog(QDialog):
         return erros
 
     def _salvar(self):
-        erros = self._validar_credenciais_antes_de_salvar()
-        if erros:
-            QMessageBox.warning(
-                self,
-                "Configuração incompleta",
-                "Preencha os campos obrigatórios das transportadoras habilitadas antes de salvar:\n\n"
-                + "\n".join(erros),
-            )
-            return
         transp_cfg = self.config.setdefault("transportadoras", {})
         cred_changed = False
         # UFs
@@ -1026,8 +1017,19 @@ class ConfiguracoesDialog(QDialog):
                 tcfg[chave] = novo
         _escrever_config_toml(self.config, self.config_path)
         self._credenciais_mudaram = cred_changed
+        # Aviso pós-save: captura erros antes de fechar o diálogo
+        erros = self._validar_credenciais_antes_de_salvar()
         QMessageBox.information(self, "Sucesso", "Configurações salvas!")
         self.accept()
+        if erros:
+            QMessageBox.warning(
+                self.parent(),
+                "Configuração incompleta",
+                "As configurações foram salvas, mas as transportadoras abaixo estão habilitadas "
+                "com campos obrigatórios vazios e não serão cotadas:\n\n"
+                + "\n".join(erros)
+                + "\n\nPreencha os campos indicados para que a cotação funcione corretamente.",
+            )
 
     def _apply_style(self):
         fb_cfg = self.config.get("fretio", {}) or {}
@@ -2333,15 +2335,6 @@ class RomaneioWindow(QMainWindow):
         return erros
 
     def _salvar_credenciais_embutido(self):
-        erros = self._validar_credenciais_embutidas_antes_de_salvar()
-        if erros:
-            QMessageBox.warning(
-                self,
-                "Configuração incompleta",
-                "Preencha os campos obrigatórios das transportadoras habilitadas antes de salvar:\n\n"
-                + "\n".join(erros),
-            )
-            return
         cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
         transp_cfg = cfg.setdefault("transportadoras", {})
         cred_changed = False
@@ -2359,6 +2352,17 @@ class RomaneioWindow(QMainWindow):
         if cred_changed:
             self._reiniciar_sessao()
         self.label_info.setText("Credenciais salvas.")
+        # Aviso pós-save: informa quais transportadoras habilitadas estão com config incompleta
+        erros = self._validar_credenciais_embutidas_antes_de_salvar()
+        if erros:
+            QMessageBox.warning(
+                self,
+                "Configuração incompleta",
+                "As credenciais foram salvas, mas as transportadoras abaixo estão habilitadas "
+                "com campos obrigatórios vazios e não serão cotadas:\n\n"
+                + "\n".join(erros)
+                + "\n\nPreencha os campos indicados para que a cotação funcione corretamente.",
+            )
 
     def _on_toggle_tema(self, dark: bool) -> None:
         self._theme_mode = "escuro" if dark else "claro"
