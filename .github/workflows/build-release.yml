@@ -1,5 +1,21 @@
 name: Build and Release Fretio
 
+# Pode ser disparado de duas formas:
+#
+# 1. Pela UI do GitHub (Actions > "Run workflow")
+#
+# 2. Via API REST (curl, script, CI externo, atalho mobile, etc.):
+#
+#    curl -s -X POST \
+#      -H "Accept: application/vnd.github+json" \
+#      -H "Authorization: Bearer SEU_TOKEN" \
+#      https://api.github.com/repos/kaianesteffens/RomaneioBeta/dispatches \
+#      -d '{"event_type":"build-release","client_payload":{"version":"2.35","publish_release":true}}'
+#
+#    Campos do client_payload:
+#      version         (obrigatorio) ex: "2.35" ou "2.35.1"
+#      publish_release (opcional, padrao true) true | false
+
 on:
   workflow_dispatch:
     inputs:
@@ -13,6 +29,9 @@ on:
         default: true
         type: boolean
 
+  repository_dispatch:
+    types: [build-release]
+
 permissions:
   contents: write
 
@@ -21,7 +40,7 @@ jobs:
     runs-on: windows-latest
     env:
       HAS_RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN != '' }}
-      PUBLISH_RELEASE: ${{ inputs.publish_release }}
+      PUBLISH_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || github.event.client_payload.publish_release != false }}
       HAS_UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_B64 != '' }}
       RELEASE_REPO: ${{ vars.RELEASE_REPO || 'kaianesteffens/RomaneioBeta-releases' }}
       RELEASE_REPO_ALIASES: ${{ vars.RELEASE_REPO_ALIASES }}
@@ -40,8 +59,9 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          INPUT_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event.client_payload.version }}
         run: |
-          $version = "${{ inputs.version }}".Trim()
+          $version = $env:INPUT_VERSION.Trim()
           if ([string]::IsNullOrWhiteSpace($version)) {
             throw "Input version e obrigatorio. Informe uma versao nova, ex: 2.34 ou 2.34.1."
           }
