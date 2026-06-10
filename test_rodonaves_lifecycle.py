@@ -930,5 +930,3 @@ def test_rodonaves_error_handler_resets_page_on_frame_detached(monkeypatch):
         assert provider._logged_in is False
 
     asyncio.run(run())
-
-    asyncio.run(run())
