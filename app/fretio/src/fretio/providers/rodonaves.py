@@ -47,11 +47,30 @@ class RodonavesProvider(ProviderBase):
 
     @property
     def portal_entry_url(self) -> str:
-        return self.login_url or f"{self.BASE_URL}/?showLogin=true"
+        if self.login_url and not self._is_legacy_portal_url(self.login_url):
+            return self.login_url
+        return f"{self.BASE_URL}/?showLogin=true"
 
     @property
     def quotation_url(self) -> str:
-        return self.cotacao_url or self.PORTAL_URL
+        if self.cotacao_url and not self._is_legacy_portal_url(self.cotacao_url):
+            return self.cotacao_url
+        return self.PORTAL_URL
+
+    @staticmethod
+    def _is_legacy_portal_url(url: str) -> bool:
+        """Detecta URLs do sistema legado SSW (sistema.rte.com.br/bin/ssw...).
+
+        O fluxo atual usa o portal cliente.rte.com.br (login AJAX + formulário
+        próprio). Configurações antigas de clientes ainda apontam ``cotacao_url``
+        para o SSW legado, cujo host não resolve mais (ERR_NAME_NOT_RESOLVED) e é
+        incompatível com este provider. Nesses casos ignoramos a URL configurada
+        e voltamos para os defaults do portal moderno.
+        """
+        u = str(url or "").strip().lower()
+        if not u:
+            return False
+        return "sistema.rte.com.br" in u or "ssw" in u
 
     def __init__(
         self,
