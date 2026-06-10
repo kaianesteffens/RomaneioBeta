@@ -224,7 +224,7 @@ class _ProviderSessionRegistry:
             removidos: list[tuple[str, Any, float]] = []
             for nome in list(self._providers):
                 tempo_ocioso = agora - self._ultimo_uso.get(nome, agora)
-                if tempo_ocioso <= idle_timeout_s:
+                if tempo_ocioso < idle_timeout_s:
                     continue
                 provider = self._providers.pop(nome, None)
                 self._ultimo_uso.pop(nome, None)

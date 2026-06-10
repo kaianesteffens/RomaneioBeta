@@ -313,8 +313,10 @@ def test_validate_license_uses_env_api_url_when_defined(monkeypatch, tmp_path):
 
 
 def test_get_license_api_url_normalizes_validate_endpoint(monkeypatch):
-    monkeypatch.setenv("FRETIO_LICENSE_API_URL", "https://licenses.example.test/api/licenses")
+    # delenv before setenv: on Windows, env keys are case-insensitive, so
+    # delenv("Fretio_LICENSE_API_URL") would delete the same key we just set.
     monkeypatch.delenv("FRETEBOT_LICENSE_API_URL", raising=False)
     monkeypatch.delenv("Fretio_LICENSE_API_URL", raising=False)
+    monkeypatch.setenv("FRETIO_LICENSE_API_URL", "https://licenses.example.test/api/licenses")
 
     assert lic._get_license_api_url() == "https://licenses.example.test/api/licenses/validate"
