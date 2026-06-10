@@ -6,15 +6,487 @@ from typing import Any
 import asyncio
 import re
 import time
+import traceback
 
-from .common import *
-from .validation import *
-from .telemetry import *
-from .jobs_client import *
-from .config import *
-from .romaneio_parser import *
-from .session_manager import *
+from .common import (
+    ResultadoCotacao,
+    ProviderCotacaoStatus,
+    _log_diag,
+    _remote_disabled_results_for_config,
+    MODO_FOCO_TRANSPORTADORA,
+    KNOWN_CARRIERS,
+    PROVIDER_PROGRESS_MESSAGES,
+    _trd_headless_config_value,
+    provider_progress_from_resultado,
+    normalize_provider_progress_status,
+    normalize_provider_progress_message,
+    ProviderFactory,
+    QuoteResponse,
+    quote_request_from_legacy_kwargs,
+    quote_response_to_resultado_cotacao,
+)
+from .validation import (
+    _uf_atendida,
+    _cep,
+    _digits,
+    _cep_para_uf,
+    _cubagens_validas,
+)
+from .config import apply_safe_runtime_overrides, _resolver_cep_origem
+from .telemetry import _provider_supports_quote_request_cotar
+from .session_manager import (
+    TransportadoraSession,
+    _PRIORIDADE_LENTIDAO,
+    _TIMEOUT_COTACAO_S,
+    _TIMEOUT_COTACAO_PADRAO_S,
+    CHROME_MISSING_USER_MESSAGE,
+    _is_chrome_missing_error,
+)
 from .error_context import build_quotation_error_diagnostic, report_provider_error
+
+
+# ---------------------------------------------------------------------------
+# Helpers para classificação de erros — definidos em escopo de módulo para
+# evitar redefinição a cada chamada da função assíncrona principal.
+# ---------------------------------------------------------------------------
+
+def _is_business_error(detail: str) -> bool:
+    """Detecta erros de negócio (destino não atendido, rota fora de cobertura).
+
+    Esses erros são normais e não devem ser reportados nem gerar retry."""
+    if not detail:
+        return False
+    d = str(detail).lower()
+    patterns = (
+        "destino fora da cobertura",
+        "cepdestino não atendido",
+        "cep destino não atendido",
+        "não atendemos esse cep",
+        "destino possivelmente não atendido",
+        "destino possìvelmente não atendido",
+        "rota não atendida",
+        "cidade de destino",
+        "transportadora não atende",
+        "transportadora n o atende",
+        "cidade de destino n o",
+        "n o atendida",
+        "não atendido",
+        "nao atendido",
+        "fora de cobertura",
+        "fora da cobertura",
+        "não atendemos",
+        "cepnão atendemos",
+        "sem precificação automática no ssw",
+        "sem precificacao automatica no ssw",
+        "não cadastrada",
+        "nao cadastrada",
+        "rota:",
+    )
+    return any(p in d for p in patterns)
+
+
+_TRANSIENT_PATTERNS = (
+    "target page, context or browser has been closed",
+    "target closed",
+    "frame was detached",
+    "net::err_aborted",
+    "net::err_connection",
+    "net::err_name",
+    "net::err_timed_out",
+    "net::err_internet",
+    "net::err_network",
+    "formulário de cotação não carregou",
+    "formulario de cotacao nao carregou",
+    "page.goto",
+    "valor de frete nao encontrado",
+    "valor de frete não encontrado",
+    "timeout aguardando resultado",
+)
+
+
+def _is_expected_transient_failure(erro: BaseException) -> bool:
+    """Detecta falhas transitórias esperadas de provider que NÃO devem ir para report_error.
+
+    Timeouts do provider e erros de rede/browser são falhas controladas — não bugs no código."""
+    if isinstance(erro, TimeoutError):
+        return True
+    err_str = str(erro).lower()
+    return any(p in err_str for p in _TRANSIENT_PATTERNS)
+
+
+def _is_expected_transient_failure_str(detail: str) -> bool:
+    """Mesmos critérios de _is_expected_transient_failure, mas para strings de last_error.
+
+    Usado quando o provider capturou a exceção internamente e retornou None."""
+    if not detail:
+        return False
+    d = detail.lower()
+    if "timeout" in d or "timed out" in d:
+        return True
+    return any(p in d for p in _TRANSIENT_PATTERNS)
+
+
+# ---------------------------------------------------------------------------
+# Helpers para setup de carriers (blocos try/except comuns)
+# ---------------------------------------------------------------------------
+
+def _build_braspress_kwargs(
+    *,
+    cfg: dict[str, Any],
+    origem: str,
+    destino: str,
+    peso: float,
+    valor: float,
+    cnpj_destinatario: str,
+    volumes: int,
+    cubagens_validas: list[dict[str, Any]],
+    cnpj_remetente: str,
+    tipo_frete: str,
+    effective_config: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Retorna kwargs para BRASPRESS ou None se não configurada."""
+    cnpj = str(cfg.get("cnpj", "")).strip()
+    senha = str(cfg.get("senha", "")).strip()
+    if not (cnpj and senha):
+        _log_diag("BRASPRESS não configurada (CNPJ/senha ausentes)")
+        return None
+    primeira_cub = cubagens_validas[0]
+    _log_diag(
+        f"BRASPRESS preparada (cnpj={cnpj[:6]}..., linhas_cubagem={len(cubagens_validas)}, "
+        f"headless={bool(cfg.get('headless', True))})"
+    )
+    kwargs: dict[str, Any] = dict(
+        origem=origem,
+        destino=destino,
+        peso=peso,
+        valor=valor,
+        cnpj_destinatario=cnpj_destinatario,
+        volumes=volumes,
+        comprimento_cm=int(primeira_cub["comprimento_cm"]),
+        largura_cm=int(primeira_cub["largura_cm"]),
+        altura_cm=int(primeira_cub["altura_cm"]),
+        cubagens=cubagens_validas,
+    )
+    if cnpj_remetente:
+        kwargs["cnpj_remetente"] = cnpj_remetente
+        kwargs["tipo_frete"] = tipo_frete or "2"
+    return kwargs
+
+
+def _build_bauer_kwargs(
+    *,
+    cfg: dict[str, Any],
+    origem: str,
+    destino: str,
+    peso: float,
+    valor: float,
+    cnpj_destinatario: str,
+    cubagens_validas: list[dict[str, Any]],
+    cnpj_remetente: str,
+    effective_config: dict[str, Any],
+    provider: Any,
+) -> dict[str, Any] | None:
+    """Retorna kwargs para BAUER ou None se não configurada. Também atualiza atributos do provider."""
+    cotacao_url = str(cfg.get("cotacao_url", "")).strip()
+    bau_cnpj_pag = str(cfg.get("cnpj_pagador", "")).strip()
+    bau_cnpj_rem = str(cfg.get("cnpj_remetente", "")).strip()
+    cnpj_dest = cnpj_destinatario
+    if not (cotacao_url and bau_cnpj_pag and bau_cnpj_rem and cnpj_dest):
+        _log_diag("BAUER não configurada (parâmetros ausentes)")
+        return None
+    cubagens_bauer = []
+    for cub in cubagens_validas:
+        qtd = int(cub["quantidade"])
+        if qtd <= 0:
+            continue
+        cubagens_bauer.append(
+            {
+                "quantidade": qtd,
+                "altura_m": int(cub["altura_cm"]) / 100.0,
+                "largura_m": int(cub["largura_cm"]) / 100.0,
+                "profundidade_m": int(cub["comprimento_cm"]) / 100.0,
+            }
+        )
+    if not cubagens_bauer:
+        # Caller will handle the error result
+        return "sem_cubagens"  # type: ignore[return-value]
+    vol = sum(int(c["quantidade"]) for c in cubagens_bauer)
+    primeira = cubagens_bauer[0]
+    alt_m = float(primeira["altura_m"])
+    larg_m = float(primeira["largura_m"])
+    prof_m = float(primeira["profundidade_m"])
+    provider.quantidade = vol
+    provider.altura_m = alt_m
+    provider.largura_m = larg_m
+    provider.profundidade_m = prof_m
+    if hasattr(provider, "cubagens"):
+        provider.cubagens = cubagens_bauer
+    if hasattr(provider, "cnpj_destinatario"):
+        provider.cnpj_destinatario = re.sub(r"\D", "", cnpj_dest or "")
+    _log_diag(
+        f"BAUER preparada: linhas_cubagem={len(cubagens_bauer)}, volumes={vol}"
+    )
+    kwargs: dict[str, Any] = dict(
+        origem=origem,
+        destino=destino,
+        peso=peso,
+        valor=valor,
+        cubagens=cubagens_bauer,
+    )
+    if cnpj_remetente:
+        provider.cnpj_remetente = re.sub(r"\D", "", cnpj_remetente)
+        provider.cnpj_destinatario = re.sub(r"\D", "", bau_cnpj_pag)
+        kwargs["destino"] = _resolver_cep_origem(effective_config, "")
+        kwargs["tipo_frete"] = "fob"
+    return kwargs
+
+
+def _build_trd_kwargs(
+    *,
+    cfg: dict[str, Any],
+    origem: str,
+    destino: str,
+    peso: float,
+    valor: float,
+    volumes: int,
+    cubagens_validas: list[dict[str, Any]],
+    cnpj_destinatario: str,
+    cnpj_remetente: str,
+    headless_trd: bool,
+) -> dict[str, Any] | None:
+    """Retorna kwargs para TRD ou None se não configurada."""
+    email = str(cfg.get("email", "")).strip()
+    senha = str(cfg.get("senha", "")).strip()
+    if not (email and senha):
+        _log_diag("TRD não configurada (email/senha ausentes)")
+        return None
+    _log_diag(f"TRD preparada (headless={headless_trd})")
+    kwargs: dict[str, Any] = dict(
+        origem=origem,
+        destino=destino,
+        peso=peso,
+        valor=valor,
+        volumes=volumes,
+        cubagens=cubagens_validas,
+        cnpj_destinatario=cnpj_destinatario,
+    )
+    if cnpj_remetente:
+        kwargs["cnpj_remetente"] = cnpj_remetente
+        kwargs["cep_remetente"] = origem
+    return kwargs
+
+
+def _build_eucatur_kwargs(
+    *,
+    cfg: dict[str, Any],
+    origem: str,
+    destino: str,
+    peso: float,
+    valor: float,
+    volumes: int,
+    cubagem_m3: float,
+    cubagens_validas: list[dict[str, Any]],
+    cnpj_destinatario: str,
+    cnpj_pagador_euc: str,
+    cnpj_remetente: str,
+    effective_config: dict[str, Any],
+    headless_eucatur: bool,
+) -> dict[str, Any] | None:
+    """Retorna kwargs para EUCATUR ou None se não configurada."""
+    dominio = str(cfg.get("dominio", "")).strip()
+    usuario = str(cfg.get("usuario", "")).strip()
+    senha_euc = str(cfg.get("senha", "")).strip()
+    if not (dominio and usuario and senha_euc):
+        _log_diag("Eucatur não configurada (domínio/usuário/senha ausentes)")
+        return None
+    _log_diag(f"EUCATUR preparada (headless={headless_eucatur})")
+    kwargs: dict[str, Any] = dict(
+        origem=origem,
+        destino=destino,
+        peso=peso,
+        valor=valor,
+        volumes=volumes,
+        cubagem_m3=cubagem_m3,
+        cubagens=cubagens_validas,
+        cnpj_remetente=cnpj_pagador_euc,
+        cnpj_destinatario=cnpj_destinatario,
+        cnpj_pagador=cnpj_pagador_euc,
+    )
+    if cnpj_remetente:
+        kwargs["cnpj_remetente"] = cnpj_remetente
+        kwargs["cnpj_destinatario"] = cnpj_pagador_euc
+        kwargs["destino"] = _resolver_cep_origem(effective_config, "")
+        kwargs["tipo_frete"] = "2"
+    return kwargs
+
+
+def _build_rodonaves_kwargs(
+    *,
+    cfg: dict[str, Any],
+    origem: str,
+    destino: str,
+    peso: float,
+    valor: float,
+    volumes: int,
+    cubagem_m3: float,
+    cubagens_validas: list[dict[str, Any]],
+    cnpj_destinatario: str,
+    cep_origem: str,
+    headless_rodonaves: bool,
+) -> dict[str, Any] | None:
+    """Retorna kwargs para RODONAVES ou None se não configurada."""
+    dominio = str(cfg.get("dominio", "RTE") or "RTE").strip()
+    usuario = str(cfg.get("usuario", "")).strip()
+    senha = str(cfg.get("senha", "")).strip()
+    cnpj_pagador = _digits(str(cfg.get("cnpj_pagador", "") or ""))
+    if not (dominio and usuario and senha and len(cnpj_pagador) == 14):
+        _log_diag("RODONAVES não configurada (domínio/usuário/senha/cnpj_pagador ausentes)")
+        return None
+    _log_diag(f"RODONAVES preparada (headless={headless_rodonaves})")
+    return dict(
+        origem=origem,
+        destino=destino,
+        peso=peso,
+        valor=valor,
+        volumes=volumes,
+        cubagem_m3=cubagem_m3,
+        cubagens=cubagens_validas,
+        cnpj_remetente=cnpj_pagador,
+        cnpj_destinatario=cnpj_destinatario,
+        preencher_cep_origem=bool(_cep(cep_origem)),
+    )
+
+
+def _build_alfa_kwargs(
+    *,
+    cfg: dict[str, Any],
+    origem: str,
+    destino: str,
+    peso: float,
+    valor: float,
+    volumes: int,
+    cubagem_m3: float,
+    cubagens_validas: list[dict[str, Any]],
+    cnpj_destinatario: str,
+    cnpj_remetente: str,
+    effective_config: dict[str, Any],
+    headless_alfa: bool,
+) -> dict[str, Any] | None:
+    """Retorna kwargs para ALFA ou None se não configurada."""
+    login = str(cfg.get("login", "") or "").strip()
+    senha = str(cfg.get("senha", "") or "").strip()
+    cnpj_rem = str(cfg.get("cnpj_remetente", "") or "").strip()
+    if not (login and senha and cnpj_rem):
+        _log_diag("ALFA não configurada (login/senha/cnpj_remetente ausentes)")
+        return None
+    _log_diag(f"ALFA preparada (headless={headless_alfa})")
+    kwargs: dict[str, Any] = dict(
+        origem=origem,
+        destino=destino,
+        peso=peso,
+        valor=valor,
+        volumes=volumes,
+        cubagem_m3=cubagem_m3,
+        cubagens=cubagens_validas,
+        cnpj_remetente=cnpj_rem,
+        cnpj_destinatario=cnpj_destinatario,
+    )
+    if cnpj_remetente:
+        kwargs["cnpj_remetente"] = cnpj_remetente
+        kwargs["cnpj_destinatario"] = cnpj_rem
+        kwargs["destino"] = _resolver_cep_origem(effective_config, "")
+        kwargs["tipo_pagador"] = "2"
+    return kwargs
+
+
+def _build_coopex_kwargs(
+    *,
+    cfg: dict[str, Any],
+    origem: str,
+    destino: str,
+    peso: float,
+    valor: float,
+    volumes: int,
+    cubagem_m3: float,
+    cubagens_validas: list[dict[str, Any]],
+    cnpj_destinatario: str,
+    cnpj_pagador_co: str,
+    cnpj_remetente: str,
+    effective_config: dict[str, Any],
+    headless_coopex: bool,
+) -> dict[str, Any] | None:
+    """Retorna kwargs para COOPEX ou None se não configurada."""
+    dominio = str(cfg.get("dominio", "")).strip()
+    usuario = str(cfg.get("usuario", "")).strip()
+    senha_co = str(cfg.get("senha", "")).strip()
+    if not (dominio and usuario and senha_co):
+        _log_diag("COOPEX não configurada (domínio/usuário/senha ausentes)")
+        return None
+    _log_diag(f"COOPEX preparada (headless={headless_coopex})")
+    kwargs: dict[str, Any] = dict(
+        origem=origem,
+        destino=destino,
+        peso=peso,
+        valor=valor,
+        volumes=volumes,
+        cubagem_m3=cubagem_m3,
+        cubagens=cubagens_validas,
+        cnpj_remetente=cnpj_pagador_co,
+        cnpj_destinatario=cnpj_destinatario,
+        cnpj_pagador=cnpj_pagador_co,
+    )
+    if cnpj_remetente:
+        kwargs["cnpj_remetente"] = cnpj_remetente
+        kwargs["cnpj_destinatario"] = cnpj_pagador_co
+        kwargs["destino"] = _resolver_cep_origem(effective_config, "")
+        kwargs["tipo_frete"] = "2"
+    return kwargs
+
+
+def _build_translovato_kwargs(
+    *,
+    cfg: dict[str, Any],
+    origem: str,
+    destino: str,
+    peso: float,
+    valor: float,
+    volumes: int,
+    cubagem_m3: float,
+    cubagens_validas: list[dict[str, Any]],
+    cnpj_destinatario: str,
+    cnpj_remetente: str,
+    uf_destino: str,
+    cidade_destino: str,
+    headless_translovato: bool,
+) -> dict[str, Any] | None:
+    """Retorna kwargs para TRANSLOVATO ou None se não configurada."""
+    cnpj = _digits(str(cfg.get("cnpj", "") or ""))
+    usuario = str(cfg.get("usuario", "") or "").strip()
+    senha_tl = str(cfg.get("senha", "") or "").strip()
+    cnpj_rem_cfg = _digits(str(cfg.get("cnpj_remetente", "") or "")) or cnpj
+    if not (len(cnpj) == 14 and usuario and senha_tl):
+        _log_diag("TRANSLOVATO não configurada (CNPJ/usuário/senha ausentes)")
+        return None
+    _log_diag(
+        f"TRANSLOVATO preparada (cnpj={cnpj[:4]}***{cnpj[-2:]}, "
+        f"linhas_cubagem={len(cubagens_validas)}, headless={headless_translovato})"
+    )
+    return dict(
+        origem=origem,
+        destino=destino,
+        cep_origem=origem,
+        cep_destino=destino,
+        uf_destino=uf_destino,
+        cidade_destino=cidade_destino,
+        peso=peso,
+        valor=valor,
+        volumes=volumes,
+        cubagem_m3=cubagem_m3,
+        cubagens=cubagens_validas,
+        cnpj_destinatario=cnpj_destinatario,
+        cnpj_remetente=_digits(cnpj_remetente or cnpj_rem_cfg),
+    )
+
 
 async def _executar_cotacoes_com_dados(
     *,
@@ -426,9 +898,9 @@ async def _executar_cotacoes_com_dados(
             elif not _uf_atendida(bcfg.get("ufs_atendidas"), uf_destino):
                 erros_setup.append(_resultado_nao_atendido("BRASPRESS", uf_destino))
             else:
-                cnpj = str(bcfg.get("cnpj", "")).strip()
-                senha = str(bcfg.get("senha", "")).strip()
-                if cnpj and senha:
+                cnpj_bp = str(bcfg.get("cnpj", "")).strip()
+                senha_bp = str(bcfg.get("senha", "")).strip()
+                if cnpj_bp and senha_bp:
                     headless_braspress = bool(bcfg.get("headless", True))
                     provider = await _obter_provider_sessao(
                         "braspress",
@@ -436,27 +908,21 @@ async def _executar_cotacoes_com_dados(
                         desired_headless=headless_braspress,
                         log_label="BRASPRESS",
                     )
-                    primeira_cub = cubagens_validas[0]
-                    _log_diag(
-                        f"BRASPRESS preparada (cnpj={cnpj[:6]}..., linhas_cubagem={len(cubagens_validas)}, "
-                        f"headless={headless_braspress})"
-                    )
-                    _bp_kwargs = dict(
+                    _bp_kwargs = _build_braspress_kwargs(
+                        cfg=bcfg,
                         origem=origem,
                         destino=destino,
                         peso=peso,
                         valor=valor,
                         cnpj_destinatario=cnpj_destinatario,
                         volumes=volumes,
-                        comprimento_cm=int(primeira_cub["comprimento_cm"]),
-                        largura_cm=int(primeira_cub["largura_cm"]),
-                        altura_cm=int(primeira_cub["altura_cm"]),
-                        cubagens=cubagens_validas,
+                        cubagens_validas=cubagens_validas,
+                        cnpj_remetente=cnpj_remetente,
+                        tipo_frete=tipo_frete,
+                        effective_config=effective_config,
                     )
-                    if cnpj_remetente:
-                        _bp_kwargs["cnpj_remetente"] = cnpj_remetente
-                        _bp_kwargs["tipo_frete"] = tipo_frete or "2"
-                    tasks.append(("BRASPRESS", provider, _bp_kwargs))
+                    if _bp_kwargs is not None:
+                        tasks.append(("BRASPRESS", provider, _bp_kwargs))
                 else:
                     _log_diag("BRASPRESS não configurada (CNPJ/senha ausentes)")
     except Exception as e:
@@ -483,12 +949,13 @@ async def _executar_cotacoes_com_dados(
                 bau_cnpj_rem = str(baucfg.get("cnpj_remetente", "")).strip()
                 cnpj_dest = cnpj_destinatario
                 if cotacao_url and bau_cnpj_pag and bau_cnpj_rem and cnpj_dest:
-                    cubagens_bauer = []
+                    # Pre-compute cubagens_bauer to size the provider creation
+                    cubagens_bauer_pre = []
                     for cub in cubagens_validas:
                         qtd = int(cub["quantidade"])
                         if qtd <= 0:
                             continue
-                        cubagens_bauer.append(
+                        cubagens_bauer_pre.append(
                             {
                                 "quantidade": qtd,
                                 "altura_m": int(cub["altura_cm"]) / 100.0,
@@ -496,15 +963,15 @@ async def _executar_cotacoes_com_dados(
                                 "profundidade_m": int(cub["comprimento_cm"]) / 100.0,
                             }
                         )
-                    if not cubagens_bauer:
+                    if not cubagens_bauer_pre:
                         msg = "BAUER bloqueada: romaneio sem cubagens válidas."
                         _log_diag(msg)
                         erros_setup.append(
                             ResultadoCotacao(transportadora="BAUER", status="erro", detalhes=msg)
                         )
                     else:
-                        vol = sum(int(c["quantidade"]) for c in cubagens_bauer)
-                        primeira = cubagens_bauer[0]
+                        vol = sum(int(c["quantidade"]) for c in cubagens_bauer_pre)
+                        primeira = cubagens_bauer_pre[0]
                         alt_m = float(primeira["altura_m"])
                         larg_m = float(primeira["largura_m"])
                         prof_m = float(primeira["profundidade_m"])
@@ -520,34 +987,24 @@ async def _executar_cotacoes_com_dados(
                                 "altura_m": alt_m,
                                 "largura_m": larg_m,
                                 "profundidade_m": prof_m,
-                                "cubagens": cubagens_bauer,
+                                "cubagens": cubagens_bauer_pre,
                             },
                             log_label="BAUER",
                         )
-                        provider.quantidade = vol
-                        provider.altura_m = alt_m
-                        provider.largura_m = larg_m
-                        provider.profundidade_m = prof_m
-                        if hasattr(provider, "cubagens"):
-                            provider.cubagens = cubagens_bauer
-                        if hasattr(provider, "cnpj_destinatario"):
-                            provider.cnpj_destinatario = re.sub(r"\D", "", cnpj_dest or "")
-                        _log_diag(
-                            f"BAUER preparada: linhas_cubagem={len(cubagens_bauer)}, volumes={vol}"
-                        )
-                        _bauer_kwargs = dict(
+                        _bauer_kwargs = _build_bauer_kwargs(
+                            cfg=baucfg,
                             origem=origem,
                             destino=destino,
                             peso=peso,
                             valor=valor,
-                            cubagens=cubagens_bauer,
+                            cnpj_destinatario=cnpj_destinatario,
+                            cubagens_validas=cubagens_validas,
+                            cnpj_remetente=cnpj_remetente,
+                            effective_config=effective_config,
+                            provider=provider,
                         )
-                        if cnpj_remetente:
-                            provider.cnpj_remetente = re.sub(r"\D", "", cnpj_remetente)
-                            provider.cnpj_destinatario = re.sub(r"\D", "", bau_cnpj_pag)
-                            _bauer_kwargs["destino"] = _resolver_cep_origem(effective_config, "")
-                            _bauer_kwargs["tipo_frete"] = "fob"
-                        tasks.append(("BAUER", provider, _bauer_kwargs))
+                        if isinstance(_bauer_kwargs, dict):
+                            tasks.append(("BAUER", provider, _bauer_kwargs))
                 else:
                     _log_diag("BAUER não configurada (parâmetros ausentes)")
     except Exception as e:
@@ -567,33 +1024,28 @@ async def _executar_cotacoes_com_dados(
             elif not _uf_atendida(tcfg.get("ufs_atendidas"), uf_destino):
                 erros_setup.append(_resultado_nao_atendido("TRD", uf_destino))
             else:
-                email = str(tcfg.get("email", "")).strip()
-                senha = str(tcfg.get("senha", "")).strip()
-                if email and senha:
-                    foco_trd = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "trd"
-                    headless_trd = _trd_headless_config_value(tcfg, foco_trd)
+                foco_trd = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "trd"
+                headless_trd = _trd_headless_config_value(tcfg, foco_trd)
+                _trd_kwargs = _build_trd_kwargs(
+                    cfg=tcfg,
+                    origem=origem,
+                    destino=destino,
+                    peso=peso,
+                    valor=valor,
+                    volumes=volumes,
+                    cubagens_validas=cubagens_validas,
+                    cnpj_destinatario=cnpj_destinatario,
+                    cnpj_remetente=cnpj_remetente,
+                    headless_trd=headless_trd,
+                )
+                if _trd_kwargs is not None:
                     provider = await _obter_provider_sessao(
                         "trd",
                         create_kwargs={"headless": headless_trd},
                         desired_headless=headless_trd,
                         log_label="TRD",
                     )
-                    _log_diag(f"TRD preparada (headless={headless_trd})")
-                    _trd_kwargs = dict(
-                        origem=origem,
-                        destino=destino,
-                        peso=peso,
-                        valor=valor,
-                        volumes=volumes,
-                        cubagens=cubagens_validas,
-                        cnpj_destinatario=cnpj_destinatario,
-                    )
-                    if cnpj_remetente:
-                        _trd_kwargs["cnpj_remetente"] = cnpj_remetente
-                        _trd_kwargs["cep_remetente"] = origem
                     tasks.append(("TRD", provider, _trd_kwargs))
-                else:
-                    _log_diag("TRD não configurada (email/senha ausentes)")
     except Exception as e:
         _log_diag(f"Erro ao preparar TRD: {e}")
         _reportar_erro_preparacao("TRD", e)
@@ -617,27 +1069,31 @@ async def _executar_cotacoes_com_dados(
                 elif not _uf_atendida(acfg.get("ufs_atendidas"), uf_destino):
                     erros_setup.append(_resultado_nao_atendido("AGEX", uf_destino))
                 else:
-                    email = str(acfg.get("email", "")).strip()
-                    if not email:
+                    foco_agex = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "agex"
+                    headless_agex = False if foco_agex else bool(acfg.get("headless", True))
+                    cnpj_cfg = str(acfg.get("cnpj", "")).strip()
+                    cnpj_rem = _digits(str(acfg.get("cnpj_remetente", "")).strip() or cnpj_cfg)
+                    cnpj_dest = cnpj_destinatario
+                    descricao_mercadoria = str(acfg.get("descricao_mercadoria", "Mercadoria"))
+                    tipo_produto = str(acfg.get("tipo_produto", "Artigos Esportivos"))
+                    # Resolve email with legacy fallback (same logic as _build_agex_kwargs)
+                    email_agex = str(acfg.get("email", "")).strip()
+                    if not email_agex:
                         legacy_login = str(acfg.get("cnpj", "")).strip()
                         if "@" in legacy_login:
-                            email = legacy_login
-                    senha = str(acfg.get("senha", "")).strip()
-                    if email and senha:
-                        foco_agex = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "agex"
-                        headless_agex = False if foco_agex else bool(acfg.get("headless", True))
-                        cnpj_cfg = str(acfg.get("cnpj", "")).strip()
-                        cnpj_rem = _digits(str(acfg.get("cnpj_remetente", "")).strip() or cnpj_cfg)
-                        cnpj_dest = cnpj_destinatario
-                        descricao_mercadoria = str(acfg.get("descricao_mercadoria", "Mercadoria"))
-                        tipo_produto = str(acfg.get("tipo_produto", "Artigos Esportivos"))
-                        cubagens_agex = []
+                            email_agex = legacy_login
+                    senha_agex = str(acfg.get("senha", "")).strip()
+                    if not (email_agex and senha_agex):
+                        _log_diag("AGEX não configurada (email/senha ausentes)")
+                    else:
+                        # Pre-compute cubagens_agex for provider creation
+                        cubagens_agex_pre = []
                         for cub in cubagens_validas:
                             qtd = int(cub["quantidade"])
                             c_cm = int(cub["comprimento_cm"])
                             l_cm = int(cub["largura_cm"])
                             a_cm = int(cub["altura_cm"])
-                            cubagens_agex.append(
+                            cubagens_agex_pre.append(
                                 {
                                     "quantidade": qtd,
                                     "comprimento_m": c_cm / 100.0,
@@ -645,13 +1101,13 @@ async def _executar_cotacoes_com_dados(
                                     "altura_m": a_cm / 100.0,
                                 }
                             )
-                        if not cubagens_agex:
+                        if not cubagens_agex_pre:
                             msg = "AGEX bloqueada: romaneio sem tamanhos de caixa (cubagens) válidos."
                             _log_diag(msg)
                             erros_setup.append(ResultadoCotacao(transportadora="AGEX", status="erro", detalhes=msg))
                         else:
-                            vol = sum(int(c["quantidade"]) for c in cubagens_agex)
-                            primeira = cubagens_agex[0]
+                            vol = sum(int(c["quantidade"]) for c in cubagens_agex_pre)
+                            primeira = cubagens_agex_pre[0]
                             alt_m = float(primeira["altura_m"])
                             larg_m = float(primeira["largura_m"])
                             comp_m = float(primeira["comprimento_m"])
@@ -659,8 +1115,8 @@ async def _executar_cotacoes_com_dados(
                                 "agex",
                                 create_kwargs={
                                     "cnpj": cnpj_cfg,
-                                    "email": email,
-                                    "senha": senha,
+                                    "email": email_agex,
+                                    "senha": senha_agex,
                                     "cnpj_remetente": cnpj_rem,
                                     "cnpj_destinatario": cnpj_dest,
                                     "cep_origem": origem,
@@ -671,7 +1127,7 @@ async def _executar_cotacoes_com_dados(
                                     "altura_m": alt_m,
                                     "largura_m": larg_m,
                                     "comprimento_m": comp_m,
-                                    "cubagens": cubagens_agex,
+                                    "cubagens": cubagens_agex_pre,
                                     "headless": headless_agex,
                                 },
                                 desired_headless=headless_agex,
@@ -690,12 +1146,12 @@ async def _executar_cotacoes_com_dados(
                                     cep_destino=destino,
                                     descricao_mercadoria=descricao_mercadoria,
                                     tipo_produto=tipo_produto,
-                                    cubagens=cubagens_agex,
+                                    cubagens=cubagens_agex_pre,
                                 )
                             _log_diag(
                                 f"AGEX preparada: peso={peso:.3f}kg, vol={vol}, "
                                 f"dims={comp_m:.2f}x{larg_m:.2f}x{alt_m:.2f}m, "
-                                f"linhas_cubagem={len(cubagens_agex)}, headless={headless_agex}"
+                                f"linhas_cubagem={len(cubagens_agex_pre)}, headless={headless_agex}"
                             )
                             _agex_kwargs = dict(
                                 origem=cnpj_rem,
@@ -704,8 +1160,6 @@ async def _executar_cotacoes_com_dados(
                                 valor=valor,
                             )
                             tasks.append(("AGEX", provider, _agex_kwargs))
-                    else:
-                        _log_diag("AGEX não configurada (email/senha ausentes)")
       except Exception as e:
         _log_diag(f"Erro ao preparar AGEX: {e}")
         _reportar_erro_preparacao("AGEX", e)
@@ -724,42 +1178,35 @@ async def _executar_cotacoes_com_dados(
                 elif not _uf_atendida(ecfg.get("ufs_atendidas"), uf_destino):
                     erros_setup.append(_resultado_nao_atendido("EUCATUR", uf_destino))
                 else:
-                    dominio = str(ecfg.get("dominio", "")).strip()
-                    usuario = str(ecfg.get("usuario", "")).strip()
-                    senha_euc = str(ecfg.get("senha", "")).strip()
                     cnpj_pagador_euc = _resolver_documento_pagador(ecfg)
                     if not cnpj_pagador_euc:
                         erros_setup.append(_resultado_documento_pagador_ausente("EUCATUR"))
-                    elif dominio and usuario and senha_euc:
+                    else:
                         foco_eucatur = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "eucatur"
                         headless_eucatur = False if foco_eucatur else bool(ecfg.get("headless", True))
-                        provider = await _obter_provider_sessao(
-                            "eucatur",
-                            create_kwargs={"headless": headless_eucatur, "cnpj_pagador": cnpj_pagador_euc},
-                            desired_headless=headless_eucatur,
-                            log_label="EUCATUR",
-                        )
-                        _log_diag(f"EUCATUR preparada (headless={headless_eucatur})")
-                        _euc_kwargs = dict(
+                        _euc_kwargs = _build_eucatur_kwargs(
+                            cfg=ecfg,
                             origem=origem,
                             destino=destino,
                             peso=peso,
                             valor=valor,
                             volumes=volumes,
                             cubagem_m3=cubagem_m3,
-                            cubagens=cubagens_validas,
-                            cnpj_remetente=cnpj_pagador_euc,
+                            cubagens_validas=cubagens_validas,
                             cnpj_destinatario=cnpj_destinatario,
-                            cnpj_pagador=cnpj_pagador_euc,
+                            cnpj_pagador_euc=cnpj_pagador_euc,
+                            cnpj_remetente=cnpj_remetente,
+                            effective_config=effective_config,
+                            headless_eucatur=headless_eucatur,
                         )
-                        if cnpj_remetente:
-                            _euc_kwargs["cnpj_remetente"] = cnpj_remetente
-                            _euc_kwargs["cnpj_destinatario"] = cnpj_pagador_euc
-                            _euc_kwargs["destino"] = _resolver_cep_origem(effective_config, "")
-                            _euc_kwargs["tipo_frete"] = "2"
-                        tasks.append(("EUCATUR", provider, _euc_kwargs))
-                    else:
-                        _log_diag("Eucatur não configurada (domínio/usuário/senha ausentes)")
+                        if _euc_kwargs is not None:
+                            provider = await _obter_provider_sessao(
+                                "eucatur",
+                                create_kwargs={"headless": headless_eucatur, "cnpj_pagador": cnpj_pagador_euc},
+                                desired_headless=headless_eucatur,
+                                log_label="EUCATUR",
+                            )
+                            tasks.append(("EUCATUR", provider, _euc_kwargs))
     except Exception as e:
         _log_diag(f"Erro ao preparar Eucatur: {e}")
         _reportar_erro_preparacao("EUCATUR", e)
@@ -781,20 +1228,29 @@ async def _executar_cotacoes_com_dados(
                     elif not _uf_atendida(rcfg.get("ufs_atendidas"), uf_destino):
                         erros_setup.append(_resultado_nao_atendido("RODONAVES", uf_destino))
                     else:
-                        dominio = str(rcfg.get("dominio", "RTE") or "RTE").strip()
-                        usuario = str(rcfg.get("usuario", "")).strip()
-                        senha = str(rcfg.get("senha", "")).strip()
-                        cnpj_pagador = _digits(str(rcfg.get("cnpj_pagador", "") or ""))
-                        if dominio and usuario and senha and len(cnpj_pagador) == 14:
-                            foco_rodonaves = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "rodonaves"
-                            headless_rodonaves = False if foco_rodonaves else bool(rcfg.get("headless", False))
+                        foco_rodonaves = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "rodonaves"
+                        headless_rodonaves = False if foco_rodonaves else bool(rcfg.get("headless", False))
+                        _rodo_kwargs = _build_rodonaves_kwargs(
+                            cfg=rcfg,
+                            origem=origem,
+                            destino=destino,
+                            peso=peso,
+                            valor=valor,
+                            volumes=volumes,
+                            cubagem_m3=cubagem_m3,
+                            cubagens_validas=cubagens_validas,
+                            cnpj_destinatario=cnpj_destinatario,
+                            cep_origem=cep_origem,
+                            headless_rodonaves=headless_rodonaves,
+                        )
+                        if _rodo_kwargs is not None:
                             provider = await _obter_provider_sessao(
                                 "rodonaves",
                                 create_kwargs={
-                                    "dominio": dominio,
-                                    "usuario": usuario,
-                                    "senha": senha,
-                                    "cnpj_pagador": cnpj_pagador,
+                                    "dominio": str(rcfg.get("dominio", "RTE") or "RTE").strip(),
+                                    "usuario": str(rcfg.get("usuario", "")).strip(),
+                                    "senha": str(rcfg.get("senha", "")).strip(),
+                                    "cnpj_pagador": _digits(str(rcfg.get("cnpj_pagador", "") or "")),
                                     "login_url": str(rcfg.get("login_url", "") or "").strip(),
                                     "cotacao_url": str(rcfg.get("cotacao_url", "") or "").strip(),
                                     "headless": headless_rodonaves,
@@ -802,22 +1258,7 @@ async def _executar_cotacoes_com_dados(
                                 desired_headless=headless_rodonaves,
                                 log_label="RODONAVES",
                             )
-                            _log_diag(f"RODONAVES preparada (headless={headless_rodonaves})")
-                            _rodo_kwargs = dict(
-                                origem=origem,
-                                destino=destino,
-                                peso=peso,
-                                valor=valor,
-                                volumes=volumes,
-                                cubagem_m3=cubagem_m3,
-                                cubagens=cubagens_validas,
-                                cnpj_remetente=cnpj_pagador,
-                                cnpj_destinatario=cnpj_destinatario,
-                                preencher_cep_origem=bool(_cep(cep_origem)),
-                            )
                             tasks.append(("RODONAVES", provider, _rodo_kwargs))
-                        else:
-                            _log_diag("RODONAVES não configurada (domínio/usuário/senha/cnpj_pagador ausentes)")
         except Exception as e:
             _log_diag(f"Erro ao preparar RODONAVES: {e}")
             _reportar_erro_preparacao("RODONAVES", e)
@@ -839,16 +1280,28 @@ async def _executar_cotacoes_com_dados(
                 elif not _uf_atendida(alcfg.get("ufs_atendidas"), uf_destino):
                     erros_setup.append(_resultado_nao_atendido("ALFA", uf_destino))
                 else:
-                    login = str(alcfg.get("login", "") or "").strip()
-                    senha = str(alcfg.get("senha", "") or "").strip()
-                    cnpj_rem = str(alcfg.get("cnpj_remetente", "") or "").strip()
-                    if login and senha and cnpj_rem:
-                        headless_alfa = bool(alcfg.get("headless", False))
+                    headless_alfa = bool(alcfg.get("headless", False))
+                    _alfa_kwargs = _build_alfa_kwargs(
+                        cfg=alcfg,
+                        origem=origem,
+                        destino=destino,
+                        peso=peso,
+                        valor=valor,
+                        volumes=volumes,
+                        cubagem_m3=cubagem_m3,
+                        cubagens_validas=cubagens_validas,
+                        cnpj_destinatario=cnpj_destinatario,
+                        cnpj_remetente=cnpj_remetente,
+                        effective_config=effective_config,
+                        headless_alfa=headless_alfa,
+                    )
+                    if _alfa_kwargs is not None:
+                        login = str(alcfg.get("login", "") or "").strip()
                         provider = await _obter_provider_sessao(
                             "alfa",
                             create_kwargs={
                                 "login": login,
-                                "senha": senha,
+                                "senha": str(alcfg.get("senha", "") or "").strip(),
                                 "login_url": str(alcfg.get("login_url", "") or "").strip(),
                                 "cotacao_url": str(alcfg.get("cotacao_url", "") or "").strip(),
                                 "headless": headless_alfa,
@@ -856,26 +1309,7 @@ async def _executar_cotacoes_com_dados(
                             desired_headless=headless_alfa,
                             log_label="ALFA",
                         )
-                        _log_diag(f"ALFA preparada (headless={headless_alfa})")
-                        _alfa_kwargs = dict(
-                            origem=origem,
-                            destino=destino,
-                            peso=peso,
-                            valor=valor,
-                            volumes=volumes,
-                            cubagem_m3=cubagem_m3,
-                            cubagens=cubagens_validas,
-                            cnpj_remetente=cnpj_rem,
-                            cnpj_destinatario=cnpj_destinatario,
-                        )
-                        if cnpj_remetente:
-                            _alfa_kwargs["cnpj_remetente"] = cnpj_remetente
-                            _alfa_kwargs["cnpj_destinatario"] = cnpj_rem
-                            _alfa_kwargs["destino"] = _resolver_cep_origem(effective_config, "")
-                            _alfa_kwargs["tipo_pagador"] = "2"
                         tasks.append(("ALFA", provider, _alfa_kwargs))
-                    else:
-                        _log_diag("ALFA não configurada (login/senha/cnpj_remetente ausentes)")
     except Exception as e:
         _log_diag(f"Erro ao preparar ALFA: {e}")
         _reportar_erro_preparacao("ALFA", e)
@@ -894,42 +1328,35 @@ async def _executar_cotacoes_com_dados(
                 elif not _uf_atendida(cocfg.get("ufs_atendidas"), uf_destino):
                     erros_setup.append(_resultado_nao_atendido("COOPEX", uf_destino))
                 else:
-                    dominio = str(cocfg.get("dominio", "")).strip()
-                    usuario = str(cocfg.get("usuario", "")).strip()
-                    senha_co = str(cocfg.get("senha", "")).strip()
                     cnpj_pagador_co = _resolver_documento_pagador(cocfg)
                     if not cnpj_pagador_co:
                         erros_setup.append(_resultado_documento_pagador_ausente("COOPEX"))
-                    elif dominio and usuario and senha_co:
+                    else:
                         foco_coopex = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "coopex"
                         headless_coopex = False if foco_coopex else bool(cocfg.get("headless", True))
-                        provider = await _obter_provider_sessao(
-                            "coopex",
-                            create_kwargs={"headless": headless_coopex, "cnpj_pagador": cnpj_pagador_co},
-                            desired_headless=headless_coopex,
-                            log_label="COOPEX",
-                        )
-                        _log_diag(f"COOPEX preparada (headless={headless_coopex})")
-                        _co_kwargs = dict(
+                        _co_kwargs = _build_coopex_kwargs(
+                            cfg=cocfg,
                             origem=origem,
                             destino=destino,
                             peso=peso,
                             valor=valor,
                             volumes=volumes,
                             cubagem_m3=cubagem_m3,
-                            cubagens=cubagens_validas,
-                            cnpj_remetente=cnpj_pagador_co,
+                            cubagens_validas=cubagens_validas,
                             cnpj_destinatario=cnpj_destinatario,
-                            cnpj_pagador=cnpj_pagador_co,
+                            cnpj_pagador_co=cnpj_pagador_co,
+                            cnpj_remetente=cnpj_remetente,
+                            effective_config=effective_config,
+                            headless_coopex=headless_coopex,
                         )
-                        if cnpj_remetente:
-                            _co_kwargs["cnpj_remetente"] = cnpj_remetente
-                            _co_kwargs["cnpj_destinatario"] = cnpj_pagador_co
-                            _co_kwargs["destino"] = _resolver_cep_origem(effective_config, "")
-                            _co_kwargs["tipo_frete"] = "2"
-                        tasks.append(("COOPEX", provider, _co_kwargs))
-                    else:
-                        _log_diag("COOPEX não configurada (domínio/usuário/senha ausentes)")
+                        if _co_kwargs is not None:
+                            provider = await _obter_provider_sessao(
+                                "coopex",
+                                create_kwargs={"headless": headless_coopex, "cnpj_pagador": cnpj_pagador_co},
+                                desired_headless=headless_coopex,
+                                log_label="COOPEX",
+                            )
+                            tasks.append(("COOPEX", provider, _co_kwargs))
     except Exception as e:
         _log_diag(f"Erro ao preparar COOPEX: {e}")
         _reportar_erro_preparacao("COOPEX", e)
@@ -948,13 +1375,26 @@ async def _executar_cotacoes_com_dados(
                 elif not _uf_atendida(tlcfg.get("ufs_atendidas"), uf_destino):
                     erros_setup.append(_resultado_nao_atendido("TRANSLOVATO", uf_destino))
                 else:
-                    cnpj = _digits(str(tlcfg.get("cnpj", "") or ""))
-                    usuario = str(tlcfg.get("usuario", "") or "").strip()
-                    senha_tl = str(tlcfg.get("senha", "") or "").strip()
-                    cnpj_rem_cfg = _digits(str(tlcfg.get("cnpj_remetente", "") or "")) or cnpj
-                    if len(cnpj) == 14 and usuario and senha_tl:
-                        foco_translovato = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "translovato"
-                        headless_translovato = False if foco_translovato else bool(tlcfg.get("headless", True))
+                    foco_translovato = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "translovato"
+                    headless_translovato = False if foco_translovato else bool(tlcfg.get("headless", True))
+                    _translovato_kwargs = _build_translovato_kwargs(
+                        cfg=tlcfg,
+                        origem=origem,
+                        destino=destino,
+                        peso=peso,
+                        valor=valor,
+                        volumes=volumes,
+                        cubagem_m3=cubagem_m3,
+                        cubagens_validas=cubagens_validas,
+                        cnpj_destinatario=cnpj_destinatario,
+                        cnpj_remetente=cnpj_remetente,
+                        uf_destino=uf_destino,
+                        cidade_destino=cidade_destino,
+                        headless_translovato=headless_translovato,
+                    )
+                    if _translovato_kwargs is not None:
+                        cnpj_tl = _digits(str(tlcfg.get("cnpj", "") or ""))
+                        cnpj_rem_cfg = _digits(str(tlcfg.get("cnpj_remetente", "") or "")) or cnpj_tl
                         provider = await _obter_provider_sessao(
                             "translovato",
                             create_kwargs={
@@ -967,28 +1407,7 @@ async def _executar_cotacoes_com_dados(
                             log_label="TRANSLOVATO",
                         )
                         if provider is not None:
-                            _log_diag(
-                                f"TRANSLOVATO preparada (cnpj={cnpj[:4]}***{cnpj[-2:]}, "
-                                f"linhas_cubagem={len(cubagens_validas)}, headless={headless_translovato})"
-                            )
-                            _translovato_kwargs = dict(
-                                origem=origem,
-                                destino=destino,
-                                cep_origem=origem,
-                                cep_destino=destino,
-                                uf_destino=uf_destino,
-                                cidade_destino=cidade_destino,
-                                peso=peso,
-                                valor=valor,
-                                volumes=volumes,
-                                cubagem_m3=cubagem_m3,
-                                cubagens=cubagens_validas,
-                                cnpj_destinatario=cnpj_destinatario,
-                                cnpj_remetente=_digits(cnpj_remetente or cnpj_rem_cfg),
-                            )
                             tasks.append(("TRANSLOVATO", provider, _translovato_kwargs))
-                    else:
-                        _log_diag("TRANSLOVATO não configurada (CNPJ/usuário/senha ausentes)")
     except Exception as e:
         _log_diag(f"Erro ao preparar TRANSLOVATO: {e}")
         _reportar_erro_preparacao("TRANSLOVATO", e)
@@ -1125,7 +1544,6 @@ async def _executar_cotacoes_com_dados(
                     provider_status=provider_progress_from_resultado(r, stage="resultado"),
                 )
                 return
-            import traceback
             tb = ''.join(traceback.format_exception(type(erro), erro, erro.__traceback__))
             _log_diag(f"Erro em cotação {nome_task}: {type(erro).__name__}: {erro}\n{tb}")
             # Falhas transitórias de provider (timeout, rede, browser fechado) são esperadas
@@ -1418,83 +1836,11 @@ async def _executar_cotacoes_com_dados(
                     provider_status=provider_progress_from_resultado(r, stage="resultado"),
                 )
 
-    def _is_business_error(detail: str) -> bool:
-        """Detecta erros de negócio (destino não atendido, rota fora de cobertura).
-
-        Esses erros são normais e não devem ser reportados nem gerar retry."""
-        if not detail:
-            return False
-        d = str(detail).lower()
-        patterns = (
-            "destino fora da cobertura",
-            "cepdestino não atendido",
-            "cep destino não atendido",
-            "não atendemos esse cep",
-            "destino possivelmente não atendido",
-            "destino possìvelmente não atendido",
-            "rota não atendida",
-            "cidade de destino",
-            "transportadora não atende",
-            "transportadora n o atende",
-            "cidade de destino n o",
-            "n o atendida",
-            "não atendido",
-            "nao atendido",
-            "fora de cobertura",
-            "fora da cobertura",
-            "não atendemos",
-            "cepnão atendemos",
-            "sem precificação automática no ssw",
-            "sem precificacao automatica no ssw",
-            "não cadastrada",
-            "nao cadastrada",
-            "rota:",
-        )
-        return any(p in d for p in patterns)
-
-    _TRANSIENT_PATTERNS = (
-        "target page, context or browser has been closed",
-        "target closed",
-        "frame was detached",
-        "net::err_aborted",
-        "net::err_connection",
-        "net::err_name",
-        "net::err_timed_out",
-        "net::err_internet",
-        "net::err_network",
-        "formulário de cotação não carregou",
-        "formulario de cotacao nao carregou",
-        "page.goto",
-        "valor de frete nao encontrado",
-        "valor de frete não encontrado",
-        "timeout aguardando resultado",
-    )
-
-    def _is_expected_transient_failure(erro: BaseException) -> bool:
-        """Detecta falhas transitórias esperadas de provider que NÃO devem ir para report_error.
-
-        Timeouts do provider e erros de rede/browser são falhas controladas — não bugs no código."""
-        if isinstance(erro, TimeoutError):
-            return True
-        err_str = str(erro).lower()
-        return any(p in err_str for p in _TRANSIENT_PATTERNS)
-
-    def _is_expected_transient_failure_str(detail: str) -> bool:
-        """Mesmos critérios de _is_expected_transient_failure, mas para strings de last_error.
-
-        Usado quando o provider capturou a exceção internamente e retornou None."""
-        if not detail:
-            return False
-        d = detail.lower()
-        if "timeout" in d or "timed out" in d:
-            return True
-        return any(p in d for p in _TRANSIENT_PATTERNS)
-
     # ── Rodada 1: executa todas as cotações ──
     falhas_para_retry: list[tuple[str, Any, dict[str, Any]]] = []
     futuros = []
     for i, (nome, prov, kwargs) in enumerate(tasks):
-        t = asyncio.ensure_future(_exec(i, nome, prov, kwargs))
+        t = asyncio.create_task(_exec(i, nome, prov, kwargs))
         futuros.append(t)
 
     for fut in asyncio.as_completed(futuros):
@@ -1502,7 +1848,6 @@ async def _executar_cotacoes_com_dados(
             res = await fut
             _processar_resultado(res, resultados, falhas_para_retry)
         except Exception as loop_exc:
-            import traceback
             tb = ''.join(traceback.format_exception(type(loop_exc), loop_exc, loop_exc.__traceback__))
             _log_diag(f"Falha ao processar resultado de cotação: {loop_exc}\n{tb}")
             concluidas += 1
@@ -1522,7 +1867,7 @@ async def _executar_cotacoes_com_dados(
 
         futuros_retry = []
         for i, (nome, prov, kwargs) in enumerate(falhas_para_retry):
-            t = asyncio.ensure_future(_exec(i, nome, prov, kwargs))
+            t = asyncio.create_task(_exec(i, nome, prov, kwargs))
             futuros_retry.append(t)
 
         for fut in asyncio.as_completed(futuros_retry):
@@ -1530,7 +1875,6 @@ async def _executar_cotacoes_com_dados(
                 res = await fut
                 _processar_resultado(res, resultados, None)  # None = não enfileira de novo
             except Exception as loop_exc:
-                import traceback
                 tb = ''.join(traceback.format_exception(type(loop_exc), loop_exc, loop_exc.__traceback__))
                 _log_diag(f"Falha ao processar retry de cotação: {loop_exc}\n{tb}")
                 concluidas += 1
