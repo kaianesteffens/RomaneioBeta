@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 import unicodedata
@@ -43,6 +44,11 @@ class TranslovatoProvider(ProviderBase):
     CUBING_WEIGHT_SELECTOR = 'input[name="cubing_weigth[]"]'
     CUBING_TOTAL_SELECTOR = 'input[name="cubing_total"]'
     CUBING_WEIGHT_TOTAL_SELECTOR = 'input[name="cubing_weigth_total"]'
+
+    # Recursos puramente visuais que o portal carrega mas a cotação nunca usa.
+    # Mantemos stylesheet/script/xhr/fetch: layout (is_visible/getComputedStyle),
+    # autocomplete do destinatário e autopreenchimento de endereço dependem deles.
+    BLOCKED_RESOURCE_TYPES = frozenset({"image", "media", "font"})
 
     MAIN_SELECTORS = (
         LOGIN_CNPJ_SELECTOR,
@@ -249,8 +255,19 @@ class TranslovatoProvider(ProviderBase):
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             locale="pt-BR",
         )
+        await self._context.route("**/*", self._route_block_heavy_resources)
         self._page = await self._context.new_page()
         self._page.set_default_timeout(30000)
+
+    async def _route_block_heavy_resources(self, route) -> None:
+        try:
+            if route.request.resource_type in self.BLOCKED_RESOURCE_TYPES:
+                await route.abort()
+            else:
+                await route.continue_()
+        except Exception:
+            # Requisição já resolvida/cancelada (ex.: navegação abortada); ignorar.
+            pass
 
     async def _click_if_present(self, selector_or_text: str, *, by_text: bool = False, timeout: int = 2500) -> bool:
         page = self._page
@@ -690,8 +707,10 @@ class TranslovatoProvider(ProviderBase):
 
         started_at = time.monotonic()
         for _ in range(24):
-            detected_zip = await self._read_delivery_zip_digits()
-            detected_raw, detected_city, detected_uf = await self._read_delivery_city_uf()
+            detected_zip, (detected_raw, detected_city, detected_uf) = await asyncio.gather(
+                self._read_delivery_zip_digits(),
+                self._read_delivery_city_uf(),
+            )
             if (not expected_cep or detected_zip == expected_cep) and (detected_city or detected_uf):
                 break
             await self._page.wait_for_timeout(250)
@@ -910,8 +929,12 @@ class TranslovatoProvider(ProviderBase):
         started_at = self._start_stage("simulando_cotacao")
         page = self._page
         await page.get_by_role("button", name=re.compile(r"simular\s+cota[çc][aã]o", re.I)).click(timeout=20000)
+        # Espera curta só para a requisição da cotação partir; o resultado em si é
+        # detectado por _wait_for_quote_result (poll de valor+prazo). Trackers de
+        # terceiros podem impedir o networkidle de disparar, então não bloqueamos
+        # os 15s antigos aqui — era tempo morto antes da extração.
         try:
-            await page.wait_for_load_state("networkidle", timeout=15000)
+            await page.wait_for_load_state("networkidle", timeout=6000)
         except PlaywrightTimeoutError:
             pass
 
