@@ -100,7 +100,7 @@ def test_rodonaves_forces_headful_session_even_when_requested_headless():
     original_makedirs = os.makedirs
     try:
         os.makedirs = lambda *_args, **_kwargs: None
-        assert provider._user_data_dir().endswith("/.fretio/rodonaves_browser_data")
+        assert Path(provider._user_data_dir()).parts[-2:] == (".fretio", "rodonaves_browser_data")
     finally:
         os.makedirs = original_makedirs
 
