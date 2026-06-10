@@ -349,6 +349,25 @@ class ProviderFactory:
             try:
                 module = importlib.import_module(spec.module_path)
                 provider_class = getattr(module, spec.class_name)
+            except ModuleNotFoundError as exc:
+                missing = exc.name or ""
+                if missing == spec.module_path or spec.module_path.startswith(missing + "."):
+                    # Provider opcional não incluído neste build — condição esperada,
+                    # tratada pelo orchestrator. Não é um erro, então não alarmamos com WARNING.
+                    bind_logger(logger, provider=provider_name, operation="resolve_provider_class").info(
+                        "Provider %s não incluído neste build (%s)",
+                        provider_name,
+                        spec.module_path,
+                    )
+                else:
+                    # Dependência ausente de um provider que deveria existir: isto é um erro real.
+                    bind_logger(logger, provider=provider_name, operation="resolve_provider_class").warning(
+                        "Provider class unavailable (%s.%s): %s",
+                        spec.module_path,
+                        spec.class_name,
+                        exc,
+                    )
+                provider_class = None
             except (ImportError, AttributeError) as exc:
                 bind_logger(logger, provider=provider_name, operation="resolve_provider_class").warning(
                     "Provider class unavailable (%s.%s): %s",
