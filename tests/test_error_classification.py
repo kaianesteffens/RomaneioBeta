@@ -166,17 +166,23 @@ class TestInferErrorCode:
         assert result == "timeout"
 
 
-    def test_playwright_timeout_error_returns_falha_tecnica(self):
-        """PlaywrightTimeoutError does NOT inherit from Python TimeoutError,
-        so _infer_error_code sees it as an unknown exception and returns
-        'falha_tecnica' instead of 'timeout'. This test documents that
-        current behaviour (even if it is a product-level misclassification)."""
+    def test_playwright_timeout_error_returns_timeout(self):
+        """PlaywrightTimeoutError tem __name__ == 'TimeoutError', portanto deve
+        ser classificado como 'timeout' mesmo não herdando de TimeoutError do Python."""
         try:
             from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         except ImportError:
             pytest.skip("playwright not installed")
         result = ProviderBase._infer_error_code(None, PlaywrightTimeoutError("timed out"))
-        assert result == "falha_tecnica"
+        assert result == "timeout"
+
+    def test_any_exception_named_timeout_error_returns_timeout(self):
+        """Qualquer exceção com __name__ == 'TimeoutError' deve retornar 'timeout',
+        independente da hierarquia de herança."""
+        class TimeoutError(Exception):  # noqa: N818  — nome intencional para simular playwright
+            pass
+        result = ProviderBase._infer_error_code(None, TimeoutError("timed out"))
+        assert result == "timeout"
 
     # --- Timeout patterns in detail ---
     @pytest.mark.parametrize("detail", [

@@ -101,7 +101,10 @@ class ProviderBase(ABC):
     @staticmethod
     def _infer_error_code(detail: str | None, error: BaseException | None = None) -> str:
         lowered = str(detail or "").lower()
-        if isinstance(error, TimeoutError) or any(pattern in lowered for pattern in _TIMEOUT_PATTERNS):
+        _is_timeout = isinstance(error, TimeoutError) or (
+            error is not None and type(error).__name__ == "TimeoutError"
+        )
+        if _is_timeout or any(pattern in lowered for pattern in _TIMEOUT_PATTERNS):
             return "timeout"
         if any(pattern in lowered for pattern in _LOGIN_PATTERNS):
             return "login_falhou"
