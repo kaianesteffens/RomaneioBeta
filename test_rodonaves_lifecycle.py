@@ -431,7 +431,7 @@ def test_rodonaves_window_context_manager_keeps_hide_idempotent():
     asyncio.run(run())
 
 
-def test_rodonaves_show_window_does_not_steal_focus(monkeypatch):
+def test_rodonaves_show_window_brings_to_front_for_captcha(monkeypatch):
     async def run():
         provider = _provider()
         calls: list[tuple[str, object]] = []
@@ -455,7 +455,7 @@ def test_rodonaves_show_window_does_not_steal_focus(monkeypatch):
                 return {"w": 1920, "h": 1080}
 
             async def bring_to_front(self):
-                raise AssertionError("Rodonaves não pode roubar foco ao mostrar a janela")
+                raise AssertionError("Rodonaves não deve usar page.bring_to_front() — usa Win32 via posicionar_janela_por_pagina")
 
         class Cdp:
             async def send(self, method, payload=None):
@@ -484,7 +484,9 @@ def test_rodonaves_show_window_does_not_steal_focus(monkeypatch):
         shown = await provider._mostrar_janela()
 
         assert shown is True
-        assert ("position", False) in calls
+        assert ("position", True) in calls, (
+            "A janela do CAPTCHA deve vir à frente (bring_to_front=True via Win32)"
+        )
 
     asyncio.run(run())
 
@@ -562,7 +564,7 @@ def test_rodonaves_bootstrap_helper_returns_false_when_bounds_not_confirmed(monk
     result = asyncio.run(provider._definir_janela_offscreen_inicial())
 
     assert result is False, (
-        "se o CDP reportar bounds acima de -1000, a janela está visível — "
+        "se o CDP reportar bounds >= 0 a janela está visível — "
         "o helper deve recusar e a inicialização deve falhar"
     )
 
@@ -818,5 +820,115 @@ def test_rodonaves_coteir_error_does_not_recreate_page(monkeypatch):
         )
         assert provider._page is page
         assert id(provider._page) == page_id
+
+
+def test_rodonaves_error_handler_resets_page_when_closed_but_browser_alive(monkeypatch):
+    """Bug 1: page fechada, browser vivo → handler de erro deve recriar só a page."""
+    async def run():
+        provider = _provider()
+        closed_page = FakePage(url="about:blank", closed=True)
+        context = FakeContext([closed_page])
+
+        context_new_pages: list = []
+        original_new_page = context.new_page
+
+        async def tracked_new_page():
+            p = await original_new_page()
+            context_new_pages.append(p)
+            return p
+
+        context.new_page = tracked_new_page
+
+        provider._context = context
+        provider._browser = FakeBrowser(context, connected=True)
+        provider._page = closed_page
+
+        async def fake_init_browser():
+            pass
+
+        async def fake_login():
+            raise RuntimeError("target page, context or browser has been closed")
+
+        monkeypatch.setattr(provider, "_init_browser", fake_init_browser)
+        monkeypatch.setattr(provider, "_login", fake_login)
+
+        result = await provider.coteir(
+            origem="01001000",
+            destino="02002000",
+            peso=1.0,
+            valor=100.0,
+            volumes=1,
+            cnpj_destinatario="12345678000190",
+            cubagens=[{"quantidade": 1, "comprimento_cm": 10, "largura_cm": 10, "altura_cm": 10}],
+        )
+
+        assert result is None
+        assert len(context_new_pages) == 1, (
+            "Uma nova page deve ser criada quando a page estava fechada mas o browser sobreviveu"
+        )
+        assert provider._page is context_new_pages[0], (
+            "self._page deve apontar para a nova page após o reset"
+        )
+        assert provider._logged_in is False
+
+    asyncio.run(run())
+
+
+def test_rodonaves_error_handler_resets_page_on_frame_detached(monkeypatch):
+    """Bug 2: frame was detached (transitório) → handler deve recriar só a page."""
+    async def run():
+        provider = _provider()
+        page = FakePage(url="about:blank", closed=False)
+        context = FakeContext([page])
+
+        context_new_pages: list = []
+        original_new_page = context.new_page
+
+        async def tracked_new_page():
+            p = await original_new_page()
+            context_new_pages.append(p)
+            return p
+
+        context.new_page = tracked_new_page
+
+        provider._context = context
+        provider._browser = FakeBrowser(context, connected=True)
+        provider._page = page
+
+        async def fake_init_browser():
+            pass
+
+        async def fake_login():
+            pass
+
+        async def fake_navegar():
+            pass
+
+        async def fake_preencher(*_args, **_kwargs):
+            raise RuntimeError("frame was detached")
+
+        monkeypatch.setattr(provider, "_init_browser", fake_init_browser)
+        monkeypatch.setattr(provider, "_login", fake_login)
+        monkeypatch.setattr(provider, "_navegar_cotacao", fake_navegar)
+        monkeypatch.setattr(provider, "_preencher_cotacao", fake_preencher)
+
+        result = await provider.coteir(
+            origem="01001000",
+            destino="02002000",
+            peso=1.0,
+            valor=100.0,
+            volumes=1,
+            cnpj_destinatario="12345678000190",
+            cubagens=[{"quantidade": 1, "comprimento_cm": 10, "largura_cm": 10, "altura_cm": 10}],
+        )
+
+        assert result is None
+        assert len(context_new_pages) == 1, (
+            "Uma nova page deve ser criada quando houve 'frame was detached' com browser vivo"
+        )
+        assert provider._page is context_new_pages[0]
+        assert provider._logged_in is False
+
+    asyncio.run(run())
 
     asyncio.run(run())

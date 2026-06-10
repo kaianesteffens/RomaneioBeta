@@ -179,6 +179,32 @@ class RodonavesProvider(ProviderBase):
             )
         )
 
+    @staticmethod
+    def _is_page_level_error(error: BaseException) -> bool:
+        """Erros transitórios de frame/rede que afetam só a page, não o browser."""
+        text = str(error or "").lower()
+        return any(token in text for token in (
+            "frame was detached",
+            "net::err_aborted",
+            "net::err_connection",
+            "net::err_timed_out",
+        ))
+
+    async def _reset_page_in_context(self) -> None:
+        """Fecha a page atual e abre uma nova no mesmo context, preservando browser."""
+        try:
+            if self._page and not self._page.is_closed():
+                await self._page.close()
+        except Exception:
+            pass
+        self._page = None
+        self._logged_in = False
+        if self._context:
+            try:
+                self._page = await self._context.new_page()
+            except Exception:
+                self._page = None
+
     def _safe_current_url(self) -> str:
         page = self._page
         if page is None:
@@ -1097,7 +1123,7 @@ class RodonavesProvider(ProviderBase):
                 "windowId": self._window_id,
             })
             bounds_block = (bounds or {}).get("bounds", {}) if isinstance(bounds, dict) else {}
-            if int(bounds_block.get("left", 0)) > -1000 or int(bounds_block.get("top", 0)) > -1000:
+            if int(bounds_block.get("left", 0)) >= 0 or int(bounds_block.get("top", 0)) >= 0:
                 logger.warning(
                     f"[{self.nome}] Bootstrap off-screen não foi confirmado pelo CDP: {bounds_block}"
                 )
@@ -1164,7 +1190,7 @@ class RodonavesProvider(ProviderBase):
                     top=top,
                     width=w,
                     height=h,
-                    bring_to_front=False,
+                    bring_to_front=True,
                 )
                 logger.debug(
                     f"[{self.nome}] Janela compacta (CAPTCHA) visível em ({left},{top}) tela {screen_w}x{screen_h}"
@@ -1200,7 +1226,7 @@ class RodonavesProvider(ProviderBase):
             top=top,
             width=w,
             height=h,
-            bring_to_front=False,
+            bring_to_front=True,
         )
         if shown:
             await ocultar_taskbar_por_pagina(self._page)
@@ -2185,6 +2211,14 @@ class RodonavesProvider(ProviderBase):
                     await self.cleanup()
                 except Exception:
                     pass
+            elif self._context:
+                # Browser vivo, mas a page pode estar fechada ou em estado quebrado
+                # (frame detached, ERR_ABORTED). Recria só a page para limpar o estado.
+                if self._page_is_closed() or self._is_page_level_error(error):
+                    try:
+                        await self._reset_page_in_context()
+                    except Exception:
+                        pass
             return None
 
     async def cotar(self, request: QuoteRequest) -> QuoteResponse:
