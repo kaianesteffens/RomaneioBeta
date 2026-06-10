@@ -454,10 +454,39 @@ class TranslovatoProvider(ProviderBase):
         self._playwright = None
         self._logged_in = False
 
+    async def _goto_com_retry(self, url: str, *, tentativas: int = 3, timeout: int = 60000) -> None:
+        """Navega para `url` com retry em erros transitórios de navegação.
+
+        O portal por vezes aborta a navegação (net::ERR_ABORTED) quando um
+        redirecionamento interno do SPA dispara durante o goto. Nesses casos um
+        novo goto após uma pequena espera costuma ter sucesso.
+        """
+        ultimo_erro: Exception | None = None
+        for tentativa in range(1, tentativas + 1):
+            try:
+                await self._page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+                return
+            except Exception as exc:  # noqa: BLE001 - reclassificado abaixo
+                msg = str(exc)
+                transitorio = "ERR_ABORTED" in msg or "ERR_NETWORK_CHANGED" in msg or isinstance(exc, PlaywrightTimeoutError)
+                if not transitorio or tentativa >= tentativas:
+                    raise
+                ultimo_erro = exc
+                logger.warning(
+                    "[TRANSLOVATO] Navegação para %s falhou (tentativa %d/%d): %s — retry",
+                    url,
+                    tentativa,
+                    tentativas,
+                    msg.splitlines()[0] if msg else exc,
+                )
+                await asyncio.sleep(1.5 * tentativa)
+        if ultimo_erro is not None:  # pragma: no cover - salvaguarda
+            raise ultimo_erro
+
     async def _abrir_nova_cotacao(self) -> None:
         started_at = self._start_stage("abrindo_nova_cotacao")
         page = self._page
-        await page.goto(self.MINHAS_COTACOES_URL, wait_until="domcontentloaded", timeout=60000)
+        await self._goto_com_retry(self.MINHAS_COTACOES_URL)
         await self._aceitar_cookies()
         link = page.get_by_role("link", name=re.compile(r"solicitar nova cota[çc][aã]o", re.I))
         try:
