@@ -14,6 +14,7 @@ from .config import _carregar_config
 from .validation import _uf_atendida
 from .telemetry import _remote_disabled_results_for_config
 from .error_context import report_provider_error
+from .circuit_breaker import ProviderCircuitBreaker
 
 CHROME_DOWNLOAD_URL = "https://www.google.com/chrome/"
 CHROME_MISSING_USER_MESSAGE = (
@@ -244,6 +245,7 @@ class TransportadoraSession:
         self.config = _carregar_config(config_path=config_path)
         self.provider_factory = ProviderFactory(config=self.config)
         self._provider_sessions = _ProviderSessionRegistry()
+        self._circuit_breaker = ProviderCircuitBreaker()
         self._inicializado = False
         self._chrome_missing = False
         self._chrome_missing_message = ""
@@ -307,6 +309,9 @@ class TransportadoraSession:
             )
 
     async def assegurar_provider(self, nome: str, factory: Callable[[], Any]) -> Any:
+        if self._circuit_breaker.is_open(nome):
+            _log_diag(f"Circuit breaker aberto para {nome}: portal bloqueado temporariamente")
+            raise RuntimeError(f"Circuit breaker aberto para {nome}: portal temporariamente indisponível")
         provider, created = await self._provider_sessions.ensure(nome, factory)
         if created:
             await self._executar_lazy_prelogin(nome, provider)
@@ -315,6 +320,14 @@ class TransportadoraSession:
             extra={"operation": "session_ensure", "provider": nome},
         )
         return provider
+
+    def record_quote_success(self, nome: str) -> None:
+        """Registra sucesso de cotação e fecha o circuito para o provider."""
+        self._circuit_breaker.record_success(nome)
+
+    def record_quote_failure(self, nome: str) -> None:
+        """Registra falha real de cotação; abre o circuito após N falhas consecutivas."""
+        self._circuit_breaker.record_failure(nome)
 
     async def _executar_lazy_prelogin(self, nome: str, provider: Any) -> None:
         nome_normalizado = str(nome).strip().lower()
@@ -672,7 +685,7 @@ class TransportadoraSession:
             except asyncio.CancelledError:
                 pass
 
-        self._idle_task = asyncio.ensure_future(_loop())
+        self._idle_task = asyncio.create_task(_loop())
 
     async def cleanup(self):
         """Fecha todos os browsers."""
