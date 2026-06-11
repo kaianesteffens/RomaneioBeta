@@ -173,74 +173,6 @@ def _build_braspress_kwargs(
     return kwargs
 
 
-def _build_bauer_kwargs(
-    *,
-    cfg: dict[str, Any],
-    origem: str,
-    destino: str,
-    peso: float,
-    valor: float,
-    cnpj_destinatario: str,
-    cubagens_validas: list[dict[str, Any]],
-    cnpj_remetente: str,
-    effective_config: dict[str, Any],
-    provider: Any,
-) -> dict[str, Any] | None:
-    """Retorna kwargs para BAUER ou None se não configurada. Também atualiza atributos do provider."""
-    cotacao_url = str(cfg.get("cotacao_url", "")).strip()
-    bau_cnpj_pag = str(cfg.get("cnpj_pagador", "")).strip()
-    bau_cnpj_rem = str(cfg.get("cnpj_remetente", "")).strip()
-    cnpj_dest = cnpj_destinatario
-    if not (cotacao_url and bau_cnpj_pag and bau_cnpj_rem and cnpj_dest):
-        _log_diag("BAUER não configurada (parâmetros ausentes)")
-        return None
-    cubagens_bauer = []
-    for cub in cubagens_validas:
-        qtd = int(cub["quantidade"])
-        if qtd <= 0:
-            continue
-        cubagens_bauer.append(
-            {
-                "quantidade": qtd,
-                "altura_m": int(cub["altura_cm"]) / 100.0,
-                "largura_m": int(cub["largura_cm"]) / 100.0,
-                "profundidade_m": int(cub["comprimento_cm"]) / 100.0,
-            }
-        )
-    if not cubagens_bauer:
-        # Caller will handle the error result
-        return "sem_cubagens"  # type: ignore[return-value]
-    vol = sum(int(c["quantidade"]) for c in cubagens_bauer)
-    primeira = cubagens_bauer[0]
-    alt_m = float(primeira["altura_m"])
-    larg_m = float(primeira["largura_m"])
-    prof_m = float(primeira["profundidade_m"])
-    provider.quantidade = vol
-    provider.altura_m = alt_m
-    provider.largura_m = larg_m
-    provider.profundidade_m = prof_m
-    if hasattr(provider, "cubagens"):
-        provider.cubagens = cubagens_bauer
-    if hasattr(provider, "cnpj_destinatario"):
-        provider.cnpj_destinatario = re.sub(r"\D", "", cnpj_dest or "")
-    _log_diag(
-        f"BAUER preparada: linhas_cubagem={len(cubagens_bauer)}, volumes={vol}"
-    )
-    kwargs: dict[str, Any] = dict(
-        origem=origem,
-        destino=destino,
-        peso=peso,
-        valor=valor,
-        cubagens=cubagens_bauer,
-    )
-    if cnpj_remetente:
-        provider.cnpj_remetente = re.sub(r"\D", "", cnpj_remetente)
-        provider.cnpj_destinatario = re.sub(r"\D", "", bau_cnpj_pag)
-        kwargs["destino"] = _resolver_cep_origem(effective_config, "")
-        kwargs["tipo_frete"] = "fob"
-    return kwargs
-
-
 def _build_trd_kwargs(
     *,
     cfg: dict[str, Any],
@@ -552,7 +484,7 @@ async def _executar_cotacoes_com_dados(
             transportadoras_cfg = {}
         transportadoras_cfg = dict(transportadoras_cfg)
         foco = str(MODO_FOCO_TRANSPORTADORA).strip().lower()
-        for nome_cfg in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "coopex", "translovato"):
+        for nome_cfg in ("braspress", "trd", "agex", "eucatur", "rodonaves", "coopex", "translovato"):
             sec = transportadoras_cfg.get(nome_cfg)
             if not isinstance(sec, dict):
                 sec = {}
@@ -931,88 +863,6 @@ async def _executar_cotacoes_com_dados(
         if chrome_missing_reported:
             return _resultado_chrome_ausente(e)
         erros_setup.append(ResultadoCotacao(transportadora="BRASPRESS", status="erro", detalhes=str(e)))
-
-    # BAUER
-    try:
-        baucfg = provider_factory.get_provider_config("bauer")
-        if baucfg.get("habilitado", True):
-            incompleta = _bloquear_config_incompleta("bauer")
-            if incompleta is not None:
-                erros_setup.append(incompleta)
-            elif not provider_factory.is_available("bauer"):
-                _log_diag("BAUER ignorada: provider bauer_auto não está disponível neste build")
-            elif not _uf_atendida(baucfg.get("ufs_atendidas"), uf_destino):
-                erros_setup.append(_resultado_nao_atendido("BAUER", uf_destino))
-            else:
-                cotacao_url = str(baucfg.get("cotacao_url", "")).strip()
-                bau_cnpj_pag = str(baucfg.get("cnpj_pagador", "")).strip()
-                bau_cnpj_rem = str(baucfg.get("cnpj_remetente", "")).strip()
-                cnpj_dest = cnpj_destinatario
-                if cotacao_url and bau_cnpj_pag and bau_cnpj_rem and cnpj_dest:
-                    # Pre-compute cubagens_bauer to size the provider creation
-                    cubagens_bauer_pre = []
-                    for cub in cubagens_validas:
-                        qtd = int(cub["quantidade"])
-                        if qtd <= 0:
-                            continue
-                        cubagens_bauer_pre.append(
-                            {
-                                "quantidade": qtd,
-                                "altura_m": int(cub["altura_cm"]) / 100.0,
-                                "largura_m": int(cub["largura_cm"]) / 100.0,
-                                "profundidade_m": int(cub["comprimento_cm"]) / 100.0,
-                            }
-                        )
-                    if not cubagens_bauer_pre:
-                        msg = "BAUER bloqueada: romaneio sem cubagens válidas."
-                        _log_diag(msg)
-                        erros_setup.append(
-                            ResultadoCotacao(transportadora="BAUER", status="erro", detalhes=msg)
-                        )
-                    else:
-                        vol = sum(int(c["quantidade"]) for c in cubagens_bauer_pre)
-                        primeira = cubagens_bauer_pre[0]
-                        alt_m = float(primeira["altura_m"])
-                        larg_m = float(primeira["largura_m"])
-                        prof_m = float(primeira["profundidade_m"])
-                        provider = await _obter_provider_sessao(
-                            "bauer",
-                            create_kwargs={
-                                "cotacao_url": cotacao_url,
-                                "cnpj_pagador": bau_cnpj_pag,
-                                "cnpj_remetente": bau_cnpj_rem,
-                                "cnpj_destinatario": cnpj_dest,
-                                "headless": bool(baucfg.get("headless", True)),
-                                "quantidade": vol,
-                                "altura_m": alt_m,
-                                "largura_m": larg_m,
-                                "profundidade_m": prof_m,
-                                "cubagens": cubagens_bauer_pre,
-                            },
-                            log_label="BAUER",
-                        )
-                        _bauer_kwargs = _build_bauer_kwargs(
-                            cfg=baucfg,
-                            origem=origem,
-                            destino=destino,
-                            peso=peso,
-                            valor=valor,
-                            cnpj_destinatario=cnpj_destinatario,
-                            cubagens_validas=cubagens_validas,
-                            cnpj_remetente=cnpj_remetente,
-                            effective_config=effective_config,
-                            provider=provider,
-                        )
-                        if isinstance(_bauer_kwargs, dict):
-                            tasks.append(("BAUER", provider, _bauer_kwargs))
-                else:
-                    _log_diag("BAUER não configurada (parâmetros ausentes)")
-    except Exception as e:
-        _log_diag(f"Erro ao preparar BAUER: {e}")
-        _reportar_erro_preparacao("BAUER", e)
-        if chrome_missing_reported:
-            return _resultado_chrome_ausente(e)
-        erros_setup.append(ResultadoCotacao(transportadora="BAUER", status="erro", detalhes=str(e)))
 
     # TRD
     try:

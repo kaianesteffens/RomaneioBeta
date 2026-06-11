@@ -214,7 +214,6 @@ Factory:
 Providers registrados:
 
 - `braspress` -> `fretio.providers.braspress_playwright.BraspressPlaywrightProvider`
-- `bauer` -> `fretio.providers.bauer_auto.BauerAutoProvider`
 - `trd` -> `fretio.providers.trd.TRDProvider`
 - `agex` -> `fretio.providers.agex.AGEXProvider`
 - `eucatur` -> `fretio.providers.eucatur.EucaturProvider`
@@ -226,7 +225,6 @@ Providers registrados:
 Campos minimos por provider:
 
 - `braspress`: `cnpj`, `senha`
-- `bauer`: `cotacao_url`, `cnpj_pagador`, `cnpj_remetente`, `cnpj_destinatario`
 - `trd`: `email`, `senha`
 - `agex`: `email`, `senha`
 - `eucatur`: login mínimo `dominio`, `usuario`, `senha`; `cnpj_pagador` é resolvido só na cotação, primeiro na transportadora e depois em `romaneio.cnpj_pagador_padrao`.

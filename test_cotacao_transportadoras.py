@@ -23,7 +23,6 @@ def test_resolver_cep_origem_uses_expected_precedence():
         "romaneio": {"cep_origem": "11.222-333"},
         "transportadoras": {
             "braspress": {"cep_origem": "22.333-444"},
-            "bauer": {"cep_origem": "33.444-555"},
         },
     }
 

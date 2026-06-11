@@ -56,7 +56,6 @@ class ProviderConfigValidation:
 
 _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "braspress": ("cnpj", "senha"),
-    "bauer": ("cotacao_url", "cnpj_pagador", "cnpj_remetente", "cnpj_destinatario"),
     "trd": ("email", "senha"),
     "agex": ("email", "senha"),
     "eucatur": ("dominio", "usuario", "senha"),
@@ -122,33 +121,6 @@ def _build_braspress(config: dict[str, Any]) -> dict[str, Any] | None:
         "senha": senha,
         "headless": bool(config.get("headless", True)),
     }
-
-
-def _build_bauer(config: dict[str, Any]) -> dict[str, Any] | None:
-    cotacao_url = _text(config.get("cotacao_url"))
-    cnpj_pagador = _text(config.get("cnpj_pagador"))
-    cnpj_remetente = _text(config.get("cnpj_remetente"))
-    cnpj_destinatario = _text(config.get("cnpj_destinatario"))
-    if not cotacao_url or not cnpj_pagador or not cnpj_remetente or not cnpj_destinatario:
-        return None
-    kwargs: dict[str, Any] = {
-        "cotacao_url": cotacao_url,
-        "cnpj_pagador": cnpj_pagador,
-        "cnpj_remetente": cnpj_remetente,
-        "cnpj_destinatario": cnpj_destinatario,
-        "headless": bool(config.get("headless", True)),
-    }
-    if "quantidade" in config:
-        kwargs["quantidade"] = int(config.get("quantidade", 1) or 1)
-    if "altura_m" in config:
-        kwargs["altura_m"] = float(config.get("altura_m", 0.0) or 0.0)
-    if "largura_m" in config:
-        kwargs["largura_m"] = float(config.get("largura_m", 0.0) or 0.0)
-    if "profundidade_m" in config:
-        kwargs["profundidade_m"] = float(config.get("profundidade_m", 0.0) or 0.0)
-    if "cubagens" in config:
-        kwargs["cubagens"] = config.get("cubagens")
-    return kwargs
 
 
 def _build_trd(config: dict[str, Any]) -> dict[str, Any] | None:
@@ -276,7 +248,6 @@ def _build_translovato(config: dict[str, Any]) -> dict[str, Any] | None:
 
 _PROVIDER_SPECS: dict[str, ProviderSpec] = {
     "braspress": ProviderSpec("braspress", "fretio.providers.braspress_playwright", "BraspressPlaywrightProvider", _build_braspress),
-    "bauer": ProviderSpec("bauer", "fretio.providers.bauer_auto", "BauerAutoProvider", _build_bauer),
     "trd": ProviderSpec("trd", "fretio.providers.trd", "TRDProvider", _build_trd),
     "agex": ProviderSpec("agex", "fretio.providers.agex", "AGEXProvider", _build_agex),
     "eucatur": ProviderSpec("eucatur", "fretio.providers.eucatur", "EucaturProvider", _build_eucatur),
