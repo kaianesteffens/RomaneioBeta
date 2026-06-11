@@ -100,6 +100,20 @@ _TRANSIENT_PATTERNS = (
     "page.goto",
     "valor de frete nao encontrado",
     "valor de frete não encontrado",
+    # Variantes reais retornadas pelos portais ("não foi encontrado", parsing do
+    # resultado falhou, portal não devolveu cotação) — operacionais, não bugs.
+    "valor de frete nao foi encontrado",
+    "valor de frete não foi encontrado",
+    "valor não encontrado no resultado",
+    "valor nao encontrado no resultado",
+    "portal não retornou resultado",
+    "portal nao retornou resultado",
+    # Antifraude / captcha do portal e portal que não terminou de carregar.
+    "recaptcha não resolvido",
+    "recaptcha nao resolvido",
+    "bloqueio antifraude",
+    "jquery não carregou",
+    "jquery nao carregou",
     "timeout aguardando resultado",
 )
 

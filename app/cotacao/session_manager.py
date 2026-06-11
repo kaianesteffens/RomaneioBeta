@@ -13,7 +13,7 @@ from .common import *
 from .config import _carregar_config
 from .validation import _uf_atendida
 from .telemetry import _remote_disabled_results_for_config
-from .error_context import report_provider_error
+from .error_context import is_expected_prelogin_failure, report_provider_error
 from .circuit_breaker import ProviderCircuitBreaker
 
 CHROME_DOWNLOAD_URL = "https://www.google.com/chrome/"
@@ -604,7 +604,13 @@ class TransportadoraSession:
                             _log_diag(f"Pre-login {nome} falhou: {e}")
                             # Chrome ausente já foi reportado globalmente com module="chrome_missing"
                             _e_str = str(e)
-                            if "Google Chrome" not in _e_str and "chrome" not in _e_str.lower():
+                            # Falhas operacionais de pré-login (credenciais do cliente,
+                            # portal não liberou acesso, rede/portal lentos) não viram
+                            # issue: a cotação do usuário ainda exercita o login e
+                            # reporta caso seja uma quebra real de código.
+                            if is_expected_prelogin_failure(_e_str):
+                                _log_diag(f"Pre-login {nome} falha controlada (sem report): {_e_str}")
+                            elif "Google Chrome" not in _e_str and "chrome" not in _e_str.lower():
                                 report_provider_error(
                                     nome,
                                     "pre_login",
