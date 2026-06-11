@@ -23,11 +23,11 @@ from PySide6.QtWidgets import (
 )
 
 from company_config import (
-    TODAS_UFS,
     _escrever_config_toml,
     _renomear_pasta_empresa,
 )
 from fretio.providers.factory import validate_provider_minimum_config
+from ui.brazil_map import BrazilMap
 
 
 class ConfigMixin:
@@ -38,7 +38,7 @@ class ConfigMixin:
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self._cfg_ufs_cbs: dict = {}
+        self._cfg_uf_maps: dict = {}
         self._cfg_hab_checks: dict = {}
         self._cfg_cred_fields: dict = {}
         self._cfg_cred_warnings: dict = {}
@@ -260,26 +260,31 @@ class ConfigMixin:
                 ufs_atuais = [u.strip().upper() for u in ufs_atuais.split(",") if u.strip()]
             else:
                 ufs_atuais = [u.upper() for u in (ufs_atuais or [])]
-            uf_grid = QGridLayout()
-            uf_grid.setHorizontalSpacing(3)
-            uf_grid.setVerticalSpacing(2)
-            cbs: dict = {}
-            for i, uf in enumerate(TODAS_UFS):
-                cb = QCheckBox(uf)
-                cb.setObjectName("UfChip")
-                cb.setChecked(uf in ufs_atuais)
-                uf_grid.addWidget(cb, i // 9, i % 9)
-                cbs[uf] = cb
-            self._cfg_ufs_cbs[nome] = cbs
-            row.addLayout(uf_grid)
+
+            mapa = BrazilMap(selected=ufs_atuais)
+            self._cfg_uf_maps[nome] = mapa
+            map_wrap = QHBoxLayout()
+            map_wrap.addStretch(1)
+            map_wrap.addWidget(mapa)
+            map_wrap.addStretch(1)
+            row.addLayout(map_wrap)
+
             quick = QHBoxLayout()
+            contador = QLabel()
+            contador.setObjectName("SettingsMutedText")
+            def _atualizar_contador(lbl=contador, m=mapa):
+                n = m.count()
+                lbl.setText("Atende todo o Brasil" if n == 27 else f"{n} estado(s) atendido(s)")
+            _atualizar_contador()
+            mapa.changed.connect(_atualizar_contador)
+            quick.addWidget(contador)
             quick.addStretch(1)
-            btn_all = QPushButton("Todas")
+            btn_all = QPushButton("Todos")
             btn_all.setObjectName("MiniButton")
-            btn_none = QPushButton("Nenhuma")
+            btn_none = QPushButton("Nenhum")
             btn_none.setObjectName("MiniButton")
-            btn_all.clicked.connect(lambda _, c=cbs: [v.setChecked(True) for v in c.values()])
-            btn_none.clicked.connect(lambda _, c=cbs: [v.setChecked(False) for v in c.values()])
+            btn_all.clicked.connect(lambda _, m=mapa: m.select_all())
+            btn_none.clicked.connect(lambda _, m=mapa: m.clear_all())
             quick.addWidget(btn_all)
             quick.addWidget(btn_none)
             row.addLayout(quick)
@@ -416,9 +421,9 @@ class ConfigMixin:
     def _salvar_ufs_embutido(self):
         cfg = self._sessao.config if isinstance(self._sessao.config, dict) else {}
         transp_cfg = cfg.setdefault("transportadoras", {})
-        for nome, cbs in self._cfg_ufs_cbs.items():
+        for nome, mapa in self._cfg_uf_maps.items():
             tcfg = transp_cfg.setdefault(nome, {})
-            tcfg["ufs_atendidas"] = [uf for uf, cb in cbs.items() if cb.isChecked()]
+            tcfg["ufs_atendidas"] = mapa.get_selected()
             cb_hab = self._cfg_hab_checks.get(nome)
             if cb_hab is not None:
                 tcfg["habilitado"] = cb_hab.isChecked()
