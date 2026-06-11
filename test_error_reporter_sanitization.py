@@ -18,6 +18,9 @@ def _reset_error_reporter_state(monkeypatch):
     er._error_api_url = ""
     er._initialized = False
     er._recent_errors.clear()
+    # Estes testes validam justamente o caminho de envio; desligam o guard que
+    # descarta reports originados de testes.
+    er.suppress_test_reports = False
     for env_name in (
         "FRETIO_ERROR_API_URL",
         "FRETEBOT_ERROR_API_URL",
@@ -27,6 +30,7 @@ def _reset_error_reporter_state(monkeypatch):
     er._error_api_url = ""
     er._initialized = False
     er._recent_errors.clear()
+    er.suppress_test_reports = True
 
 
 @pytest.mark.parametrize(
@@ -300,3 +304,53 @@ def test_error_reporter_loads_error_api_url_from_config(monkeypatch, tmp_path):
     er._load_config()
 
     assert er._error_api_url == "https://errors.example.test/api/errors"
+
+
+def test_traceback_is_test_originated_detects_test_frames():
+    assert er._traceback_is_test_originated(
+        '  File "test_cotacao_transportadoras.py", line 218, in create'
+    )
+    assert er._traceback_is_test_originated(
+        '  File "C:\\\\Users\\\\dev\\\\RomaneioBeta\\\\test_x.py", line 1, in f'
+    )
+    assert er._traceback_is_test_originated(
+        '  File "/home/u/work/RomaneioBeta/tests/test_provider_regressions.py", line 5, in g'
+    )
+    assert er._traceback_is_test_originated('  File "conftest.py", line 1, in h')
+    # Caminhos de produção não devem ser detectados como teste.
+    assert not er._traceback_is_test_originated(
+        '  File "app/cotacao/orchestrator.py", line 1101, in _executar_cotacoes_com_dados'
+    )
+    assert not er._traceback_is_test_originated("")
+
+
+def test_report_error_payload_skips_test_originated(monkeypatch):
+    """Dublê de teste (falha fake) não deve gerar issue no servidor."""
+    calls = []
+
+    er._error_api_url = "https://errors.example.test/api/errors"
+    er._initialized = True
+    er._recent_errors.clear()
+    # Comportamento real do app (guard ligado).
+    monkeypatch.setattr(er, "suppress_test_reports", True)
+    monkeypatch.setattr(er, "_send_to_error_api", lambda payload, label="": calls.append(label) or True)
+
+    fake_tb = (
+        "Traceback (most recent call last):\n"
+        '  File "app/cotacao/orchestrator.py", line 1101, in _executar_cotacoes_com_dados\n'
+        '  File "test_cotacao_transportadoras.py", line 218, in create\n'
+        '    raise RuntimeError("falha fake rodonaves")\n'
+        "RuntimeError: falha fake rodonaves\n"
+    )
+    er.report_error_payload(
+        {
+            "module": "cotacao",
+            "provider": "rodonaves",
+            "stage": "abrir_cotacao",
+            "message": "Erro ao preparar RODONAVES: falha fake rodonaves",
+            "traceback": fake_tb,
+        },
+        wait=True,
+    )
+
+    assert calls == []
