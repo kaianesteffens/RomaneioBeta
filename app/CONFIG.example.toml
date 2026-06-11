@@ -10,7 +10,7 @@ license_config_api_url = "https://fretio.api.br/api/licenses/config"
 # A resposta de /api/licenses/config pode aplicar overrides por licença
 # (allow_*, carriers_enabled, cep_origem, fator_cubagem) sem substituir credenciais locais.
 license_url = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
-# error_api_url é o servidor novo de erros; error_gist_id/error_report_token são fallback antigo via Gist.
+# error_api_url é o servidor próprio de erros (identifica o cliente pela licença, sem credencial local).
 error_api_url = "https://fretio.api.br/api/errors"
 usage_api_url = "https://fretio.api.br/api/usage/events"
 quotation_jobs_api_url = "https://fretio.api.br/api/quotations/jobs"
@@ -19,8 +19,6 @@ quotation_jobs_api_url = "https://fretio.api.br/api/quotations/jobs"
 quotation_normalization_api_url = "https://fretio.api.br/api/quotations/normalize"
 # Modo sombra opcional: compara normalizacao remota com dados locais sem alterar a cotacao.
 quotation_normalization_shadow_enabled = false
-error_gist_id = ""  # ID do gist para envio automático de erros
-error_report_token = ""  # Token GitHub com scope 'gist' para envio de erros
 
 [romaneio]
 cep_origem = "99740000"

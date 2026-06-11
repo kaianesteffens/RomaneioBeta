@@ -182,8 +182,8 @@ def test_contract_validate_license_online_active_legacy_gist_is_read_only(monkey
     monkeypatch.setattr(lic, "_get_gist_url", lambda: "https://example.test/licenses.json")
     monkeypatch.setattr(
         lic,
-        "_fetch_licenses_fresh",
-        lambda: {
+        "_fetch_licenses",
+        lambda _url: {
             "licenses": {
                 "FBOT-OK": {
                     "owner": "Cliente Teste",
@@ -197,8 +197,8 @@ def test_contract_validate_license_online_active_legacy_gist_is_read_only(monkey
             "blocked_machines": [],
         },
     )
-    registered = []
-    monkeypatch.setattr(lic, "_register_machine", lambda key, machine, url: registered.append((key, machine, url)) or True)
+    # Sem token de Gist, o vínculo de máquina não é gravado (read-only).
+    assert not hasattr(lic, "_register_machine")
 
     status = lic.validate_license("fbot-ok", machine_id="MAQ-1")
 
@@ -207,7 +207,6 @@ def test_contract_validate_license_online_active_legacy_gist_is_read_only(monkey
         owner="Cliente Teste",
         message="Licença válida.",
     )
-    assert registered == []
 
 
 def test_contract_validate_license_offline_uses_valid_cache(monkeypatch, tmp_path):
@@ -229,7 +228,6 @@ def test_contract_validate_license_offline_uses_valid_cache(monkeypatch, tmp_pat
     )
     monkeypatch.setenv("APPDATA", str(appdata))
     monkeypatch.setattr(lic, "_get_gist_url", lambda: "https://example.test/licenses.json")
-    monkeypatch.setattr(lic, "_fetch_licenses_fresh", lambda: (_ for _ in ()).throw(OSError("offline")))
     monkeypatch.setattr(lic, "_fetch_licenses", lambda _url: (_ for _ in ()).throw(URLError("offline")))
 
     status = lic.validate_license("FBOT-CACHE", machine_id="MAQ-1")

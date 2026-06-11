@@ -63,9 +63,8 @@ Name: "desktopicon"; Description: "Criar atalho na Área de Trabalho"; GroupDesc
 ; Copia toda a pasta dist\Fretio\ para {app}
 Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; CONFIG.toml com github_repo, license_url e error creds → %APPDATA%\Fretio\
-; onlyifdoesntexist: não sobrescreve configurações customizadas em reinstalações
-Source: "{#DistDir}\_internal\CONFIG.toml"; DestDir: "{userappdata}\\Fretio"; DestName: "CONFIG.toml"; Flags: onlyifdoesntexist
+; Nenhum CONFIG.toml é instalado no %APPDATA%. O app cria a config por empresa no
+; primeiro uso, com as URLs padrão (sem nenhuma credencial do desenvolvedor).
 
 [Dirs]
 Name: "{userappdata}\\Fretio"; Flags: uninsneveruninstall
