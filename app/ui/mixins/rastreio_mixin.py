@@ -51,7 +51,7 @@ class RastreioMixin:
         }
         self.btn_select_nfe.setEnabled(False)
         self.label_info.setText("Importando XML/DANFE...")
-        self.label_info.setStyleSheet("color: #1f6feb;")
+        self.label_info.setStyleSheet(f"color: {getattr(self, '_c_info', '#d97757')};")
 
         def _worker():
             erros: list[str] = []
@@ -109,7 +109,7 @@ class RastreioMixin:
             self._rastreio_notas_subset = list(novas_notas)
             self._rastreio_card_offset = event.card_offset
             self.label_info.setText(f"{len(novas_notas)} XML(s) carregado(s) — iniciando rastreamento...")
-            self.label_info.setStyleSheet("color: #1f6feb;")
+            self.label_info.setStyleSheet(f"color: {getattr(self, '_c_info', '#d97757')};")
             self._iniciar_rastreamento()
 
     def _limpar_rastreio(self):
@@ -437,7 +437,7 @@ class RastreioMixin:
         self.rastreio_progress_bar.start_anim()
         self.btn_abrir_screenshots.setVisible(False)
         self.label_info.setText("Rastreando entregas...")
-        self.label_info.setStyleSheet("color: #1f6feb;")
+        self.label_info.setStyleSheet(f"color: {getattr(self, '_c_info', '#d97757')};")
         self._run_rastreamento_async()
 
     def _run_rastreamento_async(self):
@@ -469,7 +469,7 @@ class RastreioMixin:
     def _on_rastreio_result(self, indice, total, resultado):
         """Atualiza o card da NF-e com o resultado do rastreamento."""
         self.label_info.setText(f"Rastreando... {indice}/{total}")
-        self.label_info.setStyleSheet("color: #1f6feb;")
+        self.label_info.setStyleSheet(f"color: {getattr(self, '_c_info', '#d97757')};")
         idx = self._rastreio_card_offset + indice - 1
         if idx < 0 or idx >= len(self._rastreio_card_widgets):
             return
