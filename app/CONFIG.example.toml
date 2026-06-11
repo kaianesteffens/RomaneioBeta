@@ -33,16 +33,6 @@ cnpj = "00000000000000"
 senha = "SENHA_BRASPRESS"
 # ufs_atendidas = ["RS", "SC", "PR", "SP"]  # deixe vazio ou remova para atender todas
 
-[transportadoras.bauer]
-habilitado = false
-cotacao_url = "https://portal.bauerexpress.com.br/cotacao"
-cnpj_pagador = "00.000.000/0000-00"
-cnpj_remetente = "00.000.000/0000-00"
-cnpj_destinatario = "00.000.000/0000-00"
-headless = true
-quantidade = 1
-ufs_atendidas = ["PR", "RS", "SC"]
-
 [transportadoras.trd]
 habilitado = true
 email = "seu-email@empresa.com"

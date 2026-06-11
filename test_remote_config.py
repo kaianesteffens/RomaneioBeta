@@ -63,7 +63,7 @@ def test_remote_config_valid_response_saves_cache(monkeypatch, tmp_path):
     assert result["config"]["force_update"] is True
     assert result["config"]["allow_cotacao"] is False
     assert result["config"]["carriers_enabled"]["braspress"] is False
-    assert result["config"]["carriers_enabled"]["bauer"] is True
+    assert result["config"]["carriers_enabled"]["agex"] is True
     assert len(requests) == 1
     assert requests[0].full_url == "https://config.example.test/api"
     assert requests[0].get_header("Authorization") is None
@@ -196,7 +196,7 @@ def test_is_carrier_enabled_uses_cached_known_carrier(monkeypatch, tmp_path):
     monkeypatch.setenv("APPDATA", str(appdata))
 
     assert rc.is_carrier_enabled("braspress") is False
-    assert rc.is_carrier_enabled("bauer") is True
+    assert rc.is_carrier_enabled("agex") is True
 
 
 def test_is_feature_allowed_uses_cached_known_feature(monkeypatch, tmp_path):

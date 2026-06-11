@@ -238,7 +238,6 @@ def test_orchestrator_includes_translovato_when_enabled_and_configured(monkeypat
         "romaneio": {"cep_origem": "99740000"},
         "transportadoras": {
             "braspress": {"habilitado": False},
-            "bauer": {"habilitado": False},
             "trd": {"habilitado": False},
             "agex": {"habilitado": False},
             "eucatur": {"habilitado": False},

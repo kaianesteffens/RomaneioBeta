@@ -155,7 +155,6 @@ def test_enabled_incomplete_provider_returns_clear_status_without_cotacao(monkey
                 "fretio": {},
                 "transportadoras": {
                     "braspress": {"habilitado": False},
-                    "bauer": {"habilitado": False},
                     "trd": {"habilitado": True, "email": "cliente@example.com", "senha": ""},
                     "agex": {"habilitado": False},
                     "eucatur": {"habilitado": False},

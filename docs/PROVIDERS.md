@@ -7,7 +7,6 @@ Os providers ficam em `app/fretio/src/fretio/providers`. Cada provider encapsula
 Registrados em `app/fretio/src/fretio/providers/factory.py`:
 
 - `braspress`
-- `bauer`
 - `trd`
 - `agex`
 - `eucatur`

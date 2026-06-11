@@ -377,7 +377,7 @@ class CotacaoMixin:
             if len(cnpj) == 14:
                 return cnpj
 
-        for nome in ("bauer", "rodonaves"):
+        for nome in ("rodonaves",):
             cnpj = re.sub(r"\D", "", str((transp.get(nome) or {}).get("cnpj_pagador", "") or ""))
             if len(cnpj) == 14:
                 return cnpj

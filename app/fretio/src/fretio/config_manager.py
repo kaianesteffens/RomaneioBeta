@@ -38,16 +38,6 @@ cnpj = ""
 senha = ""
 ufs_atendidas = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
 
-[transportadoras.bauer]
-habilitado = true
-cotacao_url = ""
-cnpj_pagador = ""
-cnpj_remetente = ""
-cnpj_destinatario = ""
-headless = true
-quantidade = 1
-ufs_atendidas = ["PR", "RS", "SC"]
-
 [transportadoras.trd]
 habilitado = true
 email = ""
