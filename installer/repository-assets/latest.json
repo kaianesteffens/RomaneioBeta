@@ -1,20 +1,19 @@
 {
+  "repo_asset_max_bytes": 99614720,
+  "release_repo_aliases": "kaianesteffens/RomaneioBeta-releases",
+  "release_repo": "kaianesteffens/RomaneioBeta-releases",
+  "version": "2.49",
   "skipped_repo_assets": [
     {
-      "reason": "github_file_limit",
-      "size_bytes": 114726068,
-      "name": "Fretio-Update-latest.zip"
+      "size_bytes": 114728039,
+      "name": "Fretio-Update-latest.zip",
+      "reason": "github_file_limit"
     },
     {
-      "reason": "github_file_limit",
-      "size_bytes": 114726068,
-      "name": "FreteBot-Update-latest.zip"
+      "size_bytes": 114728039,
+      "name": "FreteBot-Update-latest.zip",
+      "reason": "github_file_limit"
     }
-  ],
-  "committed_repo_assets": [
-    "Fretio-Setup-latest.exe",
-    "FreteBot-Setup-latest.exe",
-    "Romaneio.exe"
   ],
   "release_assets": [
     "Fretio-Setup-latest.exe",
@@ -25,8 +24,9 @@
     "FreteBot-Update-latest.zip.sig",
     "Romaneio.exe"
   ],
-  "release_repo": "kaianesteffens/RomaneioBeta-releases",
-  "repo_asset_max_bytes": 99614720,
-  "version": "2.48",
-  "release_repo_aliases": "kaianesteffens/RomaneioBeta-releases"
+  "committed_repo_assets": [
+    "Fretio-Setup-latest.exe",
+    "FreteBot-Setup-latest.exe",
+    "Romaneio.exe"
+  ]
 }
