@@ -85,10 +85,9 @@ config_root = project_root / "CONFIG.example.toml"
 if config_root.exists():
     datas.append((str(config_root), "."))
 
-# CONFIG.toml real (com credenciais) para o instalador copiar
-config_real = project_root / "CONFIG.toml"
-if config_real.exists():
-    datas.append((str(config_real), "."))
+# IMPORTANTE: nunca embarcar um CONFIG.toml real no binário. Ele acabaria em texto
+# puro na máquina do cliente. Só o template CONFIG.example.toml é distribuído; o app
+# cria a config por empresa no primeiro uso (company_config) com as URLs padrão.
 
 # Romaneio exemplo
 romaneio_ex = project_root / "romaneio_exemplo.csv"

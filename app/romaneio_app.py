@@ -156,6 +156,7 @@ from startup import (
     _show_startup_text_input,
     _show_startup_message,
     _migrate_appdata_fretebot_to_fretio,
+    _scrub_developer_credentials_from_configs,
 )
 from ui.dialogs import EmpresaSelectorDialog, ConfiguracoesDialog
 from ui.dialogs.configuracoes import CAMPOS_CREDENCIAIS, TRANSPORTADORAS_CONFIGURAVEIS
@@ -1452,6 +1453,9 @@ def _avisar_instancia_ativa() -> None:
 def main():
     # Migrar dados de Fretio → Fretio (uma vez, na primeira execução após renomeação)
     _migrate_appdata_fretebot_to_fretio()
+
+    # Remove credenciais do desenvolvedor que builds antigos gravaram na máquina
+    _scrub_developer_credentials_from_configs()
 
     # Redireciona stderr para arquivo de crash ANTES de qualquer import falhar
     _crash_log = None
