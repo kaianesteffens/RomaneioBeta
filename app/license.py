@@ -255,102 +255,6 @@ def _fetch_licenses(gist_url: str) -> dict:
         return json.loads(resp.read())
 
 
-def _fetch_licenses_fresh() -> dict:
-    """Busca licenças via API do GitHub (sem cache CDN, sempre atualizado)."""
-    gist_id, token = _get_gist_config()
-    if not gist_id or not token:
-        raise ValueError("Sem gist_id ou token")
-    api_url = f"https://api.github.com/gists/{gist_id}"
-    req = Request(api_url)
-    req.add_header("Authorization", f"token {token}")
-    req.add_header("Accept", "application/vnd.github+json")
-    with urlopen(req, timeout=_HTTP_TIMEOUT, context=_ssl_context()) as resp:
-        gist_data = json.loads(resp.read())
-    content = gist_data.get("files", {}).get("licenses.json", {}).get("content", "")
-    return json.loads(content) if content else {}
-
-
-def _get_gist_config() -> tuple[str, str]:
-    """Retorna (license_gist_id, token) do CONFIG.toml."""
-    try:
-        for candidate in [
-            Path(os.getenv("APPDATA", "")) / "Fretio" / "CONFIG.toml",
-            Path(getattr(sys, "_MEIPASS", "")) / "CONFIG.toml",
-            Path(__file__).parent / "CONFIG.toml",
-        ]:
-            if not candidate.exists():
-                continue
-            cfg = _load_toml_file(candidate)
-            fb = cfg.get("fretio", {})
-            # Extrai o gist ID da license_url
-            url = fb.get("license_url", "")
-            gist_id = ""
-            if url and "gist.githubusercontent.com" in url:
-                # URL: https://gist.githubusercontent.com/USER/GIST_ID/raw/file
-                parts = url.split("/")
-                for i, p in enumerate(parts):
-                    if p == "raw" and i >= 1:
-                        gist_id = parts[i - 1]
-                        break
-            token = fb.get("error_report_token", "")
-            if gist_id and token:
-                return gist_id, token
-    except Exception:
-        pass
-    return "", ""
-
-
-def _register_machine(key: str, machine_id: str, gist_url: str) -> bool:
-    """
-    Registra o machine_id na licença (vincula chave à máquina).
-    Atualiza o gist remoto via API do GitHub.
-    Retorna True se conseguiu registrar.
-    """
-    gist_id, token = _get_gist_config()
-    if not gist_id or not token:
-        return False
-
-    try:
-        # 1. Buscar dados atuais via API (não CDN, para evitar cache stale)
-        api_url = f"https://api.github.com/gists/{gist_id}"
-        req = Request(api_url)
-        req.add_header("Authorization", f"token {token}")
-        req.add_header("Accept", "application/vnd.github+json")
-        with urlopen(req, timeout=_HTTP_TIMEOUT, context=_ssl_context()) as resp:
-            gist_data = json.loads(resp.read())
-        content = gist_data.get("files", {}).get("licenses.json", {}).get("content", "")
-        data = json.loads(content) if content else {}
-
-        lic_data = data.get("licenses", {}).get(key)
-        if not lic_data:
-            return False
-
-        # 2. Adicionar máquina
-        machines = lic_data.get("machines", [])
-        if machine_id not in machines:
-            machines.append(machine_id)
-            lic_data["machines"] = machines
-            data["licenses"][key] = lic_data
-
-        # 3. Atualizar o gist via API
-        api_url = f"https://api.github.com/gists/{gist_id}"
-        payload = json.dumps({
-            "files": {
-                "licenses.json": {
-                    "content": json.dumps(data, indent=2, ensure_ascii=False)
-                }
-            }
-        }).encode("utf-8")
-        req = Request(api_url, data=payload, method="PATCH")
-        req.add_header("Authorization", f"token {token}")
-        req.add_header("Accept", "application/vnd.github+json")
-        req.add_header("Content-Type", "application/json")
-        with urlopen(req, timeout=_HTTP_TIMEOUT, context=_ssl_context()) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
-
-
 def _save_validation_cache(key: str, status: LicenseStatus) -> None:
     """Salva cache da última validação bem-sucedida."""
     data = {
@@ -474,13 +378,9 @@ class LicenseService:
             # Sem URL configurada → licença livre (sem sistema ativo)
             return LicenseStatus(valid=True, owner="(sem licenciamento)", message="")
 
-        # Tentar validação online
+        # Tentar validação online (leitura pública via CDN, sem token)
         try:
-            # Usa API (dados frescos) quando possível, fallback para CDN
-            try:
-                data = _fetch_licenses_fresh()
-            except Exception:
-                data = _fetch_licenses(gist_url)
+            data = _fetch_licenses(gist_url)
             licenses: dict = data.get("licenses", {})
             blocked_keys: list = data.get("blocked_keys", [])
             blocked_machines: list = data.get("blocked_machines", [])

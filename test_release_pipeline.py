@@ -229,125 +229,54 @@ def test_launcher_opens_valid_local_app_when_github_is_offline(monkeypatch, tmp_
     assert launched == [exe_path]
 
 
-def test_error_reporter_uses_env_fallback_without_embedded_secret(monkeypatch):
-    monkeypatch.setenv("FRETIO_ERROR_GIST_ID", "gist-123")
-    monkeypatch.setenv("FRETIO_ERROR_REPORT_TOKEN", "token-456")
+def test_error_reporter_has_no_embedded_developer_secrets():
+    # O caminho via Gist (token do desenvolvedor) foi removido por completo.
+    assert not hasattr(er, "_EMBEDDED_ERROR_GIST_ID")
+    assert not hasattr(er, "_EMBEDDED_ERROR_REPORT_TOKEN")
+    assert not hasattr(er, "_send_to_gist")
+    assert not hasattr(er, "_gist_id")
+    assert not hasattr(er, "_token")
+
+
+def test_error_reporter_loads_error_api_url_from_env(monkeypatch):
+    monkeypatch.setenv("FRETIO_ERROR_API_URL", "https://env.example/api/errors")
     monkeypatch.setattr(er, "_iter_config_candidates", lambda: [])
-    er._gist_id = ""
-    er._token = ""
+    monkeypatch.setattr(er, "_error_api_url", "")
     er._initialized = False
-    er._invalid_token_fingerprints.clear()
 
     er._load_config()
 
-    assert er._EMBEDDED_ERROR_GIST_ID == ""
-    assert er._EMBEDDED_ERROR_REPORT_TOKEN == ""
-    assert er._gist_id == "gist-123"
-    assert er._token == "token-456"
+    assert er._error_api_url == "https://env.example/api/errors"
 
 
-def test_error_reporter_configure_falls_back_to_global_config(monkeypatch, tmp_path):
-    appdata = tmp_path / "appdata"
-    root_cfg = appdata / "Fretio" / "CONFIG.toml"
-    root_cfg.parent.mkdir(parents=True)
-    root_cfg.write_text(
+def test_error_reporter_falls_back_to_default_error_api_url(monkeypatch):
+    monkeypatch.delenv("FRETIO_ERROR_API_URL", raising=False)
+    monkeypatch.delenv("FRETEBOT_ERROR_API_URL", raising=False)
+    monkeypatch.setattr(er, "_iter_config_candidates", lambda: [])
+    monkeypatch.setattr(er, "_error_api_url", "")
+    er._initialized = False
+
+    er._load_config()
+
+    assert er._error_api_url == er._DEFAULT_ERROR_API_URL
+
+
+def test_error_reporter_configure_reads_error_api_url_from_config(monkeypatch, tmp_path):
+    company_cfg = tmp_path / "CONFIG.toml"
+    company_cfg.write_text(
         "[fretio]\n"
-        'error_gist_id = "gist-global"\n'
-        'error_report_token = "token-global"\n',
+        'error_api_url = "https://cfg.example/api/errors"\n',
         encoding="utf-8",
     )
-    company_cfg = appdata / "Fretio" / "empresas" / "DARLU" / "CONFIG.toml"
-    company_cfg.parent.mkdir(parents=True)
-    company_cfg.write_text("[fretio]\n", encoding="utf-8")
-    monkeypatch.setenv("APPDATA", str(appdata))
-    er._gist_id = ""
-    er._token = ""
+    monkeypatch.setattr(er, "_error_api_url", "")
     er._initialized = False
-    er._invalid_token_fingerprints.clear()
 
     er.configure(company_cfg)
 
-    assert er._gist_id == "gist-global"
-    assert er._token == "token-global"
+    assert er._error_api_url == "https://cfg.example/api/errors"
 
 
-def test_error_reporter_retries_with_next_token_after_bad_credentials(monkeypatch, tmp_path):
-    appdata = tmp_path / "appdata"
-    root_cfg = appdata / "Fretio" / "CONFIG.toml"
-    root_cfg.parent.mkdir(parents=True)
-    root_cfg.write_text(
-        "[fretio]\n"
-        'error_gist_id = "gist-old"\n'
-        'error_report_token = "token-old"\n',
-        encoding="utf-8",
-    )
-    bundled_cfg = tmp_path / "bundle" / "CONFIG.toml"
-    bundled_cfg.parent.mkdir(parents=True)
-    bundled_cfg.write_text(
-        "[fretio]\n"
-        'error_gist_id = "gist-new"\n'
-        'error_report_token = "token-new"\n',
-        encoding="utf-8",
-    )
-
-    monkeypatch.setenv("APPDATA", str(appdata))
-    monkeypatch.delenv("FRETIO_ERROR_API_URL", raising=False)
-    monkeypatch.delenv("FRETEBOT_ERROR_API_URL", raising=False)
-    monkeypatch.setattr(er, "_iter_config_candidates", lambda: [root_cfg, bundled_cfg])
-    monkeypatch.setattr(er, "_error_api_url", "")
-    er._gist_id = ""
-    er._token = ""
-    er._initialized = False
-    er._invalid_token_fingerprints.clear()
-
-    requests = []
-
-    class _ImmediateThread:
-        def __init__(self, target, args=(), daemon=None):
-            self._target = target
-            self._args = args
-
-        def start(self):
-            self._target(*self._args)
-
-        def join(self, timeout=None):
-            return None
-
-    class _Response:
-        status = 201
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    def fake_urlopen(req, timeout=15, context=None):
-        assert isinstance(context, ssl.SSLContext)
-        auth = req.get_header("Authorization")
-        requests.append(auth)
-        if auth == "Bearer token-old":
-            raise HTTPError(
-                req.full_url,
-                401,
-                "Unauthorized",
-                hdrs=None,
-                fp=BytesIO(b'{"message":"Bad credentials","status":"401"}'),
-            )
-        return _Response()
-
-    monkeypatch.setattr(er, "urlopen", fake_urlopen)
-    monkeypatch.setattr(er.threading, "Thread", _ImmediateThread)
-
-    er.report_error_message("falha operacional", context="cotacao_RODONAVES", wait=True)
-
-    assert requests == ["Bearer token-old", "Bearer token-new"]
-    assert er._gist_id == "gist-new"
-    assert er._token == "token-new"
-    assert er._token_fingerprint("token-old") in er._invalid_token_fingerprints
-
-
-def test_error_reporter_appends_recent_diag_log(monkeypatch, tmp_path):
+def test_error_reporter_sends_recent_diag_log_to_server(monkeypatch, tmp_path):
     log_path = tmp_path / "error_reporter.log"
     log_path.write_text("linha antiga\nlinha recente\n", encoding="utf-8")
     sent = {}
@@ -368,47 +297,20 @@ def test_error_reporter_appends_recent_diag_log(monkeypatch, tmp_path):
     monkeypatch.setattr(er, "_is_rate_limited", lambda fingerprint: False)
     monkeypatch.setattr(
         er,
-        "_send_to_gist",
-        lambda body, label="": sent.setdefault("payload", {"body": body, "label": label}) or True,
+        "_send_to_error_api",
+        lambda payload, label="": sent.setdefault("payload", payload) is None or True,
     )
     monkeypatch.setattr(er.threading, "Thread", _ImmediateThread)
-    monkeypatch.delenv("FRETIO_ERROR_API_URL", raising=False)
-    monkeypatch.delenv("FRETEBOT_ERROR_API_URL", raising=False)
-    monkeypatch.setattr(er, "_error_api_url", "")
-    monkeypatch.setattr(er, "_gist_id", "gist")
-    monkeypatch.setattr(er, "_token", "token")
+    monkeypatch.setattr(er, "_error_api_url", "https://srv.example/api/errors")
 
     try:
         raise RuntimeError("falha remota")
     except RuntimeError:
         er.report_error(context="teste", wait=True)
 
-    body = sent["payload"]["body"]
-    assert "### Traceback" in body
-    assert "### Diagnostico Local Recente" in body
-    assert "linha recente" in body
-
-
-def test_normalize_embedded_config_backfills_license_api_url(monkeypatch):
-    from types import SimpleNamespace
-
-    monkeypatch.setitem(sys.modules, "toml", SimpleNamespace(loads=lambda raw: {}, dumps=lambda data: ""))
-    sys.modules.pop("normalize_embedded_config", None)
-    import normalize_embedded_config
-
-    data = {"fretio": {}}
-    normalize_embedded_config._ensure_sections(data)
-
-    assert data["fretio"]["license_api_url"] == normalize_embedded_config.DEFAULT_LICENSE_API_URL
-    assert data["fretebot"]["license_api_url"] == normalize_embedded_config.DEFAULT_LICENSE_API_URL
-    assert data["fretio"]["license_config_api_url"] == normalize_embedded_config.DEFAULT_LICENSE_CONFIG_API_URL
-    assert data["fretebot"]["license_config_api_url"] == normalize_embedded_config.DEFAULT_LICENSE_CONFIG_API_URL
-    assert data["fretio"]["error_api_url"] == normalize_embedded_config.DEFAULT_ERROR_API_URL
-    assert data["fretebot"]["error_api_url"] == normalize_embedded_config.DEFAULT_ERROR_API_URL
-    assert data["fretio"]["quotation_normalization_api_url"] == normalize_embedded_config.DEFAULT_QUOTATION_NORMALIZATION_API_URL
-    assert data["fretebot"]["quotation_normalization_api_url"] == normalize_embedded_config.DEFAULT_QUOTATION_NORMALIZATION_API_URL
-    assert data["fretio"]["version_api_url"] == normalize_embedded_config.DEFAULT_VERSION_API_URL
-    assert data["fretebot"]["version_api_url"] == normalize_embedded_config.DEFAULT_VERSION_API_URL
+    payload = sent["payload"]
+    assert payload["traceback"]
+    assert "linha recente" in payload["recent_diag"]
 
 
 def test_pyinstaller_spec_hiddenimports_dynamic_translovato_provider():
@@ -429,4 +331,9 @@ def test_build_release_workflow_requires_explicit_version_and_safe_publication()
     assert "publish_release=false; apenas artefatos internos do workflow foram gerados" in workflow_text
     assert "if: env.PUBLISH_RELEASE == 'true'" in workflow_text
     assert "Artefato obrigatorio ausente; release oficial abortada" in workflow_text
-    assert 'version_api_url = `"$versionApiUrl`"' in workflow_text
+    # A chave PÚBLICA de update é embutida no código; nenhuma credencial do
+    # desenvolvedor (token de Gist) é gerada ou embarcada.
+    assert "_EMBEDDED_UPDATE_PUBLIC_KEY_B64" in workflow_text
+    assert "ERROR_REPORT_TOKEN" not in workflow_text
+    assert "error_report_token" not in workflow_text
+    assert "error_gist_id" not in workflow_text

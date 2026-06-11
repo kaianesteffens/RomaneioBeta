@@ -15,6 +15,7 @@ from company_config import (
     _escrever_config_toml,
     _garantir_defaults_empresa,
     _garantir_defaults_fretio,
+    _scrub_developer_credentials_from_configs,
 )
 from remote_config import fetch_remote_config, get_last_fetch_status
 from updater import apply_update, check_for_update, restart_app
@@ -349,8 +350,7 @@ def _migrate_appdata_fretebot_to_fretio() -> None:
     Suporta dois casos:
     1. Fretio ainda não existe → move o diretório inteiro.
     2. Fretio já existe (criado em startup anterior) → faz merge não destrutivo
-       e preserva credenciais de reporte (error_gist_id/error_report_token)
-       quando presentes no legado e ausentes no destino.
+       das URLs de servidor ausentes no destino.
     """
     appdata = os.getenv("APPDATA")
     if not appdata:
@@ -421,8 +421,6 @@ def _migrate_appdata_fretebot_to_fretio() -> None:
                 "usage_api_url",
                 "quotation_jobs_api_url",
                 "quotation_normalization_api_url",
-                "error_gist_id",
-                "error_report_token",
             ):
                 src_val = str(src_fb.get(key, "") or "").strip()
                 dst_val = str(dst_fb.get(key, "") or "").strip()

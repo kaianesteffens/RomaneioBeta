@@ -182,7 +182,6 @@ def test_license_service_without_api_url_preserves_legacy_gist_validation(monkey
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
     monkeypatch.setattr(lic, "_get_license_api_url", lambda: "")
     monkeypatch.setattr(lic, "_get_gist_url", lambda: "https://example.test/licenses.json")
-    monkeypatch.setattr(lic, "_fetch_licenses_fresh", lambda: (_ for _ in ()).throw(ValueError("sem token")))
     monkeypatch.setattr(
         lic,
         "_fetch_licenses",
@@ -257,7 +256,6 @@ def test_license_api_url_does_not_use_or_send_error_report_token(monkeypatch, tm
             }
         },
     )
-    monkeypatch.setattr(lic, "_get_gist_config", lambda: (_ for _ in ()).throw(AssertionError("gist legacy não deve ser usado")))
     monkeypatch.setattr(lic, "urlopen", fake_urlopen)
     monkeypatch.setattr(lic, "_fetch_remote_config_after_validation", lambda **kwargs: None)
 
