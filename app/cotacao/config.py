@@ -159,7 +159,7 @@ def _resolver_cep_origem(config: dict[str, Any], cep_origem_informado: str) -> s
     transportadoras_cfg = config.get("transportadoras", {}) if isinstance(config, dict) else {}
     transportadora_ceps: list[str] = []
     if isinstance(transportadoras_cfg, dict):
-        for nome in ("braspress", "bauer", "trd"):
+        for nome in ("braspress", "trd"):
             sec = transportadoras_cfg.get(nome, {})
             if isinstance(sec, dict):
                 cep_sec = _cep(str(sec.get("cep_origem", "") or ""))
@@ -175,7 +175,7 @@ def _resolver_cep_origem(config: dict[str, Any], cep_origem_informado: str) -> s
     if cep_romaneio and resolved == cep_romaneio:
         _log_diag(f"Usando CEP origem do romaneio: {cep_romaneio}")
         return resolved
-    for nome, cep_sec in zip(("braspress", "bauer", "trd"), transportadora_ceps):
+    for nome, cep_sec in zip(("braspress", "trd"), transportadora_ceps):
         if cep_sec and resolved == cep_sec:
             _log_diag(f"Usando CEP origem de transportadoras.{nome}: {cep_sec}")
             return resolved

@@ -132,26 +132,27 @@ class EmpresaSelectorDialog(QDialog):
         self.accept()
 
     def _apply_style(self):
-        if self._dark:
-            c_bg = "#0d1117"; c_panel2 = "#1c232c"; c_panel3 = "#21282f"
-            c_border = "#262f3a"; c_ink = "#e6edf3"; c_muted = "#768390"
-            c_ink2 = "#adbac7"; c_accent = "#00b4d8"
-        else:
-            c_bg = "#f0f4f8"; c_panel2 = "#f8fafc"; c_panel3 = "#f1f5f9"
-            c_border = "#e2e8f0"; c_ink = "#0f172a"; c_muted = "#64748b"
-            c_ink2 = "#334155"; c_accent = "#0077b6"
+        from ui import theme as ui_theme
+
+        p = ui_theme.build_palette(self._dark)
+        ui_theme.aplicar_cor_barra_titulo(self, dark=self._dark, caption_hex=p.panel, text_hex=p.ink)
+        c_bg, c_panel2, c_panel3 = p.bg, p.panel2, p.panel3
+        c_border, c_ink, c_muted = p.border, p.ink, p.muted
+        c_ink2, c_accent, c_accent_hover = p.ink2, p.accent, p.accent_hover
+        r = p.radius
         self.setStyleSheet(f"""
             QDialog {{ background: {c_bg}; }}
             #TitleLabel {{ font-size: 20px; font-weight: 700; color: {c_ink}; }}
             #SubtitleLabel {{ font-size: 12px; color: {c_muted}; }}
             QLabel {{ color: {c_ink}; }}
             QListWidget {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border};
-                          border-radius: 8px; padding: 6px; font-size: 13px; outline: none; }}
+                          border-radius: {r.card}px; padding: 6px; font-size: 13px; outline: none; }}
             QListWidget:focus {{ border: 1px solid {c_border}; outline: none; }}
-            QListWidget::item {{ padding: 8px; border-radius: 6px; }}
+            QListWidget::item {{ padding: 8px; border-radius: {r.chip}px; }}
             QListWidget::item:selected {{ background: {c_accent}; color: #fff; }}
-            QPushButton {{ background: {c_accent}; color: #fff; border: none; border-radius: 8px;
+            QPushButton {{ background: {c_accent}; color: #fff; border: none; border-radius: {r.btn}px;
                           padding: 10px 18px; font-weight: 600; }}
+            QPushButton:hover {{ background: {c_accent_hover}; }}
             QPushButton#SecondaryButton {{ background: {c_panel2}; color: {c_ink2};
                                           border: 1px solid {c_border}; }}
             QPushButton#SecondaryButton:hover {{ background: {c_panel3}; color: {c_ink}; }}

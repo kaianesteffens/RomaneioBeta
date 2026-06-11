@@ -145,6 +145,7 @@ from ui.formatting import (
     _apply_decimal_mask,
 )
 from ui.widgets import IndeterminateBar
+from ui import theme as ui_theme
 from startup import (
     MandatoryUpdateDeclined,
     _resource_path,
@@ -197,9 +198,13 @@ class RomaneioWindow(ConfigMixin, CotacaoMixin, RastreioMixin, DashboardMixin, W
         self._tracking_started_at: float | None = None
         self.app_version = _carregar_versao_app()
         self.app_name = f"Fretio {self.app_version} \u2014 {empresa_nome}"
-        self._theme_mode = str((self._sessao.config.get("fretio", {}) or {}).get("ui_tema", "sistema")).lower()
+        _fb_ui = self._sessao.config.get("fretio", {}) or {}
+        self._theme_mode = str(_fb_ui.get("ui_tema", "sistema")).lower()
         if self._theme_mode not in ("sistema", "claro", "escuro"):
             self._theme_mode = "sistema"
+        self._theme_accent = ui_theme.normalize_accent(_fb_ui.get("ui_accent"))
+        self._theme_radius = ui_theme.normalize_radius(_fb_ui.get("ui_raio"))
+        self._theme_button = ui_theme.normalize_button(_fb_ui.get("ui_botao"))
 
         self.setWindowTitle(self.app_name)
         icon_path = _resource_path("assets/romaneio.ico")
@@ -429,7 +434,7 @@ class RomaneioWindow(ConfigMixin, CotacaoMixin, RastreioMixin, DashboardMixin, W
         self._login_status_dots: dict[str, CarrierDot] = {}
         config = self._sessao.config if hasattr(self._sessao, 'config') else {}
         transp_cfg = config.get("transportadoras", {}) if isinstance(config, dict) else {}
-        for nome in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex"):
+        for nome in ("braspress", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex", "translovato"):
             tcfg = transp_cfg.get(nome, {}) if isinstance(transp_cfg, dict) else {}
             if not tcfg.get("habilitado", False):
                 continue
@@ -548,7 +553,7 @@ class RomaneioWindow(ConfigMixin, CotacaoMixin, RastreioMixin, DashboardMixin, W
         carr_vlayout.addWidget(carr_hint)
 
         self._home_carrier_info: dict[str, tuple[QFrame, QLabel]] = {}
-        for nome in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex"):
+        for nome in ("braspress", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex", "translovato"):
             _tcfg = transp_cfg.get(nome, {}) if isinstance(transp_cfg, dict) else {}
             if not _tcfg.get("habilitado", False):
                 continue
@@ -674,7 +679,7 @@ class RomaneioWindow(ConfigMixin, CotacaoMixin, RastreioMixin, DashboardMixin, W
         right_layout.setContentsMargins(14, 14, 14, 14)
         right_layout.setSpacing(10)
         result_header = QHBoxLayout()
-        lbl_resultado = QLabel("2. Acompanhe e leia o resultado")
+        lbl_resultado = QLabel("Resultado da cotação")
         lbl_resultado.setObjectName("CotacaoCardTitle")
         btn_copiar_result = QPushButton("Copiar")
         btn_copiar_result.setObjectName("MiniButton")
@@ -688,13 +693,14 @@ class RomaneioWindow(ConfigMixin, CotacaoMixin, RastreioMixin, DashboardMixin, W
         self.result_text.setObjectName("ResultText")
         self.result_text.setPlainText("")
         self.result_text.setPlaceholderText("O resultado calculado pelas transportadoras aparecerá aqui.")
+        # Mantidos no codigo para o fluxo de progresso, porem ocultos na tela.
         self.cotacao_summary_label = QLabel("Nenhuma cotação iniciada nesta tela.")
         self.cotacao_summary_label.setObjectName("CotacaoSummaryLabel")
         self.cotacao_summary_label.setWordWrap(True)
+        self.cotacao_summary_label.setVisible(False)
         self.cotacao_status_table = self._criar_tabela_status_cotacao()
+        self.cotacao_status_table.setVisible(False)
         right_layout.addLayout(result_header)
-        right_layout.addWidget(self.cotacao_summary_label)
-        right_layout.addWidget(self.cotacao_status_table, 0)
         right_layout.addWidget(self.result_text, 1)
 
         tab_colado_layout.addWidget(left_card, 1)
@@ -869,9 +875,10 @@ class RomaneioWindow(ConfigMixin, CotacaoMixin, RastreioMixin, DashboardMixin, W
         self.forn_result_text = QPlainTextEdit()
         self.forn_result_text.setReadOnly(True)
         self.forn_result_text.setObjectName("ResultText")
+        # Mantida no codigo para o fluxo de progresso, porem oculta na tela.
         self.forn_cotacao_status_table = self._criar_tabela_status_cotacao()
+        self.forn_cotacao_status_table.setVisible(False)
         forn_right_layout.addLayout(forn_result_header)
-        forn_right_layout.addWidget(self.forn_cotacao_status_table, 0)
         forn_right_layout.addWidget(self.forn_result_text, 1)
 
         tab_forn_layout.addWidget(forn_left, 1)
@@ -962,169 +969,23 @@ class RomaneioWindow(ConfigMixin, CotacaoMixin, RastreioMixin, DashboardMixin, W
 
     def _apply_style(self):
         dark = self._usar_tema_escuro()
-        if dark:
-            c_bg = "#0d1117"; c_panel = "#161b22"; c_panel2 = "#1c232c"; c_panel3 = "#21282f"
-            c_border = "#262f3a"; c_border_soft = "#1d2530"
-            c_ink = "#e6edf3"; c_muted = "#768390"; c_ink2 = "#adbac7"; c_faint = "#444c56"
-            c_accent = "#00b4d8"; c_accent_hover = "#0098b8"; c_accent2 = "#0a2030"; c_accent_border = "#0d3d55"
-            c_green = "#3fb950"; c_green_dim = "#0d2b16"
-            c_red = "#f85149"; c_red_dim = "#2b0e0e"
-            c_amber = "#e3b341"; c_amber_dim = "#2b2008"
-        else:
-            c_bg = "#f0f4f8"; c_panel = "#ffffff"; c_panel2 = "#f8fafc"; c_panel3 = "#f1f5f9"
-            c_border = "#e2e8f0"; c_border_soft = "#edf2f7"
-            c_ink = "#0f172a"; c_muted = "#64748b"; c_ink2 = "#334155"; c_faint = "#94a3b8"
-            c_accent = "#0077b6"; c_accent_hover = "#0369a1"; c_accent2 = "#e0f2fe"; c_accent_border = "#bae6fd"
-            c_green = "#16a34a"; c_green_dim = "#dcfce7"
-            c_red = "#dc2626"; c_red_dim = "#fee2e2"
-            c_amber = "#d97706"; c_amber_dim = "#fef3c7"
+        palette = ui_theme.build_palette(
+            dark,
+            accent_name=getattr(self, "_theme_accent", None),
+            radius_name=getattr(self, "_theme_radius", None),
+            button_style=getattr(self, "_theme_button", None),
+        )
+        c_panel2 = palette.panel2
+        c_border = palette.border
+        c_accent = palette.accent
+        c_muted = palette.muted
+        c_panel3 = palette.panel3
+        c_faint = palette.faint
+        c_accent2 = palette.accent2
+        self._c_info = c_accent
 
-        self.setStyleSheet(f"""
-            QMainWindow {{ background: {c_bg}; color: {c_ink}; }}
-            QDialog {{ background: {c_bg}; color: {c_ink}; }}
-            QWidget {{ color: {c_ink}; }}
-            #Sidebar {{ background: {c_panel}; border-right: 1px solid {c_border}; min-width: 200px; max-width: 200px; }}
-            #BrandLabel {{ font-size: 18px; font-weight: 700; letter-spacing: -0.5px; color: {c_ink}; }}
-            #SidebarSep {{ background: {c_border}; border: none; max-height: 1px; }}
-            #ChipWrap {{ background: transparent; }}
-            #EmpresaChip {{ background: {c_panel2}; border: 1px solid {c_border}; border-radius: 6px; }}
-            #EmpresaAvatar {{ background: {c_accent}; color: #fff; font-size: 11px; font-weight: 700; border-radius: 5px; }}
-            #EmpresaName {{ font-size: 12px; font-weight: 500; color: {c_ink2}; }}
-            #ToggleRow {{ border-radius: 6px; }}
-            #ToggleLabel {{ font-size: 13px; color: {c_muted}; }}
-            #TopBar {{ background: {c_panel}; border-bottom: 1px solid {c_border}; }}
-            #TopBarTitle {{ font-size: 14px; font-weight: 600; color: {c_ink}; }}
-            #CmdKBtn {{ background: {c_panel2}; border: 1px solid {c_border}; border-radius: 6px; }}
-            #CmdKBtn:hover {{ background: {c_panel3}; border-color: {c_accent_border}; }}
-            #CmdKText {{ font-size: 12px; color: {c_muted}; }}
-            #CmdKKbd {{ font-family: 'JetBrains Mono'; font-size: 10px; padding: 1px 5px;
-                        background: {c_panel3}; border: 1px solid {c_border}; border-radius: 3px; color: {c_faint}; }}
-            #StatusLabel {{ color: {c_muted}; font-size: 12px; }}
-            #ChromeWarningFrame {{ background: {c_amber_dim}; border: 1px solid {c_amber}; border-radius: 8px; }}
-            #ChromeWarningLabel {{ color: {c_ink}; font-size: 12px; font-weight: 600; }}
-            #FooterLabel {{ font-size: 11px; color: {c_muted}; }}
-            #Card {{ background: {c_panel}; border: 1px solid {c_border}; border-radius: 8px; }}
-            #SettingsHero {{ background: {c_panel}; border-bottom: 1px solid {c_border}; }}
-            #SettingsGear {{ background: {c_accent}; border-radius: 12px; }}
-            #SettingsTitle {{ font-size: 22px; font-weight: 800; letter-spacing: 0.08em; color: {c_ink}; }}
-            #SettingsSubtitle {{ font-size: 12px; color: {c_muted}; }}
-            #SettingsSurface {{ background: {c_bg}; }}
-            #SettingsCard {{ background: {c_panel}; border: 1px solid {c_border}; border-radius: 14px; }}
-            #SettingsRowCard {{ background: {c_panel2}; border: 1px solid {c_border_soft}; border-radius: 10px; }}
-            #SettingsCardTitle {{ font-size: 12px; font-weight: 800; letter-spacing: 0.12em; color: {c_ink}; }}
-            #SettingsCardSubtitle {{ font-size: 11px; color: {c_muted}; }}
-            #SettingsFieldLabel {{ font-size: 11px; font-weight: 700; color: {c_muted}; }}
-            #SettingsCarrierName {{ font-size: 11px; font-weight: 800; letter-spacing: 0.08em; color: {c_ink2}; }}
-            #SettingsTableHeader {{ font-size: 10px; font-weight: 800; letter-spacing: 0.07em; color: {c_muted}; padding-bottom: 4px; }}
-            #SettingsMutedText {{ font-size: 11px; color: {c_muted}; }}
-            #SettingsMiniLabel {{ font-size: 10px; color: {c_faint}; }}
-            QPushButton#ThemeOption, QPushButton#ThemeOptionActive {{ border: 1px solid {c_border}; border-radius: 9px; padding: 8px 12px; font-weight: 700; }}
-            QPushButton#ThemeOption {{ background: {c_panel2}; color: {c_ink2}; }}
-            QPushButton#ThemeOption:hover {{ background: {c_panel3}; border-color: {c_accent_border}; }}
-            QPushButton#ThemeOptionActive {{ background: {c_accent2}; color: {c_accent}; border-color: {c_accent_border}; }}
-            QComboBox#SettingsCombo {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 6px; padding: 6px 8px; }}
-            QComboBox#SettingsCombo::drop-down {{ border: none; width: 22px; }}
-            QCheckBox#UfChip {{ font-size: 10px; color: {c_ink2}; spacing: 2px; }}
-            #SubtitleLabel {{ font-size: 12px; color: {c_muted}; }}
-            #CotacaoCardTitle {{ font-size: 15px; font-weight: 700; color: {c_ink}; }}
-            #CotacaoHintLabel {{ background: {c_panel2}; color: {c_muted}; border: 1px solid {c_border}; border-radius: 7px; padding: 7px 9px; font-size: 12px; }}
-            #CotacaoStatusLabel {{ color: {c_muted}; font-size: 12px; font-weight: 600; }}
-            #CotacaoSummaryLabel {{ background: {c_accent2}; color: {c_ink2}; border: 1px solid {c_accent_border}; border-radius: 8px; padding: 8px 10px; font-size: 12px; font-weight: 600; }}
-            #KpiLabel {{ font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: {c_muted}; }}
-            #KpiValue {{ font-size: 28px; font-weight: 700; color: {c_ink}; letter-spacing: -0.03em; }}
-            #KpiValueAccent {{ font-size: 28px; font-weight: 700; color: {c_accent}; letter-spacing: -0.03em; }}
-            #KpiValueGreen {{ font-size: 28px; font-weight: 700; color: {c_green}; letter-spacing: -0.03em; }}
-            #KpiValueAmber {{ font-size: 28px; font-weight: 700; color: {c_amber}; letter-spacing: -0.03em; }}
-            #KpiSub {{ font-size: 11px; color: {c_muted}; }}
-            #SectionLabel {{ font-size: 10px; font-weight: 700; letter-spacing: 0.1em; color: {c_muted}; }}
-            #SectionHint {{ font-size: 11px; color: {c_faint}; }}
-            #DashboardEmpty {{ background: {c_panel2}; border: 1px dashed {c_border}; border-radius: 8px; }}
-            #DashboardEmptyTitle {{ font-size: 12px; font-weight: 700; color: {c_ink2}; }}
-            #DashboardEmptyText {{ font-size: 11px; color: {c_muted}; }}
-            #LinkLabel {{ font-size: 11px; font-weight: 500; color: {c_accent}; }}
-            #SoftSep {{ background: {c_border_soft}; border: none; max-height: 1px; }}
-            #TableMono {{ font-family: 'JetBrains Mono'; font-size: 11px; color: {c_faint}; }}
-            #TableMono2 {{ font-family: 'JetBrains Mono'; font-size: 11px; color: {c_ink2}; }}
-            #TableText {{ font-size: 12px; color: {c_muted}; }}
-            #TableMonoBold {{ font-family: 'JetBrains Mono'; font-size: 13px; font-weight: 600; color: {c_ink}; }}
-            #CotacaoStatusTable {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 8px; gridline-color: {c_border_soft}; font-size: 12px; }}
-            #CotacaoStatusTable::item {{ padding: 5px; }}
-            #CotacaoStatusTable::item:selected {{ background: {c_accent2}; color: {c_ink}; }}
-            #CotacaoStatusTable QHeaderView::section {{ background: {c_panel3}; color: {c_muted}; border: none; border-bottom: 1px solid {c_border}; padding: 5px 7px; font-size: 10px; font-weight: 700; }}
-            #CarrierRowName {{ font-family: 'JetBrains Mono'; font-size: 12px; color: {c_ink2}; }}
-            #TagGreen {{ background: {c_green_dim}; color: {c_green}; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }}
-            #TagRed {{ background: {c_red_dim}; color: {c_red}; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }}
-            #TagAmber {{ background: {c_amber_dim}; color: {c_amber}; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }}
-            #InputText {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 8px; padding: 8px; font-family: "JetBrains Mono"; font-size: 10.5pt; }}
-            #ResultText {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 10px; padding: 10px; font-family: "JetBrains Mono"; font-size: 11pt; }}
-            #MainStack {{ background: transparent; }}
-            #PageHeader {{ background: transparent; border: none; }}
-            #BackButton {{ background: {c_panel2}; color: {c_ink2}; border: 1px solid {c_border}; border-radius: 8px; padding: 6px 14px; font-size: 13px; font-weight: 600; }}
-            #BackButton:hover {{ background: {c_panel2}; color: {c_ink}; }}
-            #PageTitleLabel {{ font-size: 18px; font-weight: 700; color: {c_ink}; }}
-            #PageContent {{ background: {c_bg}; border: none; border-radius: 0px; }}
-            #RastreioScroll {{ background: transparent; border: none; }}
-            #RastreioScroll QWidget {{ background: transparent; }}
-            #RastreioCard {{ background: {c_panel}; border: 1px solid {c_border}; border-radius: 10px; }}
-            #RastreioBlockTitle {{ font-size: 12px; font-weight: 700; color: {c_accent}; }}
-            #RastreioBlockLabel {{ font-size: 12px; font-weight: 600; color: {c_muted}; }}
-            #RastreioBlockValue {{ font-size: 12px; color: {c_ink}; }}
-            #RastreioCardHeader {{ font-size: 14px; font-weight: 700; color: {c_ink}; }}
-            #RastreioStatusEntregue {{ font-size: 13px; font-weight: 700; color: {c_green}; }}
-            #RastreioStatusTransito {{ font-size: 13px; font-weight: 700; color: {c_amber}; }}
-            #RastreioStatusErro {{ font-size: 13px; font-weight: 700; color: {c_red}; }}
-            #RastreioStatusPendente {{ font-size: 13px; font-weight: 600; color: {c_muted}; }}
-            #RastreioBlockText {{ background: transparent; border: none; color: {c_ink};
-                                  font-size: 12px; font-family: 'JetBrains Mono'; }}
-            {"#RastreioBlueBlock  { background: #0d1f35; border: 1px solid #1a3353; border-radius: 8px; }" if dark else "#RastreioBlueBlock  { background: #f0f7ff; border: 1px solid #bfdbfe; border-radius: 8px; }"}
-            {"#RastreioGreenBlock { background: #0d2010; border: 1px solid #1a3a20; border-radius: 8px; }" if dark else "#RastreioGreenBlock { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; }"}
-            {"#RastreioSlateBlock { background: #1c232c; border: 1px solid #262f3a; border-radius: 8px; }" if dark else "#RastreioSlateBlock { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }"}
-            QPushButton {{ background: {c_accent}; color: #ffffff; border: none; border-radius: 8px; padding: 10px 14px; font-weight: 600; }}
-            QPushButton:hover {{ background: {c_accent_hover}; }}
-            QPushButton:disabled {{ background: {c_panel3}; color: {c_faint}; }}
-            QPushButton#SecondaryButton {{ background: {c_panel2}; color: {c_ink2}; border: 1px solid {c_border}; }}
-            QPushButton#SecondaryButton:hover {{ background: {c_panel3}; color: {c_ink}; border-color: {c_accent_border}; }}
-            #InputField {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 6px; padding: 6px 8px; selection-background-color: {c_accent}; }}
-            #InputField:focus {{ background: {c_panel}; border: 1px solid {c_accent}; }}
-            QLineEdit {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 6px; padding: 6px 8px; selection-background-color: {c_accent}; }}
-            QLineEdit:focus {{ background: {c_panel}; border: 1px solid {c_accent}; }}
-            QPlainTextEdit {{ selection-background-color: {c_accent}; }}
-            QListWidget {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: 8px; padding: 4px; }}
-            QListWidget::item {{ padding: 7px 8px; border-radius: 5px; }}
-            QListWidget::item:selected {{ background: {c_accent2}; color: {c_ink}; }}
-            QListWidget::item:hover {{ background: {c_panel3}; }}
-            #FornLabel {{ font-size: 13px; font-weight: 600; color: {c_ink}; padding-right: 6px; }}
-            #FornUnit {{ font-size: 12px; color: {c_muted}; }}
-            QTabWidget#MainTabs::pane {{ border: 1px solid {c_border}; border-radius: 10px; background: {c_panel}; }}
-            QTabBar::tab {{ background: {c_panel2}; color: {c_muted}; border: 1px solid {c_border};
-                           padding: 7px 12px; margin-right: 4px; border-top-left-radius: 8px;
-                           border-top-right-radius: 8px; }}
-            QTabBar::tab:selected {{ background: {c_panel}; color: {c_ink}; border-bottom-color: {c_panel}; }}
-            QTabBar::tab:hover {{ background: {c_panel3}; color: {c_ink}; }}
-            #SettingsGroup {{ border: 1px solid {c_border}; border-radius: 8px;
-                             padding: 12px 10px 10px 10px; margin-top: 6px; background: {c_panel}; }}
-            QGroupBox#SettingsGroup {{ border: 1px solid {c_border}; background: {c_panel}; border-radius: 8px; margin-top: 0px; }}
-            QGroupBox#SettingsGroup::title {{ subcontrol-origin: margin; height: 0px; width: 0px; padding: 0px; color: transparent; }}
-            #TranspTitle {{ font-size: 17px; font-weight: 700; color: {c_ink}; padding: 6px 0 8px 0; }}
-            #ConfigWarning {{ color: {c_amber}; background: {c_amber_dim};
-                              border: 1px solid {c_amber}; border-radius: 6px; padding: 6px 8px; }}
-            #CredField {{ border: 1px solid {c_border}; border-radius: 6px; padding: 5px 8px;
-                         background: {c_panel2}; color: {c_ink}; }}
-            QPushButton#MiniButton {{ background: {c_panel2}; color: {c_ink2};
-                                     border: 1px solid {c_border}; border-radius: 4px;
-                                     padding: 2px 8px; font-size: 11px; }}
-            QPushButton#MiniButton:hover {{ background: {c_panel3}; border-color: {c_accent_border}; }}
-            QCheckBox {{ color: {c_ink}; spacing: 4px; }}
-            QScrollArea {{ background: transparent; border: none; }}
-            QScrollBar:vertical {{ background: {c_panel2}; width: 10px; margin: 0; border-radius: 5px; }}
-            QScrollBar::handle:vertical {{ background: {c_faint}; min-height: 28px; border-radius: 5px; }}
-            QScrollBar::handle:vertical:hover {{ background: {c_muted}; }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
-            QScrollBar:horizontal {{ background: {c_panel2}; height: 10px; margin: 0; border-radius: 5px; }}
-            QScrollBar::handle:horizontal {{ background: {c_faint}; min-width: 28px; border-radius: 5px; }}
-            QScrollBar::handle:horizontal:hover {{ background: {c_muted}; }}
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; }}
-        """)
+        ui_theme.aplicar_cor_barra_titulo(self, dark=dark, caption_hex=palette.panel, text_hex=palette.ink)
+        self.setStyleSheet(ui_theme.build_stylesheet(palette))
 
         for bar_name in ("progress_bar", "forn_progress_bar", "rastreio_progress_bar"):
             bar = getattr(self, bar_name, None)
@@ -1145,8 +1006,6 @@ class RomaneioWindow(ConfigMixin, CotacaoMixin, RastreioMixin, DashboardMixin, W
             icon_body = NAV_ICONS['moon'] if dark else NAV_ICONS['sun']
             self._theme_icon_lbl.setPixmap(svg_icon(icon_body, 16, c_muted))
             self._theme_mode_lbl.setText("Modo escuro" if dark else "Modo claro")
-        if hasattr(self, '_cfg_dicas_toggle'):
-            self._cfg_dicas_toggle.refresh_theme(c_accent, c_faint)
 
         # Refresh CmdK search icon
         if hasattr(self, '_cmd_icon_lbl'):
@@ -1155,12 +1014,14 @@ class RomaneioWindow(ConfigMixin, CotacaoMixin, RastreioMixin, DashboardMixin, W
 
 
     def _wrap_page_with_back(self, title_text: str, content_widget: QWidget) -> QWidget:
+        # O titulo da pagina ja aparece na barra de topo; aqui mantemos apenas
+        # o botao Voltar para evitar cabecalho duplicado.
+        del title_text
         page = QWidget()
         page.setObjectName("PageContent")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        # Header com botao voltar e titulo
         page_header = QFrame()
         page_header.setObjectName("PageHeader")
         header_layout = QHBoxLayout(page_header)
@@ -1170,10 +1031,7 @@ class RomaneioWindow(ConfigMixin, CotacaoMixin, RastreioMixin, DashboardMixin, W
         btn_back.setObjectName("BackButton")
         btn_back.setCursor(Qt.PointingHandCursor)
         btn_back.clicked.connect(lambda: self._show_page(0))
-        lbl_title = QLabel(title_text)
-        lbl_title.setObjectName("PageTitleLabel")
         header_layout.addWidget(btn_back)
-        header_layout.addWidget(lbl_title)
         header_layout.addStretch(1)
         layout.addWidget(page_header)
         layout.addWidget(content_widget, 1)
@@ -1269,7 +1127,7 @@ class RomaneioWindow(ConfigMixin, CotacaoMixin, RastreioMixin, DashboardMixin, W
                     self.cotacao_run_status.setText(resumo_progresso)
                 if concluidas < total:
                     self.label_info.setText(f"Cotando transportadoras... {concluidas}/{total}")
-                    self.label_info.setStyleSheet("color: #1f6feb;")
+                    self.label_info.setStyleSheet(f"color: {getattr(self, '_c_info', '#d97757')};")
 
             if isinstance(resultado, ResultadoCotacao):
                 linha = self._formatar_linha_progresso(resultado)
@@ -1290,7 +1148,7 @@ class RomaneioWindow(ConfigMixin, CotacaoMixin, RastreioMixin, DashboardMixin, W
                 self._mostrar_chrome_ausente()
                 return
             self.label_info.setText(event.msg)
-            self.label_info.setStyleSheet("color: #1f6feb;")
+            self.label_info.setStyleSheet(f"color: {getattr(self, '_c_info', '#d97757')};")
         elif isinstance(event, LoginStatusEvent):
             self._set_carrier_login_status(event.nome, event.status)
 
@@ -1337,7 +1195,7 @@ class RomaneioWindow(ConfigMixin, CotacaoMixin, RastreioMixin, DashboardMixin, W
         if self._is_shutting_down():
             return
         self.label_info.setText("Reiniciando sess\u00f5es...")
-        self.label_info.setStyleSheet("color: #1f6feb;")
+        self.label_info.setStyleSheet(f"color: {getattr(self, '_c_info', '#d97757')};")
         for dot in self._login_status_dots.values():
             dot.set_status("pending")
         for cr_dot, cr_tag in self._home_carrier_info.values():

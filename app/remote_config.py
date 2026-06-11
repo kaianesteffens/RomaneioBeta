@@ -37,7 +37,6 @@ DEFAULT_REMOTE_CONFIG: dict[str, Any] = {
     "allow_romaneio": True,
     "carriers_enabled": {
         "braspress": True,
-        "bauer": True,
         "trd": True,
         "agex": True,
         "eucatur": True,

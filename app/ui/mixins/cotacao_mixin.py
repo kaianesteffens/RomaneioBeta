@@ -89,7 +89,7 @@ class CotacaoMixin:
             return
         self.btn_select.setEnabled(False)
         self.label_info.setText(f"Processando PDF: {Path(arquivo).name}...")
-        self.label_info.setStyleSheet("color: #1f6feb;")
+        self.label_info.setStyleSheet(f"color: {getattr(self, '_c_info', '#d97757')};")
 
         def _worker():
             extrator = ExtratorPedidos()
@@ -167,7 +167,7 @@ class CotacaoMixin:
 
     def _criar_tabela_status_cotacao(self) -> QTableWidget:
         table = QTableWidget(0, 5)
-        table.setHorizontalHeaderLabels(["Transportadora", "Situação", "Etapa", "Mensagem", "Tempo"])
+        table.setHorizontalHeaderLabels(["Transp.", "Situação", "Etapa", "Mensagem", "Tempo"])
         table.setObjectName("CotacaoStatusTable")
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setSelectionMode(QAbstractItemView.NoSelection)
@@ -183,6 +183,9 @@ class CotacaoMixin:
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.Stretch)
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setMinimumSectionSize(48)
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        table.setTextElideMode(Qt.ElideRight)
         return table
 
     def _resetar_tabela_status_cotacao(self, *, fornecedor: bool = False) -> None:
@@ -350,7 +353,7 @@ class CotacaoMixin:
             self.cotacao_summary_label.setText("Preparando transportadoras para cotação.")
         self._show_page(2)
         self.label_info.setText("Executando cotações de transportadoras...")
-        self.label_info.setStyleSheet("color: #1f6feb;")
+        self.label_info.setStyleSheet(f"color: {getattr(self, '_c_info', '#d97757')};")
         self._run_async_cotacao()
 
     def _cotar_romaneio_colado(self):
@@ -374,7 +377,7 @@ class CotacaoMixin:
             if len(cnpj) == 14:
                 return cnpj
 
-        for nome in ("bauer", "rodonaves"):
+        for nome in ("rodonaves",):
             cnpj = re.sub(r"\D", "", str((transp.get(nome) or {}).get("cnpj_pagador", "") or ""))
             if len(cnpj) == 14:
                 return cnpj
@@ -474,7 +477,7 @@ class CotacaoMixin:
         self.forn_progress_bar.start_anim()
         self.forn_result_text.setPlainText("Cotação em andamento. As respostas serão listadas conforme cada transportadora finalizar.")
         self.label_info.setText("Cotando frete fornecedor...")
-        self.label_info.setStyleSheet("color: #1f6feb;")
+        self.label_info.setStyleSheet(f"color: {getattr(self, '_c_info', '#d97757')};")
         self._run_async_cotacao()
 
     def _verificar_erro_divergencia_uf(self, texto_resultado: str) -> None:

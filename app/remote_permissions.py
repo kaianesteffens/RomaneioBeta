@@ -10,7 +10,6 @@ from remote_config import get_effective_remote_config, is_carrier_enabled, is_fe
 
 KNOWN_CARRIERS = (
     "braspress",
-    "bauer",
     "trd",
     "agex",
     "eucatur",
@@ -46,7 +45,6 @@ def normalize_carrier_name(name: Any) -> str:
     aliases = {
         "brasp": "braspress",
         "braspress": "braspress",
-        "bauer": "bauer",
         "trd": "trd",
         "agex": "agex",
         "eucatur": "eucatur",

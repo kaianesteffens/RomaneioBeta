@@ -29,12 +29,6 @@ from startup import _resource_path
 
 CAMPOS_CREDENCIAIS: dict[str, list[tuple[str, str, bool]]] = {
     "braspress": [("cnpj", "CNPJ", False), ("senha", "Senha", True)],
-    "bauer": [
-        ("cotacao_url", "URL de cotação", False),
-        ("cnpj_pagador", "CNPJ Pagador", False),
-        ("cnpj_remetente", "CNPJ Remetente", False),
-        ("cnpj_destinatario", "CNPJ Destinatário", False),
-    ],
     "trd": [("email", "Email", False), ("senha", "Senha", True)],
     "agex": [
         ("email", "Email", False),
@@ -59,7 +53,6 @@ CAMPOS_CREDENCIAIS: dict[str, list[tuple[str, str, bool]]] = {
 
 TRANSPORTADORAS_CONFIGURAVEIS = [
     "braspress",
-    "bauer",
     "trd",
     "agex",
     "eucatur",

@@ -196,9 +196,6 @@ def _criar_config_empresa_vazia(nome: str) -> None:
         "transportadoras": {
             "braspress": {"habilitado": False, "cnpj": "", "senha": "",
                           "ufs_atendidas": list(TODAS_UFS)},
-            "bauer": {"habilitado": False, "cotacao_url": "", "cnpj_pagador": "",
-                      "cnpj_remetente": "", "cnpj_destinatario": "", "headless": True,
-                      "quantidade": 1, "ufs_atendidas": ["PR", "RS", "SC"]},
             "trd": {"habilitado": False, "email": "", "senha": "", "headless": True,
                     "ufs_atendidas": ["RS", "SC", "PR", "SP", "MG", "ES", "RJ"]},
             "agex": {"habilitado": False, "email": "", "senha": "", "cnpj_remetente": "",
