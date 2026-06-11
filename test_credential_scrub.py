@@ -4,7 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT / "app"))
 
-import startup
+import company_config as cc
 
 
 def _read(path: Path) -> str:
@@ -28,7 +28,7 @@ def test_scrub_removes_developer_token_but_keeps_client_credentials(monkeypatch,
     )
     monkeypatch.setenv("APPDATA", str(appdata))
 
-    startup._scrub_developer_credentials_from_configs()
+    cc._scrub_developer_credentials_from_configs()
 
     text = _read(cfg)
     assert "error_report_token" not in text
@@ -52,7 +52,7 @@ def test_scrub_cleans_legacy_fretebot_root_config(monkeypatch, tmp_path):
     )
     monkeypatch.setenv("APPDATA", str(appdata))
 
-    startup._scrub_developer_credentials_from_configs()
+    cc._scrub_developer_credentials_from_configs()
 
     text = _read(cfg)
     assert "ghp_LEGACY" not in text
@@ -67,6 +67,6 @@ def test_scrub_is_noop_without_developer_fields(monkeypatch, tmp_path):
     cfg.write_text(original, encoding="utf-8")
     monkeypatch.setenv("APPDATA", str(appdata))
 
-    startup._scrub_developer_credentials_from_configs()
+    cc._scrub_developer_credentials_from_configs()
 
     assert "https://fretio.api.br/api/errors" in _read(cfg)
