@@ -15,6 +15,7 @@ from company_config import (
     _escrever_config_toml,
     _garantir_defaults_empresa,
     _garantir_defaults_fretio,
+    _scrub_developer_credentials_from_configs,
 )
 from remote_config import fetch_remote_config, get_last_fetch_status
 from updater import apply_update, check_for_update, restart_app
@@ -468,81 +469,3 @@ def _migrate_appdata_fretebot_to_fretio() -> None:
         shutil.rmtree(str(old_dir), ignore_errors=True)
     except Exception:
         pass
-
-
-# Campos do desenvolvedor que nunca deveriam ter sido gravados na máquina do
-# cliente (PAT de Gist embutido em builds antigos). Removidos no startup.
-_DEVELOPER_CREDENTIAL_FIELDS = ("error_gist_id", "error_report_token")
-
-
-def _scrub_developer_credentials_from_configs() -> None:
-    """Remove credenciais do desenvolvedor de CONFIG.toml já gravados na máquina.
-
-    Builds antigos embarcavam um token de Gist (error_report_token/error_gist_id)
-    que acabava em texto puro nos CONFIG.toml do cliente. Esta varredura, idempotente
-    e best-effort, apaga esses campos de todos os CONFIG.toml locais (Fretio e legado
-    FreteBot, raiz e por empresa), preservando as credenciais das transportadoras
-    (que são do próprio cliente).
-    """
-    try:
-        _run_credential_scrub()
-    except Exception:
-        # Nunca pode impedir a inicialização do app.
-        pass
-
-
-def _run_credential_scrub() -> None:
-    appdata = os.getenv("APPDATA")
-    if not appdata:
-        return
-
-    base = Path(appdata)
-    candidates: list[Path] = []
-    for root_name in ("Fretio", "FreteBot"):
-        root = base / root_name
-        candidates.append(root / "CONFIG.toml")
-        empresas_dir = root / "empresas"
-        if empresas_dir.is_dir():
-            try:
-                for emp_dir in sorted(empresas_dir.iterdir()):
-                    if emp_dir.is_dir():
-                        candidates.append(emp_dir / "CONFIG.toml")
-            except Exception:
-                pass
-
-    def _load(path: Path) -> dict[str, Any]:
-        try:
-            raw = path.read_text(encoding="utf-8-sig")
-        except Exception:
-            return {}
-        try:
-            import tomllib  # type: ignore[import]
-            return tomllib.loads(raw)
-        except Exception:
-            pass
-        try:
-            import toml  # type: ignore[import-untyped]
-            return toml.loads(raw)
-        except Exception:
-            return {}
-
-    for cfg_path in candidates:
-        if not cfg_path.is_file():
-            continue
-        try:
-            data = _load(cfg_path)
-            if not isinstance(data, dict):
-                continue
-            changed = False
-            for section_name in ("fretio", "fretebot"):
-                section = data.get(section_name)
-                if not isinstance(section, dict):
-                    continue
-                for field in _DEVELOPER_CREDENTIAL_FIELDS:
-                    if field in section:
-                        del section[field]
-                        changed = True
-            if changed:
-                _escrever_config_toml(data, cfg_path)
-        except Exception:
-            pass
