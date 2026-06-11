@@ -448,7 +448,7 @@ class TransportadoraSession:
                     transportadoras_cfg = {}
                 transportadoras_cfg = dict(transportadoras_cfg)
                 foco = str(MODO_FOCO_TRANSPORTADORA).strip().lower()
-                for nome_cfg in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex", "translovato"):
+                for nome_cfg in ("braspress", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex", "translovato"):
                     sec = transportadoras_cfg.get(nome_cfg)
                     if not isinstance(sec, dict):
                         sec = {}
@@ -471,15 +471,6 @@ class TransportadoraSession:
                 if provider is not None:
                     await self.registrar_provider("braspress", provider)
                     _log_diag(f"BRASPRESS sessão criada com headless={headless_braspress}")
-
-            baucfg = provider_factory.get_provider_config("bauer")
-            if baucfg.get("habilitado", True):
-                if not provider_factory.is_available("bauer"):
-                    _log_diag("BAUER ignorada: provider bauer_auto não está disponível neste build")
-                else:
-                    provider = provider_factory.create("bauer")
-                    if provider is not None:
-                        await self.registrar_provider("bauer", provider)
 
             tcfg = provider_factory.get_provider_config("trd")
             if tcfg.get("habilitado", True):

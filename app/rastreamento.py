@@ -67,7 +67,6 @@ _TRACKING_URLS: dict[str, str] = {
     "trd": "https://platform.senior.com.br/logistica-tck/tms/tck-frontend/#/login/tracking?tenant=ZEhKa2RISmhibk53YjNKMFpYTT0%3D",
     "agex": "https://cliente.agex.com.br/rastreamento",
     "eucatur": "https://ssw.inf.br/2/rastreamento?sigla_emp=EUC&sc=N&sl=N",
-    "bauer": "",     # pagina de rastreamento removida (404)
     "coopex": "https://coopex.com.br/solicitar-cotacao-form-1/",
     "viopex": "https://ssw.inf.br/2/rastreamento?",
     "mengue": "https://ssw.inf.br/2/rastreamento?sigla_emp=MEN&sc=N&sl=N",
@@ -121,7 +120,6 @@ async def rastrear_nfe(
         "trd": _rastrear_trd,
         "agex": _rastrear_agex,
         "eucatur": _rastrear_eucatur,
-        "bauer": _rastrear_indisponivel,
         "alfa": _rastrear_alfa,
         "coopex": _rastrear_coopex,
         "viopex": _rastrear_viopex,

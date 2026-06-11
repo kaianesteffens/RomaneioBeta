@@ -343,7 +343,6 @@ def identificar_transportadora(nf: NotaFiscal) -> str:
         "rodonaves": ["RODONAVES", "RTE RODONAVES"],
         "trd": ["TRD", "TRANSPORTE RODOVIARIO", "BENTO GONCALVES"],
         "agex": ["AGEX"],
-        "bauer": ["BAUER"],
         "alfa": ["ALFA TRANSPORT", "ALFA"],
         "correios": ["CORREIO", "PAC", "SEDEX"],
     }
