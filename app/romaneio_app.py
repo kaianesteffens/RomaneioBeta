@@ -999,6 +999,13 @@ class RomaneioWindow(ConfigMixin, CotacaoMixin, RastreioMixin, DashboardMixin, W
                 panel3=c_panel3, border=c_border, faint=c_faint, accentDim=c_accent2,
             )
 
+        # Refresh mapas do Brasil (selecao de UFs)
+        for mapa in getattr(self, '_cfg_uf_maps', {}).values():
+            mapa.set_theme(
+                sel_bg=c_accent, sel_fg="#ffffff", bg=c_panel2,
+                fg=palette.ink2, border=c_border, accent=c_accent,
+            )
+
         # Refresh theme toggle icon + label
         if hasattr(self, '_theme_toggle'):
             self._theme_toggle.setChecked(dark)
