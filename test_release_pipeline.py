@@ -302,6 +302,8 @@ def test_error_reporter_sends_recent_diag_log_to_server(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(er.threading, "Thread", _ImmediateThread)
     monkeypatch.setattr(er, "_error_api_url", "https://srv.example/api/errors")
+    # Valida o caminho de envio: desliga o guard de reports originados de teste.
+    monkeypatch.setattr(er, "suppress_test_reports", False)
 
     try:
         raise RuntimeError("falha remota")
