@@ -294,6 +294,9 @@ def build_stylesheet(p: Palette) -> str:
         QComboBox#SettingsCombo {{ background: {c_panel2}; color: {c_ink}; border: 1px solid {c_border}; border-radius: {r_input}px; padding: 6px 8px; }}
         QComboBox#SettingsCombo::drop-down {{ border: none; width: 22px; }}
         QCheckBox#UfChip {{ font-size: 10px; color: {c_ink2}; spacing: 2px; }}
+        QPushButton#UfChipBtn {{ background: {c_panel2}; color: {c_ink2}; border: 1px solid {c_border}; border-radius: {r_chip}px; padding: 5px 0px; font-size: 11px; font-weight: 600; min-width: 34px; }}
+        QPushButton#UfChipBtn:hover {{ border-color: {c_accent}; }}
+        QPushButton#UfChipBtn:checked {{ background: {c_accent}; color: #ffffff; border-color: {c_accent}; }}
         #SubtitleLabel {{ font-size: 12px; color: {c_muted}; }}
         #CotacaoCardTitle {{ font-size: 15px; font-weight: 700; color: {c_ink}; }}
         #CotacaoHintLabel {{ background: {c_panel2}; color: {c_muted}; border: 1px solid {c_border}; border-radius: {r_input}px; padding: 7px 9px; font-size: 12px; }}
