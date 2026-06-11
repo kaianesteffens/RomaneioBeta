@@ -29,6 +29,13 @@ _lock = threading.Lock()
 _CONFIG_SECTIONS = ("fretio", "fretebot", "romaneio")
 _ENV_ERROR_API_URL_VARS = ("FRETIO_ERROR_API_URL", "FRETEBOT_ERROR_API_URL")
 
+# ── Supressão de reports originados de testes ─────────────────────
+# Dublês de teste (ex.: ProviderFactory falso em test_*.py) podem percorrer o
+# caminho normal de erro do app. Esses "erros" não são reais e não devem virar
+# issue no servidor. Testes que validam o próprio envio desligam o guard com
+# `suppress_test_reports = False`.
+suppress_test_reports = True
+
 # Endpoint padrão do servidor próprio. Não é segredo: identifica o cliente pela
 # license_key enviada no payload, sem credencial local. Garante reporte mesmo
 # sem nenhum CONFIG.toml presente.
@@ -480,6 +487,38 @@ def _send_report(api_payload: dict[str, str] | None, label: str = "") -> bool:
     return False
 
 
+def _running_under_pytest() -> bool:
+    return bool(os.environ.get("PYTEST_CURRENT_TEST"))
+
+
+def _traceback_is_test_originated(text: str) -> bool:
+    """True se algum frame do traceback vem de arquivo de teste.
+
+    Cobre ``test_*.py``, ``*_test.py``, ``conftest.py`` e qualquer caminho sob
+    um diretório ``tests/``. Um erro real de produção nunca tem frame assim."""
+    if not text:
+        return False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("File "):
+            continue
+        match = re.search(r'File "([^"]+)"', line)
+        path = (match.group(1) if match else line).replace("\\", "/").lower()
+        base = path.rsplit("/", 1)[-1]
+        if base.startswith("test_") or base.endswith("_test.py") or base == "conftest.py":
+            return True
+        if "/tests/" in path:
+            return True
+    return False
+
+
+def _is_test_originated_report(traceback_text: str = "") -> bool:
+    """Decide se um report deve ser descartado por ter origem em teste."""
+    if not suppress_test_reports:
+        return False
+    return _running_under_pytest() or _traceback_is_test_originated(traceback_text)
+
+
 def report_error_payload(payload: dict, wait: bool = False) -> None:
     """Envia payload de erro estruturado. Best-effort e sem propagar exceções."""
     try:
@@ -492,6 +531,10 @@ def report_error_payload(payload: dict, wait: bool = False) -> None:
         event = str(payload.get("event") or "")
         message = str(payload.get("message") or "")
         traceback_text = str(payload.get("traceback") or "")
+
+        if _is_test_originated_report(traceback_text):
+            _diag("DEBUG", f"report_error_payload({module}/{provider}/{stage}): origem de teste — descartado")
+            return
 
         _load_config()
         if not _error_api_url:
@@ -552,6 +595,10 @@ def report_error(
         exc_type_name = getattr(exc_type, "__name__", str(exc_type))
         tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
 
+        if _is_test_originated_report(tb_text):
+            _diag("DEBUG", f"report_error({exc_type_name}): origem de teste — descartado")
+            return
+
         # Garante config carregada antes de verificar rate-limit
         # (rate-limit só deve consumir slot se o envio for possível)
         _load_config()
@@ -598,6 +645,10 @@ def report_error_message(message: str, context: str = "", wait: bool = False) ->
         _load_config()
         if not _error_api_url:
             _diag("WARN", f"report_error_message: sem endpoint — descartado: {message[:80]}")
+            return
+
+        if _is_test_originated_report("".join(traceback.format_stack())):
+            _diag("DEBUG", f"report_error_message: origem de teste — descartado: {message[:80]}")
             return
 
         fp = sha256(message.encode()).hexdigest()[:16]
