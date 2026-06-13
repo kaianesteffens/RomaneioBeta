@@ -8,7 +8,7 @@
 
 - Branch de trabalho: **`refactor/codebase-cleanup`** (criada a partir de `master`).
   `master` está **intacto** e **nada foi pushed**. Trabalhe nesta branch.
-- Estado: **18 commits**, **765 testes verdes**, pacote `app/cotacao/` **pyflakes-limpo**.
+- Estado: **20 commits**, **767 testes verdes**, pacote `app/cotacao/` **pyflakes-limpo**.
 - O app foi migrado de PySide6 para **UI web** (pywebview/WebView2): shell em
   `app/web_app.py` + `app/web/*` (HTML/CSS/JS). Backend Python intacto.
 - Memória do projeto: `refactor-codebase-cleanup` (resumo) e `ui-web-migration`.
@@ -35,6 +35,8 @@
 | `22d4a1b` | 6 passo 2 | `session_manager._PRIORIDADE_LENTIDAO` deriva do registry |
 | `ad8d7a2` | 6 passo 3 | Teste por-padrão dos classificadores de erro (test-first) |
 | `e69cd64` | 6 passo 3 | `cotacao/error_classifiers.py` unifica os 3 classificadores |
+| `3d02d85` | 7 passo 1 | Golden da superfície pública de `web_app.Api` (30 métodos) |
+| `196a065` | 7 passo 1 | Extrai `ConfigMixin` de `web_app.Api` (1º delegate) |
 
 **Fase 6 passos 1 e 3 = CONCLUÍDOS.** Passo 2 = núcleo seguro feito (registry +
 3 consumidores deduplicados + parity test). Falta o que está marcado abaixo
@@ -136,11 +138,21 @@ regressão de provider. Não mexa no parsing sem fixture.
 
 Já feito: teardown determinístico (`c0f5138`). Falta:
 
-1. **Dividir `web_app.Api`** (~800 linhas, 1 god-object) em delegates por domínio
-   (`CotacaoApi`, `RastreioApi`, `ConfigApi`, `StartupApi`) compostos atrás de um `js_api`.
-   **Mantenha cada nome/assinatura de método público IDÊNTICO** — `pywebview.api.<nome>`
-   e o envelope `onBackendEvent({event,payload})` não podem mudar. Verifique com
-   `python app/web_app.py --smoke OUT` e com `web_shot.py`. Protegido pelos 17 char tests.
+1. **[EM ANDAMENTO] Dividir `web_app.Api`** (~800 linhas, 1 god-object) em delegates por domínio.
+   - **FEITO**: golden da superfície pública (`test_char_web_app_api_surface.py`, 30 métodos +
+     assinaturas exatas — o contrato pywebview) e **`ConfigMixin` extraído** (`196a065`).
+   - **Padrão provado (use para os demais)**: mixin por domínio definido ANTES de `class Api`,
+     com os corpos movidos **verbatim** (continuam operando sobre `self`, então a superfície
+     pywebview e o estado compartilhado ficam idênticos). Mecânica por delegate: (1) inserir
+     `class XMixin:` + reparent `class Api(ConfigMixin, XMixin, ...)`; (2) remover os métodos
+     originais do `Api`. Verificar a CADA delegate: `python -m pytest -q test_char_web_app_api_surface.py
+     test_char_web_app_serializers.py test_char_web_app_teardown.py` + `python app/web_app.py --smoke OUT`
+     + suíte completa.
+   - **FALTA**: `StartupMixin` (bloco contíguo `startup_*` + `get_bootstrap`/`listar_empresas`),
+     `RastreioMixin` (`rastreio_*` + `_ser_rastreio`/`_coro_rastreio`), `CotacaoMixin`
+     (`cotacao_iniciar`/`_coro_cotacao`/`_ser_resultado`/`_cb_*`/`fornecedor_cotar`/`nfe`/`romaneio`/`dashboard`).
+   - **Mantenha cada nome/assinatura público IDÊNTICO** — `pywebview.api.<nome>` e o envelope
+     `onBackendEvent({event,payload})` não podem mudar. Protegido pelos 17 char serializers + o golden de superfície.
 
 2. **Mover lógica de apresentação para fora da ponte**: `_nota_card`,
    `_validar_local_entrega`, `_montar_romaneio_fornecedor` → um formatter de domínio
