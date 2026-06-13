@@ -35,14 +35,14 @@
         <div class="cot-cols">
           <section class="card cot-card">
             <div class="card-pad">
-              <h2 class="card-title">1. Cole ou revise o romaneio</h2>
-              <p class="card-hint">Use o texto processado do PDF ou cole o romaneio completo antes de iniciar.</p>
+              <h2 class="card-title">1. Cole o romaneio</h2>
+              <p class="card-hint">Cole aqui o romaneio que deseja cotar. Não é preciso importar um PDF antes — se você processou um na tela Romaneio, o texto já vem preenchido.</p>
               <textarea id="cotInput" class="input-area mono" spellcheck="false" placeholder="Exemplo:&#10;CNPJ/CPF: ...&#10;- VOL: ...&#10;- CUBAGEM: ... m3&#10;- PESO: ... kg&#10;- TOTAL: R$ ..."></textarea>
-              <div class="cot-hintbox" id="cotHint">Aguardando romaneio para liberar a cotação.</div>
+              <div class="cot-hintbox" id="cotHint">Cole um romaneio no campo acima para liberar a cotação.</div>
               <button class="btn btn-primary" id="cotStart" type="button" disabled>
                 <span class="spin" aria-hidden="true"></span>Iniciar cotação
               </button>
-              <div class="cot-runstatus" id="cotRunStatus">Pronto para cotar assim que houver romaneio.</div>
+              <div class="cot-runstatus" id="cotRunStatus">Cole um romaneio e clique em Iniciar cotação.</div>
             </div>
           </section>
 
@@ -71,9 +71,9 @@
         const linhas = txt ? txt.split("\n").filter((l) => l.trim()).length : 0;
         $("#cotHint", view).textContent = pronto
           ? `Romaneio preenchido com ${linhas} linha(s). Confira os dados e clique em Iniciar cotação.`
-          : "Aguardando romaneio para liberar a cotação.";
+          : "Cole um romaneio no campo acima para liberar a cotação.";
         if (!running) {
-          $("#cotRunStatus", view).textContent = pronto ? "Pronto para iniciar." : "Pronto para cotar assim que houver romaneio.";
+          $("#cotRunStatus", view).textContent = pronto ? "Pronto para iniciar." : "Cole um romaneio para iniciar.";
         }
       };
       ta.addEventListener("input", updateHint);
