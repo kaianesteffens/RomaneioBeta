@@ -29,6 +29,11 @@ except Exception:
         return None
 
 
+# Re-exportado de error_classifiers (fonte única dos classificadores). Mantido em
+# __all__ p/ quem importa `from cotacao.error_context import is_expected_prelogin_failure`.
+from .error_classifiers import is_expected_prelogin_failure
+
+
 MODULE = "cotacao"
 DEFAULT_SOURCE = "cotacao_provider"
 ALLOWED_STAGES = {
@@ -76,45 +81,6 @@ _MAX_DEPTH = 6
 _MAX_ITEMS = 60
 _MAX_LIST_ITEMS = 40
 _MAX_STRING_LENGTH = 1200
-
-
-# Falhas de pré-login que são operacionais (credenciais do cliente, portal não
-# liberou acesso, rede/portal lentos) e NÃO devem virar issue no servidor. O
-# pré-login é proativo/best-effort: se o problema for real (ex.: portal mudou o
-# formulário), a cotação do usuário ainda exercita o login e reporta por lá.
-_PRELOGIN_CONTROLLED_PATTERNS = (
-    "login falhou",
-    "falha no login",
-    "falha de login",
-    "usuário ou senha",
-    "usuario ou senha",
-    "senha inválida",
-    "senha invalida",
-    "senha incorreta",
-    "credenciais inválidas",
-    "credenciais invalidas",
-    "acesso negado",
-    "portal não confirmou acesso",
-    "portal nao confirmou acesso",
-    "não confirmou acesso",
-    "nao confirmou acesso",
-    "jquery não carregou",
-    "jquery nao carregou",
-    "timeout",
-    "timed out",
-    "net::err",
-    "err_connection",
-    "err_name",
-    "err_timed_out",
-)
-
-
-def is_expected_prelogin_failure(detail: str) -> bool:
-    """True se a falha de pré-login é operacional/esperada (não reportar)."""
-    if not detail:
-        return False
-    text = str(detail).lower()
-    return any(pattern in text for pattern in _PRELOGIN_CONTROLLED_PATTERNS)
 
 
 def report_provider_error(

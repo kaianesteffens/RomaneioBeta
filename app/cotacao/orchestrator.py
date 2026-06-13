@@ -44,6 +44,11 @@ from .session_manager import (
     _is_chrome_missing_error,
 )
 from .error_context import build_quotation_error_diagnostic, report_provider_error
+from .error_classifiers import (
+    _is_business_error,
+    _is_expected_transient_failure,
+    _is_expected_transient_failure_str,
+)
 
 
 @dataclass(frozen=True)
@@ -64,99 +69,8 @@ class CotacaoOutcome:
     duration_ms: int = 0
 
 
-# ---------------------------------------------------------------------------
-# Helpers para classificação de erros — definidos em escopo de módulo para
-# evitar redefinição a cada chamada da função assíncrona principal.
-# ---------------------------------------------------------------------------
-
-def _is_business_error(detail: str) -> bool:
-    """Detecta erros de negócio (destino não atendido, rota fora de cobertura).
-
-    Esses erros são normais e não devem ser reportados nem gerar retry."""
-    if not detail:
-        return False
-    d = str(detail).lower()
-    patterns = (
-        "destino fora da cobertura",
-        "cepdestino não atendido",
-        "cep destino não atendido",
-        "não atendemos esse cep",
-        "destino possivelmente não atendido",
-        "destino possìvelmente não atendido",
-        "rota não atendida",
-        "cidade de destino",
-        "transportadora não atende",
-        "transportadora n o atende",
-        "cidade de destino n o",
-        "n o atendida",
-        "não atendido",
-        "nao atendido",
-        "fora de cobertura",
-        "fora da cobertura",
-        "não atendemos",
-        "cepnão atendemos",
-        "sem precificação automática no ssw",
-        "sem precificacao automatica no ssw",
-        "não cadastrada",
-        "nao cadastrada",
-        "rota:",
-    )
-    return any(p in d for p in patterns)
-
-
-_TRANSIENT_PATTERNS = (
-    "target page, context or browser has been closed",
-    "target closed",
-    "frame was detached",
-    "net::err_aborted",
-    "net::err_connection",
-    "net::err_name",
-    "net::err_timed_out",
-    "net::err_internet",
-    "net::err_network",
-    "formulário de cotação não carregou",
-    "formulario de cotacao nao carregou",
-    "page.goto",
-    "valor de frete nao encontrado",
-    "valor de frete não encontrado",
-    # Variantes reais retornadas pelos portais ("não foi encontrado", parsing do
-    # resultado falhou, portal não devolveu cotação) — operacionais, não bugs.
-    "valor de frete nao foi encontrado",
-    "valor de frete não foi encontrado",
-    "valor não encontrado no resultado",
-    "valor nao encontrado no resultado",
-    "portal não retornou resultado",
-    "portal nao retornou resultado",
-    # Antifraude / captcha do portal e portal que não terminou de carregar.
-    "recaptcha não resolvido",
-    "recaptcha nao resolvido",
-    "bloqueio antifraude",
-    "jquery não carregou",
-    "jquery nao carregou",
-    "timeout aguardando resultado",
-)
-
-
-def _is_expected_transient_failure(erro: BaseException) -> bool:
-    """Detecta falhas transitórias esperadas de provider que NÃO devem ir para report_error.
-
-    Timeouts do provider e erros de rede/browser são falhas controladas — não bugs no código."""
-    if isinstance(erro, TimeoutError):
-        return True
-    err_str = str(erro).lower()
-    return any(p in err_str for p in _TRANSIENT_PATTERNS)
-
-
-def _is_expected_transient_failure_str(detail: str) -> bool:
-    """Mesmos critérios de _is_expected_transient_failure, mas para strings de last_error.
-
-    Usado quando o provider capturou a exceção internamente e retornou None."""
-    if not detail:
-        return False
-    d = detail.lower()
-    if "timeout" in d or "timed out" in d:
-        return True
-    return any(p in d for p in _TRANSIENT_PATTERNS)
+# Classificadores de erro (_is_business_error / _is_expected_transient_failure*)
+# foram unificados em error_classifiers.py e importados acima.
 
 
 # ---------------------------------------------------------------------------
