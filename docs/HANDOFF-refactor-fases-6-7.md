@@ -8,7 +8,7 @@
 
 - Branch de trabalho: **`refactor/codebase-cleanup`** (criada a partir de `master`).
   `master` está **intacto** e **nada foi pushed**. Trabalhe nesta branch.
-- Estado: **20 commits**, **767 testes verdes**, pacote `app/cotacao/` **pyflakes-limpo**.
+- Estado: **23 commits**, **767 testes verdes**, pacote `app/cotacao/` **pyflakes-limpo**.
 - O app foi migrado de PySide6 para **UI web** (pywebview/WebView2): shell em
   `app/web_app.py` + `app/web/*` (HTML/CSS/JS). Backend Python intacto.
 - Memória do projeto: `refactor-codebase-cleanup` (resumo) e `ui-web-migration`.
@@ -37,6 +37,9 @@
 | `e69cd64` | 6 passo 3 | `cotacao/error_classifiers.py` unifica os 3 classificadores |
 | `3d02d85` | 7 passo 1 | Golden da superfície pública de `web_app.Api` (30 métodos) |
 | `196a065` | 7 passo 1 | Extrai `ConfigMixin` de `web_app.Api` (1º delegate) |
+| `2348dcf` | 7 passo 1 | Extrai `StartupMixin` (2º delegate) |
+| `aa1ed1a` | 7 passo 1 | Extrai `RastreioMixin` (3º delegate) |
+| `5e71a8f` | 7 passo 1 | Extrai `CotacaoMixin` (4º delegate) |
 
 **Fase 6 passos 1 e 3 = CONCLUÍDOS.** Passo 2 = núcleo seguro feito (registry +
 3 consumidores deduplicados + parity test). Falta o que está marcado abaixo
@@ -138,21 +141,20 @@ regressão de provider. Não mexa no parsing sem fixture.
 
 Já feito: teardown determinístico (`c0f5138`). Falta:
 
-1. **[EM ANDAMENTO] Dividir `web_app.Api`** (~800 linhas, 1 god-object) em delegates por domínio.
+1. **[CONCLUÍDO os 4 delegates nomeados] Dividir `web_app.Api`** (god-object) em delegates por domínio.
    - **FEITO**: golden da superfície pública (`test_char_web_app_api_surface.py`, 30 métodos +
-     assinaturas exatas — o contrato pywebview) e **`ConfigMixin` extraído** (`196a065`).
-   - **Padrão provado (use para os demais)**: mixin por domínio definido ANTES de `class Api`,
-     com os corpos movidos **verbatim** (continuam operando sobre `self`, então a superfície
-     pywebview e o estado compartilhado ficam idênticos). Mecânica por delegate: (1) inserir
-     `class XMixin:` + reparent `class Api(ConfigMixin, XMixin, ...)`; (2) remover os métodos
-     originais do `Api`. Verificar a CADA delegate: `python -m pytest -q test_char_web_app_api_surface.py
-     test_char_web_app_serializers.py test_char_web_app_teardown.py` + `python app/web_app.py --smoke OUT`
-     + suíte completa.
-   - **FALTA**: `StartupMixin` (bloco contíguo `startup_*` + `get_bootstrap`/`listar_empresas`),
-     `RastreioMixin` (`rastreio_*` + `_ser_rastreio`/`_coro_rastreio`), `CotacaoMixin`
-     (`cotacao_iniciar`/`_coro_cotacao`/`_ser_resultado`/`_cb_*`/`fornecedor_cotar`/`nfe`/`romaneio`/`dashboard`).
-   - **Mantenha cada nome/assinatura público IDÊNTICO** — `pywebview.api.<nome>` e o envelope
-     `onBackendEvent({event,payload})` não podem mudar. Protegido pelos 17 char serializers + o golden de superfície.
+     assinaturas exatas — o contrato pywebview) + **4 mixins extraídos** via composição por herança:
+     `ConfigMixin` (7), `StartupMixin` (8), `RastreioMixin` (4), `CotacaoMixin` (7) —
+     `class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin)`. 26 métodos saíram do Api;
+     restaram 20 no shell (infra `_emit`/`_gate`/`_teardown`/`_ensure_backend`/`attach_window` +
+     nav/lifecycle + grupo romaneio/fornecedor/nfe/dashboard).
+   - **Padrão usado**: mixin definido ANTES de `class Api`, corpos movidos **verbatim** (operam
+     sobre `self` → superfície pywebview e estado compartilhado idênticos). Verificação por delegate:
+     golden de superfície + char serializers + `python app/web_app.py --smoke OUT` + suíte completa.
+   - **FALTA (opcional)**: 5º delegate `RomaneioMixin`/`FornecedorMixin` para o grupo restante
+     (`romaneio_processar`/`get_romaneio_texto`/`fornecedor_cotar`/`_montar_romaneio_fornecedor`/
+     `_obter_*`/`nfe_selecionar`/`get_dashboard`). Parte disso é Fase 7 passo 2 (mover apresentação
+     `_montar_romaneio_fornecedor` para um formatter de domínio).
 
 2. **Mover lógica de apresentação para fora da ponte**: `_nota_card`,
    `_validar_local_entrega`, `_montar_romaneio_fornecedor` → um formatter de domínio
