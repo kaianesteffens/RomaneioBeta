@@ -127,28 +127,6 @@ def _posicionar_hwnd(hwnd: int, *, left: int, top: int, width: int, height: int,
         _forcar_foreground(hwnd)
 
 
-def ocultar_taskbar_por_pid(pid: int) -> bool:
-    """Oculta todas as janelas top-level de um PID da barra de tarefas."""
-    if sys.platform != "win32":
-        return False
-    encontrou = False
-
-    @_WNDENUMPROC
-    def callback(hwnd, _lparam):
-        nonlocal encontrou
-        proc_id = wintypes.DWORD()
-        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(proc_id))
-        if proc_id.value == pid and _user32.IsWindowVisible(hwnd):
-            _aplicar_toolwindow(hwnd)
-            encontrou = True
-        return True
-
-    _user32.EnumWindows(callback, 0)
-    if encontrou:
-        logger.debug("Janela(s) do PID %d ocultada(s) da barra de tarefas", pid)
-    return encontrou
-
-
 def _encontrar_hwnd_por_titulo(substring: str) -> int:
     """Encontra HWND de janela cujo título contenha a substring."""
     resultado = [0]
@@ -166,32 +144,6 @@ def _encontrar_hwnd_por_titulo(substring: str) -> int:
 
     _user32.EnumWindows(callback, 0)
     return resultado[0]
-
-
-def trazer_janela_frente_por_pid(pid: int) -> bool:
-    """Traz janela(s) de um PID para frente usando Win32 API (sem Playwright)."""
-    if sys.platform != "win32":
-        return False
-    encontrou = False
-
-    @_WNDENUMPROC
-    def callback(hwnd, _lparam):
-        nonlocal encontrou
-        proc_id = wintypes.DWORD()
-        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(proc_id))
-        if proc_id.value == pid and _user32.IsWindowVisible(hwnd):
-            # Restaura WS_EX_APPWINDOW para taskbar
-            style = _user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            style = (style & ~_WS_EX_TOOLWINDOW) | _WS_EX_APPWINDOW
-            _user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, style)
-            _forcar_foreground(hwnd)
-            encontrou = True
-        return True
-
-    _user32.EnumWindows(callback, 0)
-    if encontrou:
-        logger.debug("Janela(s) do PID %d trazida(s) para frente", pid)
-    return encontrou
 
 
 def posicionar_janela_por_pid(
@@ -237,33 +189,6 @@ def posicionar_janela_por_pid(
             height,
         )
     return encontrou
-
-
-async def trazer_janela_frente(page) -> bool:
-    """Traz a janela do navegador para frente de todas usando Win32 API."""
-    if sys.platform != "win32":
-        return False
-    try:
-        titulo_original = await page.evaluate("document.title")
-        marcador = f"_Fretio_{uuid.uuid4().hex[:8]}"
-        await page.evaluate(f"document.title = {marcador!r}")
-        await page.wait_for_timeout(200)
-
-        hwnd = _encontrar_hwnd_por_titulo(marcador)
-
-        # Restaura título original
-        await page.evaluate(f"document.title = {titulo_original!r}")
-
-        if hwnd:
-            _restaurar_appwindow(hwnd)
-            _forcar_foreground(hwnd)
-            logger.debug("Janela HWND=%d trazida para frente", hwnd)
-            return True
-        logger.debug("Não foi possível encontrar HWND para trazer à frente")
-        return False
-    except Exception as e:
-        logger.warning("Falha ao trazer janela para frente: %s", e)
-        return False
 
 
 async def ocultar_taskbar_por_pagina(page) -> bool:

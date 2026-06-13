@@ -101,8 +101,6 @@ class TransportadoraSession(_session_mod.TransportadoraSession):
 
 async def _executar_cotacoes_com_dados(*args, **kwargs):
     _sync_legacy_overrides()
-    if kwargs.get("sessao") is not None and isinstance(kwargs.get("sessao"), TransportadoraSession):
-        pass
     return await _orchestrator_mod._executar_cotacoes_com_dados(*args, **kwargs)
 
 async def cotar_transportadoras(

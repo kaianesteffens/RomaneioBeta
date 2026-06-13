@@ -352,19 +352,6 @@ def _get_machine_hash() -> str:
         return "unknown"
 
 
-def _get_license_key() -> str:
-    """Lê a chave de licença salva (para identificar o cliente)."""
-    try:
-        f = Path(os.getenv("APPDATA", "")) / "Fretio" / "license.key"
-        if f.exists():
-            key = f.read_text(encoding="utf-8").strip()
-            # Retorna só os primeiros 9 chars para privacidade (FBOT-XXXX)
-            return key[:9] if len(key) > 9 else key
-    except Exception:
-        pass
-    return "?"
-
-
 def _get_saved_license_key() -> str:
     """Lê a licença salva completa para identificação no servidor próprio."""
     try:
