@@ -1406,8 +1406,7 @@ async def _executar_cotacoes_com_dados(
             return await _run_cotacao(i, nome, provider, kwargs, is_alfa)
 
     def _processar_resultado(res, resultados, falhas_para_retry):
-        """Processa resultado de _exec, retorna (ResultadoCotacao|None, ok: bool)."""
-        nonlocal concluidas
+        """Despacha um CotacaoOutcome para o handler da sua forma de resultado."""
 
         def _finalizar(r):
             nonlocal concluidas
@@ -1434,7 +1433,7 @@ async def _executar_cotacoes_com_dados(
         erro = res.erro
         duration_ms = res.duration_ms
 
-        if isinstance(erro, BaseException):
+        def _handle_exception():
             erro_str = str(erro)
             # Erros de negócio não devem ser reportados nem gerar retry
             if _is_business_error(erro_str):
@@ -1488,7 +1487,7 @@ async def _executar_cotacoes_com_dados(
                 _finalizar(r)
             return
 
-        if erro is not None:
+        def _handle_erro_simples():
             erro_str = str(erro)
             # Erros de negócio não devem ser reportados nem gerar retry
             if _is_business_error(erro_str):
@@ -1511,7 +1510,8 @@ async def _executar_cotacoes_com_dados(
                 _finalizar(r)
             return
 
-        if isinstance(cotacao, QuoteResponse):
+        def _handle_quote_response():
+            nonlocal concluidas
             quote_response = cotacao
             if quote_response.duration_ms is None:
                 quote_response.duration_ms = duration_ms
@@ -1590,7 +1590,8 @@ async def _executar_cotacoes_com_dados(
             )
             return
 
-        if cotacao is not None:
+        def _handle_legacy():
+            nonlocal concluidas
             try:
                 transportadora = str(getattr(cotacao, "transportadora", nome_task))
                 valor_frete = float(getattr(cotacao, "valor_frete", 0.0))
@@ -1622,7 +1623,8 @@ async def _executar_cotacoes_com_dados(
                 resultado=r,
                 provider_status=provider_progress_from_resultado(r, stage="resultado"),
             )
-        else:
+
+        def _handle_none():
             detalhe = None
             if provider_task is not None:
                 detalhe = getattr(provider_task, "last_error", None)
@@ -1697,6 +1699,23 @@ async def _executar_cotacoes_com_dados(
                     duration_ms=duration_ms,
                 )
                 _finalizar(r)
+
+        # Dispatch por forma do resultado. _handle_erro_simples cobre o caminho
+        # defensivo de `erro` truthy não-exceção (nenhum producer de _run_cotacao
+        # gera isso hoje, mas é preservado).
+        if isinstance(erro, BaseException):
+            _handle_exception()
+            return
+        if erro is not None:
+            _handle_erro_simples()
+            return
+        if isinstance(cotacao, QuoteResponse):
+            _handle_quote_response()
+            return
+        if cotacao is not None:
+            _handle_legacy()
+        else:
+            _handle_none()
 
     # ── Rodada 1: executa todas as cotações ──
     falhas_para_retry: list[tuple[str, Any, dict[str, Any]]] = []
