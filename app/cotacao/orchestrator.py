@@ -1378,10 +1378,8 @@ async def _executar_cotacoes_com_dados(
         """Processa resultado de _exec, retorna (ResultadoCotacao|None, ok: bool)."""
         nonlocal concluidas
 
-        if not isinstance(res, tuple) or len(res) != 7:
-            msg = f"Executor retornou formato inesperado de resultado: {type(res).__name__}"
-            _log_diag(msg)
-            r = ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=msg)
+        def _finalizar(r):
+            nonlocal concluidas
             concluidas += 1
             resultados.append(r)
             _emitir_progresso(
@@ -1390,6 +1388,12 @@ async def _executar_cotacoes_com_dados(
                 resultado=r,
                 provider_status=provider_progress_from_resultado(r, stage="resultado"),
             )
+
+        if not isinstance(res, tuple) or len(res) != 7:
+            msg = f"Executor retornou formato inesperado de resultado: {type(res).__name__}"
+            _log_diag(msg)
+            r = ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=msg)
+            _finalizar(r)
             return
 
         _i, nome_task, provider_task, kwargs_task, cotacao, erro, duration_ms = res
@@ -1403,14 +1407,7 @@ async def _executar_cotacoes_com_dados(
                     transportadora=nome_task, status="nao_atendido", detalhes=erro_str,
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
                 return
             tb = ''.join(traceback.format_exception(type(erro), erro, erro.__traceback__))
             _log_diag(f"Erro em cotação {nome_task}: {type(erro).__name__}: {erro}\n{tb}")
@@ -1452,14 +1449,7 @@ async def _executar_cotacoes_com_dados(
                     detalhes=f"{type(erro).__name__}: {erro}",
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
             return
 
         if erro is not None:
@@ -1471,14 +1461,7 @@ async def _executar_cotacoes_com_dados(
                     transportadora=nome_task, status="nao_atendido", detalhes=erro_str,
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
                 return
             _log_diag(f"Erro em cotação {nome_task}: {erro}")
             if falhas_para_retry is not None:
@@ -1489,14 +1472,7 @@ async def _executar_cotacoes_com_dados(
                     transportadora=nome_task, status="erro", detalhes=str(erro),
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
             return
 
         if isinstance(cotacao, QuoteResponse):
@@ -1591,14 +1567,7 @@ async def _executar_cotacoes_com_dados(
                     detalhes=f"Resultado inválido: {parse_exc}",
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
                 return
 
             r = ResultadoCotacao(
@@ -1634,14 +1603,7 @@ async def _executar_cotacoes_com_dados(
                     transportadora=nome_task, status="nao_atendido", detalhes=str(detalhe),
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
                 return
 
             # Falhas transitórias de rede/browser capturadas internamente pelo provider
@@ -1657,14 +1619,7 @@ async def _executar_cotacoes_com_dados(
                         transportadora=nome_task, status="erro", detalhes=str(detalhe),
                         duration_ms=duration_ms,
                     )
-                    concluidas += 1
-                    resultados.append(r)
-                    _emitir_progresso(
-                        concluidas=concluidas,
-                        total=total_cotacoes,
-                        resultado=r,
-                        provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                    )
+                    _finalizar(r)
                 return
 
             # Normaliza a mensagem removendo partes variáveis (ex: paths de diagnóstico TRD)
@@ -1705,14 +1660,7 @@ async def _executar_cotacoes_com_dados(
                     transportadora=nome_task, status="erro", detalhes=str(detalhe),
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
 
     # ── Rodada 1: executa todas as cotações ──
     falhas_para_retry: list[tuple[str, Any, dict[str, Any]]] = []
