@@ -17,6 +17,7 @@ ENV/
 installer/build/
 installer/dist/
 installer/release-assets/
+installer/MicrosoftEdgeWebview2Setup.exe
 installer/python-3.12/
 installer/installer/
 app/build/

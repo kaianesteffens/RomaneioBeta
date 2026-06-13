@@ -2,7 +2,7 @@
 # The Windows build must install from requirements-lock.txt, not this file.
 
 pdfplumber
-PySide6
+pywebview
 Pillow
 greenlet==3.1.1
 playwright==1.58.0
