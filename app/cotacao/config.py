@@ -208,7 +208,9 @@ def _dados_envio(extrator, pedidos: list[Any]) -> dict[str, Any]:
         uf_destino = ""
     try:
         if hasattr(extrator, "_extrair_componentes_local"):
-            _rua, _cep, cidade_uf = extrator._extrair_componentes_local(local_entrega)
+            # NÃO desempacotar em "_cep": sombreia a função _cep importada e quebra
+            # o return (destino_cep = _cep(...)). Só cidade_uf é usado aqui.
+            _rua, _cep_comp, cidade_uf = extrator._extrair_componentes_local(local_entrega)
             match = re.search(r"(.+?)\s*/\s*([A-Za-z]{2})$", str(cidade_uf or "").strip())
             if match:
                 cidade_destino = re.sub(r"\s+", " ", str(match.group(1) or "").strip())
