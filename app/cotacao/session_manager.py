@@ -9,8 +9,11 @@ import os
 import sys
 import time
 
+from fretio.providers.factory import slowness_priority_for_provider
+
 from . import deps
 from .common import (
+    KNOWN_CARRIERS,
     MODO_FOCO_TRANSPORTADORA,
     _log_diag,
     _logger,
@@ -116,15 +119,9 @@ def _kill_orphan_Fretio_chromes() -> None:
 
 # Prioridade de lentidão: maior = mais lento (baseado em testes reais).
 # Usado para iniciar os mais lentos primeiro e para ordenar resultados.
+# Derivado do registro único (ProviderSpec.slowness_priority em factory.py).
 _PRIORIDADE_LENTIDAO: dict[str, int] = {
-    "TRD": 700,
-    "ALFA": 600,
-    "BRASPRESS": 500,
-    "TRANSLOVATO": 450,
-    "EUCATUR": 400,
-    "COOPEX": 350,
-    "RODONAVES": 300,
-    "AGEX": 100,
+    nome.upper(): slowness_priority_for_provider(nome) for nome in KNOWN_CARRIERS
 }
 
 # Timeouts por provider (fluxos reais medidos):
