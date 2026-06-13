@@ -387,7 +387,145 @@ class ConfigMixin:
         return {"ok": self._write_config(mut)}
 
 
-class Api(ConfigMixin):
+class StartupMixin:
+    """Partida: licença, versão/update e seleção/criação de empresa.
+
+    Delegate de domínio do god-object Api. Opera sobre o estado do Api (self) —
+    superfície pública pywebview inalterada (test_char_web_app_api_surface.py)."""
+
+    def startup_licenca_estado(self) -> dict:
+        from license import get_saved_license, get_machine_id, validate_license
+        key = get_saved_license()
+        machine = get_machine_id()
+        if not key:
+            return {"fase": "pedir_chave", "msg": ""}
+        status = validate_license(key, machine)
+        if status.valid:
+            try:
+                from usage_reporter import report_license_validated
+                report_license_validated("ok")
+            except Exception:
+                pass
+            return {"fase": "ok", "msg": ""}
+        return {"fase": "revogada", "msg": status.message or "Sua licença não é mais válida."}
+
+    def startup_ativar_licenca(self, key: str) -> dict:
+        from license import get_machine_id, validate_license, save_license
+        key = str(key or "").strip().upper()
+        if not key:
+            return {"ok": False, "msg": "Informe a chave de licença."}
+        status = validate_license(key, get_machine_id())
+        if status.valid:
+            save_license(key)
+            try:
+                from usage_reporter import report_license_validated
+                report_license_validated("ok")
+            except Exception:
+                pass
+            return {"ok": True, "msg": ""}
+        return {"ok": False, "msg": status.message or "Chave não reconhecida."}
+
+    def startup_pos_licenca(self) -> dict:
+        from startup import _fetch_remote_config_sync, _carregar_versao_app
+        from version_policy import evaluate_minimum_version
+        from updater import get_repo_from_config, check_for_update
+
+        cur = _carregar_versao_app()
+        repo = get_repo_from_config()
+        payload = _fetch_remote_config_sync()
+        policy = evaluate_minimum_version((payload or {}).get("config", {}), cur)
+
+        info = None
+        try:
+            info = check_for_update(repo, cur) if repo else None
+        except Exception:
+            info = None
+        self._update_info = info
+        upd = None
+        if info:
+            upd = {
+                "version": getattr(info, "version", ""),
+                "notes": str(getattr(info, "release_notes", "") or "")[:1500],
+                "mandatory": bool(getattr(info, "mandatory", False)),
+            }
+
+        bloqueado = bool(policy.is_outdated and policy.should_block)
+        msg = ""
+        if bloqueado:
+            msg = (f"Sua versão (v{policy.current_version}) não é compatível com o servidor.\n"
+                   f"Versão mínima: v{policy.min_app_version or 'desconhecida'}. Atualize para continuar.")
+        return {"bloqueado": bloqueado, "msg": msg, "update": upd}
+
+    def startup_aplicar_update(self) -> dict:
+        info = self._update_info
+        if not info:
+            return {"ok": False, "erro": "Nenhuma atualização disponível"}
+        from updater import apply_update, restart_app
+        try:
+            ok = apply_update(info, callback=lambda m: self._emit("startup_progress", {"texto": str(m or "")}))
+        except Exception as exc:
+            return {"ok": False, "erro": str(exc)}
+        if ok:
+            try:
+                restart_app()
+            except Exception:
+                pass
+            return {"ok": True}
+        return {"ok": False, "erro": "Não foi possível aplicar a atualização agora."}
+
+    def startup_empresas(self) -> list:
+        return cc._listar_empresas()
+
+    def startup_criar_empresa(self, nome: str) -> dict:
+        nome = str(nome or "").strip()
+        if not nome:
+            return {"ok": False, "erro": "Informe um nome para a empresa."}
+        if nome in cc._listar_empresas():
+            return {"ok": False, "erro": "Já existe uma empresa com esse nome."}
+        try:
+            cc._criar_config_empresa_vazia(nome)
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "erro": str(exc)}
+
+    def startup_renomear_empresa(self, atual: str, novo: str) -> dict:
+        atual, novo = str(atual or "").strip(), str(novo or "").strip()
+        if not atual or not novo:
+            return {"ok": False, "erro": "Nome inválido."}
+        try:
+            ok = cc._renomear_pasta_empresa(atual, novo)
+            return {"ok": bool(ok), "erro": "" if ok else "Não foi possível renomear."}
+        except Exception as exc:
+            return {"ok": False, "erro": str(exc)}
+
+    def startup_entrar(self, empresa: str) -> dict:
+        empresa = str(empresa or "").strip()
+        if not empresa:
+            return {"ok": False, "erro": "Empresa inválida."}
+        self._empresa = empresa
+        self._config_path = cc._empresa_config_path(empresa)
+        self._versao = _carregar_versao()
+        try:
+            cc._salvar_ultima_empresa(empresa)
+        except Exception:
+            pass
+        try:
+            from error_reporter import configure as _er_configure
+            _er_configure(self._config_path)
+        except Exception:
+            pass
+        try:
+            cfg = _load_config(self._config_path)
+            changed = cc._garantir_defaults_fretio(cfg)
+            changed = cc._garantir_defaults_empresa(cfg) or changed
+            if changed:
+                cc._escrever_config_toml(cfg, self._config_path)
+        except Exception:
+            pass
+        return {"ok": True}
+
+
+class Api(ConfigMixin, StartupMixin):
     def __init__(self, empresa: str | None = None, config_path: Path | None = None) -> None:
         self._empresa = empresa or ""
         self._config_path = config_path
@@ -921,138 +1059,6 @@ class Api(ConfigMixin):
             return {"erro": str(exc)}
         cnpj_forn = re.sub(r"\D", "", str((form or {}).get("cnpj", "")))
         return self.cotacao_iniciar(texto, cnpj_remetente=cnpj_forn, cep_origem=cep_forn)
-
-    # ── Partida (licença / versão / update / empresa) ───────────────────────
-    def startup_licenca_estado(self) -> dict:
-        from license import get_saved_license, get_machine_id, validate_license
-        key = get_saved_license()
-        machine = get_machine_id()
-        if not key:
-            return {"fase": "pedir_chave", "msg": ""}
-        status = validate_license(key, machine)
-        if status.valid:
-            try:
-                from usage_reporter import report_license_validated
-                report_license_validated("ok")
-            except Exception:
-                pass
-            return {"fase": "ok", "msg": ""}
-        return {"fase": "revogada", "msg": status.message or "Sua licença não é mais válida."}
-
-    def startup_ativar_licenca(self, key: str) -> dict:
-        from license import get_machine_id, validate_license, save_license
-        key = str(key or "").strip().upper()
-        if not key:
-            return {"ok": False, "msg": "Informe a chave de licença."}
-        status = validate_license(key, get_machine_id())
-        if status.valid:
-            save_license(key)
-            try:
-                from usage_reporter import report_license_validated
-                report_license_validated("ok")
-            except Exception:
-                pass
-            return {"ok": True, "msg": ""}
-        return {"ok": False, "msg": status.message or "Chave não reconhecida."}
-
-    def startup_pos_licenca(self) -> dict:
-        from startup import _fetch_remote_config_sync, _carregar_versao_app
-        from version_policy import evaluate_minimum_version
-        from updater import get_repo_from_config, check_for_update
-
-        cur = _carregar_versao_app()
-        repo = get_repo_from_config()
-        payload = _fetch_remote_config_sync()
-        policy = evaluate_minimum_version((payload or {}).get("config", {}), cur)
-
-        info = None
-        try:
-            info = check_for_update(repo, cur) if repo else None
-        except Exception:
-            info = None
-        self._update_info = info
-        upd = None
-        if info:
-            upd = {
-                "version": getattr(info, "version", ""),
-                "notes": str(getattr(info, "release_notes", "") or "")[:1500],
-                "mandatory": bool(getattr(info, "mandatory", False)),
-            }
-
-        bloqueado = bool(policy.is_outdated and policy.should_block)
-        msg = ""
-        if bloqueado:
-            msg = (f"Sua versão (v{policy.current_version}) não é compatível com o servidor.\n"
-                   f"Versão mínima: v{policy.min_app_version or 'desconhecida'}. Atualize para continuar.")
-        return {"bloqueado": bloqueado, "msg": msg, "update": upd}
-
-    def startup_aplicar_update(self) -> dict:
-        info = self._update_info
-        if not info:
-            return {"ok": False, "erro": "Nenhuma atualização disponível"}
-        from updater import apply_update, restart_app
-        try:
-            ok = apply_update(info, callback=lambda m: self._emit("startup_progress", {"texto": str(m or "")}))
-        except Exception as exc:
-            return {"ok": False, "erro": str(exc)}
-        if ok:
-            try:
-                restart_app()
-            except Exception:
-                pass
-            return {"ok": True}
-        return {"ok": False, "erro": "Não foi possível aplicar a atualização agora."}
-
-    def startup_empresas(self) -> list:
-        return cc._listar_empresas()
-
-    def startup_criar_empresa(self, nome: str) -> dict:
-        nome = str(nome or "").strip()
-        if not nome:
-            return {"ok": False, "erro": "Informe um nome para a empresa."}
-        if nome in cc._listar_empresas():
-            return {"ok": False, "erro": "Já existe uma empresa com esse nome."}
-        try:
-            cc._criar_config_empresa_vazia(nome)
-            return {"ok": True}
-        except Exception as exc:
-            return {"ok": False, "erro": str(exc)}
-
-    def startup_renomear_empresa(self, atual: str, novo: str) -> dict:
-        atual, novo = str(atual or "").strip(), str(novo or "").strip()
-        if not atual or not novo:
-            return {"ok": False, "erro": "Nome inválido."}
-        try:
-            ok = cc._renomear_pasta_empresa(atual, novo)
-            return {"ok": bool(ok), "erro": "" if ok else "Não foi possível renomear."}
-        except Exception as exc:
-            return {"ok": False, "erro": str(exc)}
-
-    def startup_entrar(self, empresa: str) -> dict:
-        empresa = str(empresa or "").strip()
-        if not empresa:
-            return {"ok": False, "erro": "Empresa inválida."}
-        self._empresa = empresa
-        self._config_path = cc._empresa_config_path(empresa)
-        self._versao = _carregar_versao()
-        try:
-            cc._salvar_ultima_empresa(empresa)
-        except Exception:
-            pass
-        try:
-            from error_reporter import configure as _er_configure
-            _er_configure(self._config_path)
-        except Exception:
-            pass
-        try:
-            cfg = _load_config(self._config_path)
-            changed = cc._garantir_defaults_fretio(cfg)
-            changed = cc._garantir_defaults_empresa(cfg) or changed
-            if changed:
-                cc._escrever_config_toml(cfg, self._config_path)
-        except Exception:
-            pass
-        return {"ok": True}
 
     def abrir_app(self) -> dict:
         if self._window is not None:
