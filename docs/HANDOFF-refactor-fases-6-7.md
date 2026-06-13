@@ -8,7 +8,7 @@
 
 - Branch de trabalho: **`refactor/codebase-cleanup`** (criada a partir de `master`).
   `master` está **intacto** e **nada foi pushed**. Trabalhe nesta branch.
-- Estado: **9 commits**, **739 testes verdes**, pacote `app/cotacao/` **pyflakes-limpo**.
+- Estado: **16 commits**, **758 testes verdes**, pacote `app/cotacao/` **pyflakes-limpo**.
 - O app foi migrado de PySide6 para **UI web** (pywebview/WebView2): shell em
   `app/web_app.py` + `app/web/*` (HTML/CSS/JS). Backend Python intacto.
 - Memória do projeto: `refactor-codebase-cleanup` (resumo) e `ui-web-migration`.
@@ -26,9 +26,16 @@
 | `ecd7d6d` | 6 (fatia) | `_finalizar` extraído no orchestrator (9 blocos duplicados colapsados) |
 | `c0f5138` | 7 (fatia) | Teardown determinístico ao fechar (encerra Chrome/Playwright) |
 | `c705b63` | — | UX: Cotação desacoplada do Romaneio (eram independentes; era só texto enganoso) |
+| `cbd113e` | 6 passo 1 | Golden dispatch do orchestrator (10 casos, pré-decomposição) |
+| `123117b` | 6 passo 1 | 7-tupla de `_run_cotacao` → dataclass `CotacaoOutcome` |
+| `35bd1ad` | 6 passo 1 | `_processar_resultado` → dispatch + handlers (`_handle_*`) |
+| `dc0f206` | 6 passo 2 | Parity test do conhecimento por transportadora (test-first) |
+| `6b326c5` | 6 passo 2 | Registry único em `ProviderSpec` (required/credential/slowness) |
+| `a12de27` | 6 passo 2 | `web_app._CARRIER_FIELDS` deriva do registry |
+| `22d4a1b` | 6 passo 2 | `session_manager._PRIORIDADE_LENTIDAO` deriva do registry |
 
-**As Fases 6 e 7 foram só PARCIALMENTE feitas** (as fatias acima). Falta a
-decomposição profunda — é o que este handoff cobre.
+**Fase 6 passo 1 = CONCLUÍDO.** Passo 2 = núcleo seguro feito (registry +
+3 consumidores deduplicados + parity test). Falta o que está marcado abaixo.
 
 ## Como verificar (rode SEMPRE a cada passo)
 
@@ -69,21 +76,26 @@ testes vermelhos.
 
 Já feito: `_finalizar` no `_processar_resultado` (`ecd7d6d`). Falta:
 
-1. **orchestrator `_processar_resultado` / `_run_cotacao`** (`app/cotacao/orchestrator.py`):
-   - Dividir `_processar_resultado` em handlers (`_handle_exception` / `_handle_quote_response`
-     / `_handle_legacy` / `_handle_none`). Protegido pelo char test de dispatch.
-   - Trocar a 7-tupla retornada por `_run_cotacao` por um dataclass `CotacaoOutcome`
-     (campos: i, nome, provider, kwargs, cotacao, erro, duration_ms). Atualizar o
-     desempacotamento em `_processar_resultado`.
-   - **Antes**: já existe char test do dispatch; rode-o a cada mudança.
+1. **[CONCLUÍDO — `cbd113e`/`123117b`/`35bd1ad`] orchestrator `_processar_resultado` / `_run_cotacao`**:
+   - `_processar_resultado` dividido em handlers (`_handle_exception` / `_handle_quote_response`
+     / `_handle_legacy` / `_handle_none` + `_handle_erro_simples` defensivo) com um dispatch chain.
+   - 7-tupla de `_run_cotacao` trocada por dataclass frozen `CotacaoOutcome` (escopo do
+     orchestrator). Guarda `len==7` virou `isinstance`.
+   - Rede de segurança: `test_char_orchestrator_dispatch.py` (golden e2e das 7 formas +
+     efeitos no circuit breaker + progresso) — **rode-o a cada mudança no dispatch**.
 
-2. **Registry único por transportadora** (a maior dívida arquitetural — conhecimento
-   por carrier está espalhado em 5 lugares): unificar `config section`, `required fields`,
-   `UF filter`, `headless policy`, `build_kwargs`, `special-case predicates` colocados
-   junto de `factory._PROVIDER_SPECS` (`app/fretio/src/fretio/providers/factory.py`), e
-   **dirigir** a partir dele: os 8 blocos de setup do orchestrator, `session_manager.inicializar`
-   e `web_app._CARRIER_FIELDS`. **PRESERVE**: Rodonaves `headless=False` pinado, exclusões
-   AGEX (RS/SC) e ALFA. Protegido pelos 34 char tests dos `_build_*_kwargs`.
+2. **[PARCIAL] Registry único por transportadora** (`app/fretio/src/fretio/providers/factory.py`):
+   - **FEITO**: `ProviderSpec` agora é o registro único e carrega `required_fields`,
+     `credential_fields` (chave/rótulo/tipo da UI) e `slowness_priority`. `_REQUIRED_FIELDS`,
+     `web_app._CARRIER_FIELDS` e `session_manager._PRIORIDADE_LENTIDAO` **derivam** dele.
+     Acessores: `credential_fields_for_provider`, `slowness_priority_for_provider`. Protegido
+     por `test_carrier_registry_parity.py`.
+   - **FALTA (decidir antes — alto risco)**: dirigir os **8 blocos de setup do orchestrator**
+     (UF filter já é uniforme via `_uf_atendida`; `headless policy` é per-carrier; create_kwargs
+     e predicados especiais divergem muito) e centralizar `KNOWN_CARRIERS` (hoje em
+     `remote_permissions`, **não** rewireado — risco de ciclo de import na cadeia de licença;
+     o parity test já impede drift). **PRESERVE**: Rodonaves `headless=False` pinado, exclusões
+     AGEX (RS/SC), ALFA PICOLO. Protegido pelos 34 char tests dos `_build_*_kwargs` + o golden dispatch.
 
 3. **Unificar os 3 classificadores de erro** num módulo só: `_is_business_error`,
    `_TRANSIENT_PATTERNS` (`orchestrator.py`) e `_PRELOGIN_CONTROLLED_PATTERNS`
@@ -189,12 +201,25 @@ Já feito: teardown determinístico (`c0f5138`). Falta:
   e o filtro de user-data-dir do `_kill_orphan_Fretio_chromes` — timing-tuned e crítico
   (matching de chrome amplo demais mataria o Chrome pessoal do usuário).
 
-## Perguntas em aberto (resolver antes dos passos que dependem delas)
+## Perguntas em aberto — RESOLVIDAS (decisões de 2026-06-13)
 
-1. Divergência de cuba COOPEX vs EUCATUR — intencional ou drift? (bloqueia a unificação SSW)
-2. SSW aceita CPF (11 díg) de pagador? (bloqueia decisão de validação SSW)
-3. Quantos providers já têm `cotar()` shape `QuoteRequest`? (bloqueia aposentar o legado)
-4. `coteir` é nome legado deliberado ou typo? (confirme na regressão antes de renomear)
+1. **Cuba COOPEX vs EUCATUR**: a auditoria mostrou que os campos cuba enviam o MESMO
+   conjunto (só a ordem difere — cosmético p/ o SSW). A divergência real é no `coteir`:
+   EUCATUR bloqueia se `volumes≠Σcubagens`, COOPEX sobrescreve em silêncio. **DECISÃO:
+   o `SswProvider` unificado adota o comportamento da COOPEX (sobrescrever volumes pela
+   soma)** — EUCATUR deixa de bloquear. Caracterizar antes de unificar (passo 5).
+2. **SSW aceita CPF (11 díg)?** Providers exigem 14 e falham TARDE (após browser+login).
+   **DECISÃO: Opção A — rejeitar cedo no orchestrator** (espelhar o guard de 14 dígitos da
+   RODONAVES; mensagem clara via `_resultado_documento_pagador_ausente`, stage `validacao`),
+   antes de abrir o browser.
+3. **Quantos providers têm `cotar(QuoteRequest)`?** Auditado: **7 de 8** passam pelo seletor
+   `_provider_supports_quote_request_cotar` (só **translovato** continua no `coteir`). MAS os 7
+   só fazem `return await super().cotar(request)`, que cai de volta no `coteir` via `ProviderBase`.
+   Aposentar o legado (Fase 7) exige (a) dar um `cotar` próprio à translovato e (b) reescrever a
+   lógica real de cada provider p/ consumir `QuoteRequest` direto. **Grande — não é quick win.**
+4. **`coteir` é typo ou legado deliberado?** Começou como typo, hoje é **legado load-bearing**
+   (abstrato em `base.py`, sobrescrito nos 8, despachado por nome via `inspect.signature`, +
+   `--deselect` no CI). **NÃO renomear** (DO NOT TOUCH); só em PR atômico dedicado.
 5. `resultado_cotacao_to_quote_response` pode sair junto com o legado na Fase 7.
 
 ## Regras do projeto (de AGENTS.md / CLAUDE.md)
