@@ -6,13 +6,12 @@ from pathlib import Path
 from typing import Any, Callable
 import asyncio
 import os
-import subprocess
 import sys
 import time
 
+from . import deps
 from .common import (
     MODO_FOCO_TRANSPORTADORA,
-    ProviderFactory,
     _log_diag,
     _logger,
     _remote_disabled_results_for_config,
@@ -250,7 +249,7 @@ class TransportadoraSession:
 
     def __init__(self, config_path: Path | None = None):
         self.config = _carregar_config(config_path=config_path)
-        self.provider_factory = ProviderFactory(config=self.config)
+        self.provider_factory = deps.ProviderFactory(config=self.config)
         self._provider_sessions = _ProviderSessionRegistry()
         self._circuit_breaker = ProviderCircuitBreaker()
         self._inicializado = False
@@ -469,7 +468,7 @@ class TransportadoraSession:
                 effective_config,
                 contexto="pre-login",
             )
-            provider_factory = ProviderFactory(config=effective_config)
+            provider_factory = deps.ProviderFactory(config=effective_config)
 
             bcfg = provider_factory.get_provider_config("braspress")
             if bcfg.get("habilitado", True):

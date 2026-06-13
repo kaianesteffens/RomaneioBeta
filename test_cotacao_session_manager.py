@@ -83,7 +83,7 @@ def test_transportadora_session_chrome_missing_cancels_prelogin_once(monkeypatch
         raise FileNotFoundError("Google Chrome nao encontrado. Instale o Chrome para usar o Fretio.")
 
     monkeypatch.setattr("cotacao.session_manager._carregar_config", lambda config_path=None: {})
-    monkeypatch.setattr("cotacao.session_manager.ProviderFactory", FakeFactory)
+    monkeypatch.setattr("cotacao.deps.ProviderFactory", FakeFactory)
     monkeypatch.setattr("cotacao.session_manager._kill_orphan_Fretio_chromes", lambda: None)
     monkeypatch.setattr("fretio.providers.base.find_chrome", missing_chrome)
     monkeypatch.setattr(

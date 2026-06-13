@@ -6,16 +6,14 @@ from typing import Any
 import re
 import threading
 
+from . import deps
 from .common import (
     KNOWN_CARRIERS,
     MODO_FOCO_TRANSPORTADORA,
     ResultadoCotacao,
     _log_diag,
-    carrier_enabled_or_message,
-    create_quotation_job,
     normalize_carrier_name,
     provider_progress_from_resultado,
-    update_quotation_job_result,
 )
 from .error_context import sanitize_context
 from .romaneio_parser import _normalizar_romaneio_colado
@@ -62,7 +60,7 @@ def _quotation_job_carrier_lists(config: dict[str, Any]) -> tuple[list[str], lis
         if foco:
             configured = canonical == foco
         try:
-            remote_allowed, _message = carrier_enabled_or_message(canonical)
+            remote_allowed, _message = deps.carrier_enabled_or_message(canonical)
         except Exception:
             remote_allowed = True
         if configured and remote_allowed:
@@ -113,7 +111,7 @@ def _create_quotation_job_best_effort(source_type: str, payload: dict[str, Any])
 
     def _criar() -> None:
         try:
-            holder["result"] = create_quotation_job(source_type, payload=payload, wait=True)
+            holder["result"] = deps.create_quotation_job(source_type, payload=payload, wait=True)
         except Exception as exc:  # noqa: BLE001 - best-effort, nunca propaga
             holder["error"] = exc
 
@@ -295,7 +293,7 @@ def _finish_quotation_job_best_effort(
     if not job_id:
         return
     try:
-        update_result = update_quotation_job_result(
+        update_result = deps.update_quotation_job_result(
             job_id,
             status,
             result=result,

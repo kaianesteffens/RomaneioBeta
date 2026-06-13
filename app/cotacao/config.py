@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 import os
 import re
-import sys
 
 from .common import (
     CEP_ORIGEM_PADRAO,

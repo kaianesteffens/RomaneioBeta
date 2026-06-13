@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 import asyncio
 import re
 import time
 import traceback
 
+from . import deps
 from .common import (
     ResultadoCotacao,
     ProviderCotacaoStatus,
@@ -20,7 +21,6 @@ from .common import (
     provider_progress_from_resultado,
     normalize_provider_progress_status,
     normalize_provider_progress_message,
-    ProviderFactory,
     QuoteResponse,
     quote_request_from_legacy_kwargs,
     quote_response_to_resultado_cotacao,
@@ -517,7 +517,7 @@ async def _executar_cotacoes_com_dados(
         effective_config,
         contexto="cotacao",
     )
-    provider_factory = ProviderFactory(config=effective_config)
+    provider_factory = deps.ProviderFactory(config=effective_config)
     transportadoras_cfg = effective_config.get("transportadoras", {}) if isinstance(effective_config, dict) else {}
     if not isinstance(transportadoras_cfg, dict):
         transportadoras_cfg = {}

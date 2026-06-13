@@ -3,18 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable
-import asyncio
+from typing import Any
 from datetime import datetime
-import inspect
 import logging
 import os
-import time
-import re
 import sys
-import threading
 
 # Adiciona a pasta 'src' ao sys.path para encontrar os módulos do Fretio
 def _add_fretio_src_to_path() -> None:
@@ -104,6 +98,8 @@ from fretio.quotation_contract import (
     quote_request_from_legacy_kwargs,
     quote_response_to_resultado_cotacao,
 )
+
+from . import deps
 
 
 CEP_ORIGEM_PADRAO = "99740000"
@@ -421,7 +417,7 @@ def _remote_disabled_results_for_config(config: dict[str, Any], *, contexto: str
     skipped: list[ResultadoCotacao] = []
     for carrier in KNOWN_CARRIERS:
         canonical = normalize_carrier_name(carrier)
-        allowed, message = carrier_enabled_or_message(canonical)
+        allowed, message = deps.carrier_enabled_or_message(canonical)
         if allowed:
             continue
         section = transportadoras_cfg.get(canonical)
