@@ -263,6 +263,25 @@ class Api:
 
     def attach_window(self, window: Any) -> None:
         self._window = window
+        # Fechar a janela (X ou sair()) encerra worker + sessão Playwright.
+        try:
+            window.events.closed += self._teardown
+        except Exception:
+            pass
+
+    def _teardown(self) -> None:
+        # Encerra o worker assíncrono e a sessão Playwright (fecha o Chrome do
+        # Rodonaves e libera o user-data-dir). Sem isso o processo do Chrome vaza
+        # ao fechar a janela e o lock do perfil pode corromper a próxima abertura.
+        # Idempotente: zera _loop/_sessao antes, então chamadas repetidas são no-op.
+        loop, sessao = self._loop, self._sessao
+        self._loop = None
+        self._sessao = None
+        if loop is not None:
+            try:
+                loop.shutdown(cleanup_coro_factory=(sessao.cleanup if sessao is not None else None))
+            except Exception:
+                pass
 
     def _emit(self, evento: str, payload: dict | None = None) -> None:
         emit(self._window, evento, payload)
@@ -1052,6 +1071,10 @@ class Api:
         return {"ok": True}
 
     def sair(self) -> dict:
+        try:
+            self._teardown()
+        except Exception:
+            pass
         try:
             if self._window is not None:
                 self._window.destroy()
