@@ -525,7 +525,93 @@ class StartupMixin:
         return {"ok": True}
 
 
-class Api(ConfigMixin, StartupMixin):
+class RastreioMixin:
+    """Rastreio de NF-e carregadas. Delegate de domínio do Api (opera sobre self;
+    superfície pública pywebview inalterada)."""
+
+    def rastreio_limpar(self) -> dict:
+        self._notas = []
+        return {"ok": True}
+
+    def _ser_rastreio(self, r: Any) -> dict | None:
+        if r is None:
+            return None
+        return {
+            "numero_nfe": getattr(r, "numero_nfe", ""),
+            "transportadora": getattr(r, "transportadora", ""),
+            "entregue": bool(getattr(r, "entregue", False)),
+            "previsao_entrega": getattr(r, "previsao_entrega", ""),
+            "link_rastreio": getattr(r, "link_rastreio", ""),
+            "screenshot_path": getattr(r, "screenshot_path", ""),
+            "status_texto": getattr(r, "status_texto", ""),
+            "erro": getattr(r, "erro", ""),
+        }
+
+    def rastreio_iniciar(self, chaves: list | None = None) -> dict:
+        if not self._notas:
+            return {"erro": "Nenhuma NF-e carregada para rastrear"}
+        bloqueio = self._gate("rastreio")
+        if bloqueio:
+            return bloqueio
+        try:
+            self._ensure_backend()
+        except Exception as exc:
+            return {"erro": f"Falha ao preparar o rastreamento: {exc}"}
+        try:
+            from fretio.providers.base import find_chrome
+            find_chrome()
+        except FileNotFoundError:
+            from cotacao_transportadoras import CHROME_MISSING_USER_MESSAGE
+            self._emit("chrome_missing", {"texto": CHROME_MISSING_USER_MESSAGE})
+            return {"erro": CHROME_MISSING_USER_MESSAGE}
+
+        alvo = self._notas
+        if chaves:
+            cset = set(chaves)
+            sub = [n for n in self._notas if (getattr(n, "chave_acesso", "") in cset)]
+            if sub:
+                alvo = sub
+        fut = self._loop.submit(lambda: self._coro_rastreio(list(alvo)))
+        if fut is None:
+            return {"erro": "Não foi possível iniciar o rastreamento"}
+        return {"ok": True, "total": len(alvo)}
+
+    async def _coro_rastreio(self, alvo: list) -> None:
+        from rastreamento import rastrear_multiplas
+        from extrator_nfe import identificar_transportadora
+
+        notas_track: list[dict] = []
+        chaves: list[str] = []
+        for nf in alvo:
+            notas_track.append({
+                "transportadora": identificar_transportadora(nf),
+                "numero_nfe": nf.numero,
+                "cnpj_emitente": nf.emitente_cnpj,
+                "chave_acesso": nf.chave_acesso,
+            })
+            chaves.append(getattr(nf, "chave_acesso", "") or f"nf-{nf.numero}")
+
+        def _cb(indice: int, total: int, resultado: Any) -> None:
+            chave = chaves[indice - 1] if 0 <= indice - 1 < len(chaves) else ""
+            self._emit("rastreio_progress", {
+                "chave": chave, "indice": indice, "total": total,
+                "resultado": self._ser_rastreio(resultado),
+            })
+
+        try:
+            resultados = await rastrear_multiplas(notas_track, callback=_cb)
+            entregues = sum(1 for r in resultados if getattr(r, "entregue", False))
+            com_ss = sum(1 for r in resultados if getattr(r, "screenshot_path", ""))
+            self._emit("rastreio_finished", {
+                "total": len(resultados), "entregues": entregues, "screenshots": com_ss,
+            })
+        except Exception as exc:
+            self._emit("rastreio_finished", {
+                "total": 0, "entregues": 0, "screenshots": 0, "erro": str(exc),
+            })
+
+
+class Api(ConfigMixin, StartupMixin, RastreioMixin):
     def __init__(self, empresa: str | None = None, config_path: Path | None = None) -> None:
         self._empresa = empresa or ""
         self._config_path = config_path
@@ -766,87 +852,6 @@ class Api(ConfigMixin, StartupMixin):
         self._notas.extend(novas)
         cards = [_nota_card(base + i + 1, nf) for i, nf in enumerate(novas)]
         return {"cards": cards, "erros": erros, "total_notas": len(self._notas)}
-
-    def rastreio_limpar(self) -> dict:
-        self._notas = []
-        return {"ok": True}
-
-    def _ser_rastreio(self, r: Any) -> dict | None:
-        if r is None:
-            return None
-        return {
-            "numero_nfe": getattr(r, "numero_nfe", ""),
-            "transportadora": getattr(r, "transportadora", ""),
-            "entregue": bool(getattr(r, "entregue", False)),
-            "previsao_entrega": getattr(r, "previsao_entrega", ""),
-            "link_rastreio": getattr(r, "link_rastreio", ""),
-            "screenshot_path": getattr(r, "screenshot_path", ""),
-            "status_texto": getattr(r, "status_texto", ""),
-            "erro": getattr(r, "erro", ""),
-        }
-
-    def rastreio_iniciar(self, chaves: list | None = None) -> dict:
-        if not self._notas:
-            return {"erro": "Nenhuma NF-e carregada para rastrear"}
-        bloqueio = self._gate("rastreio")
-        if bloqueio:
-            return bloqueio
-        try:
-            self._ensure_backend()
-        except Exception as exc:
-            return {"erro": f"Falha ao preparar o rastreamento: {exc}"}
-        try:
-            from fretio.providers.base import find_chrome
-            find_chrome()
-        except FileNotFoundError:
-            from cotacao_transportadoras import CHROME_MISSING_USER_MESSAGE
-            self._emit("chrome_missing", {"texto": CHROME_MISSING_USER_MESSAGE})
-            return {"erro": CHROME_MISSING_USER_MESSAGE}
-
-        alvo = self._notas
-        if chaves:
-            cset = set(chaves)
-            sub = [n for n in self._notas if (getattr(n, "chave_acesso", "") in cset)]
-            if sub:
-                alvo = sub
-        fut = self._loop.submit(lambda: self._coro_rastreio(list(alvo)))
-        if fut is None:
-            return {"erro": "Não foi possível iniciar o rastreamento"}
-        return {"ok": True, "total": len(alvo)}
-
-    async def _coro_rastreio(self, alvo: list) -> None:
-        from rastreamento import rastrear_multiplas
-        from extrator_nfe import identificar_transportadora
-
-        notas_track: list[dict] = []
-        chaves: list[str] = []
-        for nf in alvo:
-            notas_track.append({
-                "transportadora": identificar_transportadora(nf),
-                "numero_nfe": nf.numero,
-                "cnpj_emitente": nf.emitente_cnpj,
-                "chave_acesso": nf.chave_acesso,
-            })
-            chaves.append(getattr(nf, "chave_acesso", "") or f"nf-{nf.numero}")
-
-        def _cb(indice: int, total: int, resultado: Any) -> None:
-            chave = chaves[indice - 1] if 0 <= indice - 1 < len(chaves) else ""
-            self._emit("rastreio_progress", {
-                "chave": chave, "indice": indice, "total": total,
-                "resultado": self._ser_rastreio(resultado),
-            })
-
-        try:
-            resultados = await rastrear_multiplas(notas_track, callback=_cb)
-            entregues = sum(1 for r in resultados if getattr(r, "entregue", False))
-            com_ss = sum(1 for r in resultados if getattr(r, "screenshot_path", ""))
-            self._emit("rastreio_finished", {
-                "total": len(resultados), "entregues": entregues, "screenshots": com_ss,
-            })
-        except Exception as exc:
-            self._emit("rastreio_finished", {
-                "total": 0, "entregues": 0, "screenshots": 0, "erro": str(exc),
-            })
 
     def abrir_externo(self, alvo: str) -> dict:
         """Abre arquivo (screenshot) ou URL (rastreio) no app padrão do sistema."""
