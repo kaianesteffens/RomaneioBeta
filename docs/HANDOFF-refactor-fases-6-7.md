@@ -8,7 +8,7 @@
 
 - Branch de trabalho: **`refactor/codebase-cleanup`** (criada a partir de `master`).
   `master` está **intacto** e **nada foi pushed**. Trabalhe nesta branch.
-- Estado: **16 commits**, **758 testes verdes**, pacote `app/cotacao/` **pyflakes-limpo**.
+- Estado: **18 commits**, **765 testes verdes**, pacote `app/cotacao/` **pyflakes-limpo**.
 - O app foi migrado de PySide6 para **UI web** (pywebview/WebView2): shell em
   `app/web_app.py` + `app/web/*` (HTML/CSS/JS). Backend Python intacto.
 - Memória do projeto: `refactor-codebase-cleanup` (resumo) e `ui-web-migration`.
@@ -33,9 +33,12 @@
 | `6b326c5` | 6 passo 2 | Registry único em `ProviderSpec` (required/credential/slowness) |
 | `a12de27` | 6 passo 2 | `web_app._CARRIER_FIELDS` deriva do registry |
 | `22d4a1b` | 6 passo 2 | `session_manager._PRIORIDADE_LENTIDAO` deriva do registry |
+| `ad8d7a2` | 6 passo 3 | Teste por-padrão dos classificadores de erro (test-first) |
+| `e69cd64` | 6 passo 3 | `cotacao/error_classifiers.py` unifica os 3 classificadores |
 
-**Fase 6 passo 1 = CONCLUÍDO.** Passo 2 = núcleo seguro feito (registry +
-3 consumidores deduplicados + parity test). Falta o que está marcado abaixo.
+**Fase 6 passos 1 e 3 = CONCLUÍDOS.** Passo 2 = núcleo seguro feito (registry +
+3 consumidores deduplicados + parity test). Falta o que está marcado abaixo
+(passos 4 e 5 — providers, ALTO RISCO — e o resto do passo 2).
 
 ## Como verificar (rode SEMPRE a cada passo)
 
@@ -97,9 +100,12 @@ Já feito: `_finalizar` no `_processar_resultado` (`ecd7d6d`). Falta:
      o parity test já impede drift). **PRESERVE**: Rodonaves `headless=False` pinado, exclusões
      AGEX (RS/SC), ALFA PICOLO. Protegido pelos 34 char tests dos `_build_*_kwargs` + o golden dispatch.
 
-3. **Unificar os 3 classificadores de erro** num módulo só: `_is_business_error`,
-   `_TRANSIENT_PATTERNS` (`orchestrator.py`) e `_PRELOGIN_CONTROLLED_PATTERNS`
-   (`error_context.py`). Adicionar teste por-padrão. Cuidado: cross-module.
+3. **[CONCLUÍDO — `ad8d7a2`/`e69cd64`] Unificar os 3 classificadores de erro**: novo
+   módulo `app/cotacao/error_classifiers.py` é a fonte única de `_is_business_error`
+   (+`_BUSINESS_PATTERNS`), `_is_expected_transient_failure(_str)`/`_TRANSIENT_PATTERNS` e
+   `is_expected_prelogin_failure`/`_PRELOGIN_CONTROLLED_PATTERNS`. `orchestrator` e
+   `error_context` reexportam as funções (compat). Teste por-padrão:
+   `test_error_classifiers.py` (+ identidade de fonte única).
 
 4. **Deduplicação de providers** (protegido por `test_provider_regressions.py` — mas
    verifique **cópia por cópia** que são byte-idênticas antes de unificar; muitas têm
