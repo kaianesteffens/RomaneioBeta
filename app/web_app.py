@@ -92,6 +92,17 @@ def emit(window: Any, evento: str, payload: dict | None = None) -> None:
     if window is None:
         return
     msg = json.dumps({"event": evento, "payload": payload or {}}, ensure_ascii=False)
+    # Strings vêm de portais de transportadora; escapar os caracteres que podem
+    # encerrar o literal JS (U+2028/U+2029) ou um <script> embutido antes de
+    # injetar em evaluate_js. Equivalentes dentro de string JSON, então o
+    # contrato {event,payload} permanece idêntico.
+    msg = (
+        msg.replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
     try:
         window.evaluate_js(f"window.onBackendEvent({msg})")
     except Exception:
@@ -781,7 +792,11 @@ class Api:
                 "habilitado": bool(sec.get("habilitado", False)),
                 "ufs_atendidas": [str(x).upper() for x in (sec.get("ufs_atendidas", []) or [])],
                 "campos": [
-                    {"key": k, "label": lbl, "tipo": tp, "valor": str(sec.get(k, "") or "")}
+                    {
+                        "key": k, "label": lbl, "tipo": tp,
+                        "valor": "" if tp == "password" else str(sec.get(k, "") or ""),
+                        "tem_valor": bool(str(sec.get(k, "") or "")),
+                    }
                     for k, lbl, tp in fields
                 ],
             })
@@ -872,12 +887,18 @@ class Api:
     def config_salvar_credenciais(self, nome: str, campos: dict) -> dict:
         nome = str(nome)
         allowed = {k for k, _, _ in _CARRIER_FIELDS.get(nome, [])}
+        senha_keys = {k for k, _, tp in _CARRIER_FIELDS.get(nome, []) if tp == "password"}
 
         def mut(cfg):
             t = cfg.setdefault("transportadoras", {}).setdefault(nome, {})
             for k, v in (campos or {}).items():
-                if k in allowed:
-                    t[k] = str(v)
+                if k not in allowed:
+                    continue
+                v = str(v)
+                # Senha em branco = manter a já salva (a UI nunca recebe a senha).
+                if k in senha_keys and v == "":
+                    continue
+                t[k] = v
 
         return {"ok": self._write_config(mut)}
 

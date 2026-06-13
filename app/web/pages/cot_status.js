@@ -31,7 +31,7 @@
     if (rs.includes("configura") || ml.includes("configura")) return "configuracao";
     if (["login", "cotando", "aguardando"].includes(raw)) return raw;
     if (raw === "finalizada") return "finalizada";
-    return raw === "erro" || rs ? "erro" : (raw || "aguardando");
+    return (raw === "erro" || rs === "erro") ? "erro" : (raw || "aguardando");
   }
 
   function limparMensagem(key, mensagem, statusLabel) {

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import ssl
 import subprocess
@@ -31,6 +32,14 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from update_security import verify_update_signature
+
+
+def _safe_bat_version(version: Any) -> str:
+    # A versão vem da tag do GitHub (metadado NÃO assinado) e é interpolada no
+    # _apply_update.bat; restringe a caracteres seguros para barrar metacaracteres
+    # de batch (&, >, |, %). A assinatura Ed25519 valida só o conteúdo do ZIP.
+    return re.sub(r"[^0-9A-Za-z._-]", "", str(version or "")) or "desconhecida"
+
 
 # Timeout para requisições HTTP (segundos)
 _HTTP_TIMEOUT = 30
@@ -642,6 +651,8 @@ def apply_update(
         app_exe = Path(sys.executable) if getattr(sys, "frozen", False) else None
         pid = os.getpid()
 
+        safe_version = _safe_bat_version(getattr(info, "version", ""))
+
         # Arquivos/pastas protegidos (não sobrescrever)
         bat_content = f'''@echo off
 chcp 65001 >nul 2>&1
@@ -655,7 +666,7 @@ if %ERRORLEVEL% == 0 (
     goto wait_loop
 )
 
-echo Fretio fechou. Aplicando atualizacao v{info.version}...
+echo Fretio fechou. Aplicando atualizacao v{safe_version}...
 timeout /t 2 /nobreak >nul
 
 xcopy /E /Y /I /Q "{source_dir}" "{app_dir}" >nul 2>&1
@@ -665,8 +676,8 @@ REM O CONFIG.toml do usuario fica em %APPDATA%, entao nao e afetado
 
 REM Atualizar version.txt
 if not exist "{app_dir}\\_internal" mkdir "{app_dir}\\_internal"
-echo {info.version}> "{app_dir}\\version.txt"
-echo {info.version}> "{app_dir}\\_internal\\version.txt"
+echo {safe_version}> "{app_dir}\\version.txt"
+echo {safe_version}> "{app_dir}\\_internal\\version.txt"
 
 echo Atualizacao concluida! Reiniciando...
 timeout /t 1 /nobreak >nul

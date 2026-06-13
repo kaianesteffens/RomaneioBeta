@@ -487,8 +487,8 @@ class EucaturProvider(ProviderBase):
                 restricao_risco = erro_msg
                 logger.info(f"[{self.nome}] Aviso de risco (nao fatal): {erro_msg}")
             else:
-                self.last_error = f"Rota não atendida pelo SSW: {erro_msg}"
-                logger.info(f"[{self.nome}] {self.last_error}")
+                self.last_error = "Rota não atendida pela transportadora"
+                logger.info(f"[{self.nome}] {self.last_error} (SSW: {erro_msg})")
                 return None
 
         vlr_frete_str = (results.get('vlr_frete', '') or results.get('vlr_total', '') or
@@ -606,8 +606,8 @@ class EucaturProvider(ProviderBase):
             if xml_responses:
                 for idx, xml in enumerate(xml_responses):
                     logger.warning(f"[{self.nome}] XML #{idx+1} capturado ({len(xml)} chars): {xml[:500]}")
-            self.last_error = f"Sem valor de frete retornado (campos DOM: vlr_frete={vlr_frete_str!r}, nro_cotacao={nro_cotacao!r}, prazo={prazo_str!r})"
-            logger.warning(f"[{self.nome}] {self.last_error}")
+            self.last_error = "Sem valor de frete retornado"
+            logger.warning(f"[{self.nome}] {self.last_error} (campos DOM: vlr_frete={vlr_frete_str!r}, nro_cotacao={nro_cotacao!r}, prazo={prazo_str!r})")
             return None
 
         # Parse valor do frete

@@ -1314,6 +1314,9 @@ class RodonavesProvider(ProviderBase):
         suffix = ""
         if isinstance(snapshot, dict):
             flags = []
+            # body_excerpt/alert_excerpt podem conter nome/endereço do destinatário
+            # (texto cru do portal) e last_error vai para o servidor; ficam só no
+            # snapshot local. Aqui só metadados estruturais seguros.
             for key in (
                 "url",
                 "title",
@@ -1321,8 +1324,6 @@ class RodonavesProvider(ProviderBase):
                 "captcha_token_len",
                 "form_present",
                 "result_present",
-                "alert_excerpt",
-                "body_excerpt",
             ):
                 value = snapshot.get(key)
                 if value not in (None, "", []):

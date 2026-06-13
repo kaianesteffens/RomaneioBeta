@@ -122,6 +122,11 @@ def sanitize_error_payload(text: str) -> str:
         sanitized,
     )
     sanitized = re.sub(
+        r"(?<!\d)\d{44}(?!\d)",
+        "[NFE_KEY_REDACTED]",
+        sanitized,
+    )
+    sanitized = re.sub(
         r"\b\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}\b",
         "[CNPJ_REDACTED]",
         sanitized,
