@@ -24,7 +24,12 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "app"))
 sys.path.insert(0, str(ROOT / "app" / "fretio" / "src"))
 
-from fretio.providers.factory import _PROVIDER_SPECS, _REQUIRED_FIELDS
+from fretio.providers.factory import (
+    _PROVIDER_SPECS,
+    _REQUIRED_FIELDS,
+    credential_fields_for_provider,
+    slowness_priority_for_provider,
+)
 from remote_permissions import KNOWN_CARRIERS
 from cotacao.common import KNOWN_CARRIERS as COMMON_KNOWN_CARRIERS
 from cotacao.session_manager import _PRIORIDADE_LENTIDAO
@@ -78,3 +83,15 @@ def test_every_required_field_is_surfaced_in_the_credential_ui():
         ui_keys = {key for key, _label, _type in _CARRIER_FIELDS[carrier]}
         missing = required - ui_keys
         assert not missing, f"{carrier}: required fields {missing} missing from credential UI"
+
+
+def test_registry_credential_fields_faithfully_match_web_app():
+    # The single registry must hold exactly the values web_app surfaces today,
+    # so wiring web_app to read the registry is a pure no-op.
+    for carrier in CANONICAL:
+        assert tuple(_CARRIER_FIELDS[carrier]) == credential_fields_for_provider(carrier)
+
+
+def test_registry_slowness_priority_faithfully_matches_session_manager():
+    for carrier in CANONICAL:
+        assert slowness_priority_for_provider(carrier) == _PRIORIDADE_LENTIDAO[carrier.upper()]
