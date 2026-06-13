@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Callable
+from dataclasses import dataclass
 import asyncio
 import re
 import time
@@ -43,6 +44,24 @@ from .session_manager import (
     _is_chrome_missing_error,
 )
 from .error_context import build_quotation_error_diagnostic, report_provider_error
+
+
+@dataclass(frozen=True)
+class CotacaoOutcome:
+    """Resultado bruto de uma execução de provider em ``_run_cotacao``.
+
+    Substitui a 7-tupla posicional que era desempacotada em
+    ``_processar_resultado``. ``cotacao`` é o retorno do provider
+    (``QuoteResponse``, objeto legado ou ``None``); ``erro`` é a exceção
+    capturada (ou ``None`` em sucesso)."""
+
+    i: int
+    nome: str
+    provider: Any
+    kwargs: dict[str, Any]
+    cotacao: Any = None
+    erro: BaseException | None = None
+    duration_ms: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -1348,19 +1367,31 @@ async def _executar_cotacoes_com_dados(
                     provider.coteir(**kwargs),
                     timeout=effective_timeout,
                 )
-            return i, nome, provider, kwargs, retorno_provider, None, _duration_ms()
+            return CotacaoOutcome(
+                i=i, nome=nome, provider=provider, kwargs=kwargs,
+                cotacao=retorno_provider, duration_ms=_duration_ms(),
+            )
         except asyncio.TimeoutError:
             last_step = getattr(provider, '_passo_atual', 'desconhecido')
-            return i, nome, provider, kwargs, None, TimeoutError(
-                f"Timeout de {effective_timeout}s na cotação {nome} (passo: {last_step})"
-            ), _duration_ms()
+            return CotacaoOutcome(
+                i=i, nome=nome, provider=provider, kwargs=kwargs,
+                erro=TimeoutError(
+                    f"Timeout de {effective_timeout}s na cotação {nome} (passo: {last_step})"
+                ),
+                duration_ms=_duration_ms(),
+            )
         except asyncio.CancelledError as exc:
             detalhe = str(exc).strip() or "sem detalhe"
-            return i, nome, provider, kwargs, None, RuntimeError(
-                f"Cotação {nome} cancelada: {detalhe}"
-            ), _duration_ms()
+            return CotacaoOutcome(
+                i=i, nome=nome, provider=provider, kwargs=kwargs,
+                erro=RuntimeError(f"Cotação {nome} cancelada: {detalhe}"),
+                duration_ms=_duration_ms(),
+            )
         except Exception as exc:
-            return i, nome, provider, kwargs, None, exc, _duration_ms()
+            return CotacaoOutcome(
+                i=i, nome=nome, provider=provider, kwargs=kwargs,
+                erro=exc, duration_ms=_duration_ms(),
+            )
 
     async def _exec(i: int, nome: str, provider: Any, kwargs: dict[str, Any]):
         is_alfa = nome.upper() == "ALFA"
@@ -1389,14 +1420,19 @@ async def _executar_cotacoes_com_dados(
                 provider_status=provider_progress_from_resultado(r, stage="resultado"),
             )
 
-        if not isinstance(res, tuple) or len(res) != 7:
+        if not isinstance(res, CotacaoOutcome):
             msg = f"Executor retornou formato inesperado de resultado: {type(res).__name__}"
             _log_diag(msg)
             r = ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=msg)
             _finalizar(r)
             return
 
-        _i, nome_task, provider_task, kwargs_task, cotacao, erro, duration_ms = res
+        nome_task = res.nome
+        provider_task = res.provider
+        kwargs_task = res.kwargs
+        cotacao = res.cotacao
+        erro = res.erro
+        duration_ms = res.duration_ms
 
         if isinstance(erro, BaseException):
             erro_str = str(erro)
