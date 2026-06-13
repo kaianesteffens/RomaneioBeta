@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 from typing import Any
+import inspect
 
-from .common import *
+from .common import (
+    KNOWN_CARRIERS,
+    ResultadoCotacao,
+    normalize_carrier_name,
+    report_carrier_quotation_result,
+    report_quotation_finished,
+)
 from .validation import _normalizar_ufs_atendidas_cached
 
 def _quotation_usage_metadata(

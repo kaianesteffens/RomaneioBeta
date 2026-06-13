@@ -5,9 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import os
+import re
 import sys
 
-from .common import *
+from .common import (
+    CEP_ORIGEM_PADRAO,
+    ConfigManager,
+    _CONFIG_FALLBACK,
+    _base_dir,
+    _log_diag,
+    apply_safe_runtime_overrides,
+    tomllib,
+)
 from .validation import _cep, _digits, _resolver_cep_origem_cached
 
 def _config_template_path() -> Path | None:

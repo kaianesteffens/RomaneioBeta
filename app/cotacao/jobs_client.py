@@ -6,7 +6,17 @@ from typing import Any
 import re
 import threading
 
-from .common import *
+from .common import (
+    KNOWN_CARRIERS,
+    MODO_FOCO_TRANSPORTADORA,
+    ResultadoCotacao,
+    _log_diag,
+    carrier_enabled_or_message,
+    create_quotation_job,
+    normalize_carrier_name,
+    provider_progress_from_resultado,
+    update_quotation_job_result,
+)
 from .error_context import sanitize_context
 from .romaneio_parser import _normalizar_romaneio_colado
 from .telemetry import _usage_status_from_result, _value_cents_from_frete, _carrier_usage_defaults

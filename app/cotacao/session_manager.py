@@ -7,12 +7,19 @@ from typing import Any, Callable
 import asyncio
 import os
 import subprocess
+import sys
 import time
 
-from .common import *
+from .common import (
+    MODO_FOCO_TRANSPORTADORA,
+    ProviderFactory,
+    _log_diag,
+    _logger,
+    _remote_disabled_results_for_config,
+    _trd_headless_config_value,
+)
 from .config import _carregar_config
 from .validation import _uf_atendida
-from .telemetry import _remote_disabled_results_for_config
 from .error_context import is_expected_prelogin_failure, report_provider_error
 from .circuit_breaker import ProviderCircuitBreaker
 
