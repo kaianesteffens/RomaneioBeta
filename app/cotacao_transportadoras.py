@@ -20,18 +20,9 @@ from cotacao.config import *
 from cotacao.romaneio_parser import *
 from cotacao.session_manager import *
 from cotacao.error_context import *
-from cotacao import common as _common_mod
-from cotacao import config as _config_mod
-from cotacao import jobs_client as _jobs_mod
+from cotacao import deps
 from cotacao import session_manager as _session_mod
-from cotacao import telemetry as _telemetry_mod
 from cotacao import orchestrator as _orchestrator_mod
-
-try:
-    from quotation_normalization_client import normalize_quotation_remote_shadow
-except Exception:
-    def normalize_quotation_remote_shadow(*a, **kw):
-        return {"queued": False}
 
 
 def _run_shadow_normalization_compat(
@@ -55,7 +46,7 @@ def _run_shadow_normalization_compat(
             "cubagem_m3": dados.get("cubagem_m3") if isinstance(dados, dict) else None,
             "cubagens": dados.get("cubagens") if isinstance(dados, dict) else None,
         }
-        normalize_quotation_remote_shadow(source_type, payload=payload, wait=False)
+        deps.normalize_quotation_remote_shadow(source_type, payload=payload, wait=False)
     except Exception as exc:
         try:
             if log_func is not None:
@@ -64,44 +55,10 @@ def _run_shadow_normalization_compat(
             pass
 
 
-def _sync_legacy_overrides() -> None:
-    for mod in (_common_mod, _config_mod, _jobs_mod, _telemetry_mod, _session_mod, _orchestrator_mod):
-        for name in (
-            "ProviderFactory",
-            "apply_safe_runtime_overrides",
-            "report_error",
-            "report_error_message",
-            "report_error_payload",
-            "report_provider_error",
-            "report_quotation_started",
-            "report_quotation_finished",
-            "report_carrier_quotation_result",
-            "create_quotation_job",
-            "update_quotation_job_result",
-            "carrier_enabled_or_message",
-            "normalize_carrier_name",
-            "MODO_FOCO_TRANSPORTADORA",
-        ):
-            if name in globals():
-                setattr(mod, name, globals()[name])
-    for mod in (_jobs_mod, _telemetry_mod, _session_mod, _orchestrator_mod):
-        for name in ("_carregar_config", "_kill_orphan_Fretio_chromes", "_diag_log_enabled", "_log_diag"):
-            if name in globals():
-                setattr(mod, name, globals()[name])
-
-
-class TransportadoraSession(_session_mod.TransportadoraSession):
-    def __init__(self, config_path: Path | None = None):
-        _sync_legacy_overrides()
-        super().__init__(config_path=config_path)
-
-    async def inicializar(self, callback=None, login_status_callback=None):
-        _sync_legacy_overrides()
-        return await super().inicializar(callback=callback, login_status_callback=login_status_callback)
+TransportadoraSession = _session_mod.TransportadoraSession
 
 
 async def _executar_cotacoes_com_dados(*args, **kwargs):
-    _sync_legacy_overrides()
     return await _orchestrator_mod._executar_cotacoes_com_dados(*args, **kwargs)
 
 async def cotar_transportadoras(
@@ -114,7 +71,6 @@ async def cotar_transportadoras(
     progresso_callback: "Callable[[dict[str, Any]], None] | None" = None,
 ) -> list[ResultadoCotacao]:
     """Executa cotação em todas as transportadoras configuradas."""
-    _sync_legacy_overrides()
     config = sessao.config if sessao else _carregar_config(config_path=config_path)
     started_at = time.monotonic()
     dados: dict[str, Any] | None = None
@@ -125,7 +81,7 @@ async def cotar_transportadoras(
         quantidade_pedidos=len(pedidos or []),
     )
     job_id = _create_quotation_job_best_effort("romaneio", job_payload)
-    report_quotation_started(metadata=_quotation_usage_metadata(None, modo="pdf", job_id=job_id))
+    deps.report_quotation_started(metadata=_quotation_usage_metadata(None, modo="pdf", job_id=job_id))
     cancelled = False
     try:
         dados = _dados_envio(extrator=extrator, pedidos=pedidos)
@@ -190,7 +146,6 @@ async def cotar_transportadoras_romaneio_colado(
     cnpj_remetente: str = "",
     tipo_frete: str = "",
 ) -> list[ResultadoCotacao]:
-    _sync_legacy_overrides()
     config = sessao.config if sessao else _carregar_config(config_path=config_path)
     started_at = time.monotonic()
     dados: dict[str, Any] | None = None
@@ -202,7 +157,7 @@ async def cotar_transportadoras_romaneio_colado(
         quantidade_linhas=_count_non_empty_lines(romaneio_colado),
     )
     job_id = _create_quotation_job_best_effort("manual", job_payload)
-    report_quotation_started(metadata=_quotation_usage_metadata(None, modo=modo, job_id=job_id))
+    deps.report_quotation_started(metadata=_quotation_usage_metadata(None, modo=modo, job_id=job_id))
     cancelled = False
     try:
         dados = _dados_envio_romaneio_colado(romaneio_colado)
@@ -286,7 +241,6 @@ async def diagnosticar_transportadoras(
     config_path: Path | None = None,
     progresso_callback: "Callable[[dict[str, Any]], None] | None" = None,
 ) -> list[ResultadoCotacao]:
-    _sync_legacy_overrides()
     config = _carregar_config(config_path=config_path)
     dados = {
         "destino_cep": _cep(destino_cep),

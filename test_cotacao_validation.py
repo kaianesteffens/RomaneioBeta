@@ -1,4 +1,5 @@
 import asyncio
+from cotacao import deps
 import sys
 from pathlib import Path
 
@@ -47,10 +48,10 @@ def _validar_pre_cotacao(monkeypatch, dados):
         def is_available(self, nome):
             return False
 
-    monkeypatch.setattr(cotacao_orchestrator, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
     monkeypatch.setattr(cotacao_orchestrator, "apply_safe_runtime_overrides", lambda config: config)
     monkeypatch.setattr(cotacao_orchestrator, "_log_diag", lambda msg: None)
-    monkeypatch.setattr(cotacao_orchestrator, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
     return asyncio.run(
         cotacao_orchestrator._executar_cotacoes_com_dados(
             config={"romaneio": {"cep_origem": "99740000"}, "fretio": {}, "transportadoras": {}},
@@ -144,9 +145,9 @@ def test_pre_cotacao_blocks_negative_total_value(monkeypatch):
 
 def test_enabled_incomplete_provider_returns_clear_status_without_cotacao(monkeypatch):
     monkeypatch.setattr(cotacao_orchestrator, "apply_safe_runtime_overrides", lambda config: config)
-    monkeypatch.setattr(cotacao_orchestrator, "ProviderFactory", ProviderFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", ProviderFactory)
     monkeypatch.setattr(cotacao_orchestrator, "_log_diag", lambda msg: None)
-    monkeypatch.setattr(cotacao_orchestrator, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
 
     resultados = asyncio.run(
         cotacao_orchestrator._executar_cotacoes_com_dados(
