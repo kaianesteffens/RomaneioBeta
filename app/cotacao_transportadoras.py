@@ -7,9 +7,10 @@ imports antigos usados pelo restante do aplicativo e por integrações externas.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import asyncio
 import sys
+import time
 
 from cotacao.common import *
 from cotacao.validation import *
