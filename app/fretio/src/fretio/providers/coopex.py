@@ -506,8 +506,8 @@ class CoopexProvider(ProviderBase):
                 restricao_risco = erro_msg
                 logger.info(f"[{self.nome}] Aviso de risco (nao fatal): {erro_msg}")
             else:
-                self.last_error = f"Rota não atendida pelo SSW: {erro_msg}"
-                logger.info(f"[{self.nome}] {self.last_error}")
+                self.last_error = "Rota não atendida pela transportadora"
+                logger.info(f"[{self.nome}] {self.last_error} (SSW: {erro_msg})")
                 return None
 
         vlr_frete_str = (results.get('vlr_frete', '') or results.get('vlr_total', '') or

@@ -8,7 +8,7 @@ import os
 import sys
 
 from .common import *
-from .validation import _cep, _resolver_cep_origem_cached
+from .validation import _cep, _digits, _resolver_cep_origem_cached
 
 def _config_template_path() -> Path | None:
     base = _base_dir()

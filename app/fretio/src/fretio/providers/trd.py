@@ -1764,9 +1764,8 @@ class TRDProvider(ProviderBase):
                 self.last_error = (
                     "TRD: após informar CNPJ/CEP, cidade/UF do destino não foi validada; "
                     "destino possivelmente não atendido"
-                    f" [cep={cep_val} cidade={cidade_val}]"
                 )
-                logger.error(f"[{self.nome}] {self.last_error}")
+                logger.error(f"[{self.nome}] {self.last_error} [cep={cep_val} cidade={cidade_val}]")
                 return None
              
             # Continuar
@@ -1796,8 +1795,8 @@ class TRDProvider(ProviderBase):
             if not await self._aguardar_etapa2_pronta(timeout_ms=8000):
                 alerts = await self._coletar_alertas_ui()
                 extra_alert = f" ({'; '.join(alerts)})" if alerts else ""
-                self.last_error = f"TRD: etapa 2 não carregou após clicar em Continuar{extra_alert}"
-                logger.error(f"[{self.nome}] {self.last_error}")
+                self.last_error = "TRD: etapa 2 não carregou após clicar em Continuar"
+                logger.error(f"[{self.nome}] {self.last_error}{extra_alert}")
                 return None
             
             # ETAPA 2: DADOS DA CARGA
@@ -1812,8 +1811,8 @@ class TRDProvider(ProviderBase):
                 if not await self._preencher_valor_mercadoria_etapa2(valor):
                     alerts = await self._coletar_alertas_ui()
                     extra_alert = f" ({'; '.join(alerts)})" if alerts else ""
-                    self.last_error = f"TRD: não foi possível preencher Valor da mercadoria{extra_alert}"
-                    logger.error(f"[{self.nome}] {self.last_error}")
+                    self.last_error = "TRD: não foi possível preencher Valor da mercadoria"
+                    logger.error(f"[{self.nome}] {self.last_error}{extra_alert}")
                     diag = await self._capturar_diagnostico_etapa2("valor_mercadoria_falhou")
                     if diag:
                         logger.info(f"[{self.nome}] Diagnóstico salvo: {diag}")

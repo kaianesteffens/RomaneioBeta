@@ -7,7 +7,19 @@ import re
 import threading
 
 from .common import *
+from .error_context import sanitize_context
+from .romaneio_parser import _normalizar_romaneio_colado
 from .telemetry import _usage_status_from_result, _value_cents_from_frete, _carrier_usage_defaults
+
+def _safe_outbound_message(value: Any) -> str:
+    # Mensagem por transportadora vai para /api/quotations/jobs. Remove tags
+    # inline e passa pelo sanitizador forte para não carregar HTML/DOM cru do
+    # portal, e-mail, CNPJ/CPF ou chave de NF-e (o sanitizador de contexto só
+    # derruba blocos HTML completos, não tags soltas).
+    sem_tags = re.sub(r"(?is)<[^>]+>", " ", str(value or ""))
+    cleaned = sanitize_context(sem_tags)
+    return cleaned if isinstance(cleaned, str) else ""
+
 
 def _coerce_enabled_flag(value: Any, default: bool = True) -> bool:
     if value is None:
@@ -148,7 +160,7 @@ def _quotation_job_result_payload(
             "value_cents": _value_cents_from_frete(getattr(result, "valor_frete", None)),
             "progress_status": progress.status,
             "stage": progress.stage,
-            "message": progress.mensagem,
+            "message": _safe_outbound_message(progress.mensagem),
             "error_code": getattr(result, "error_code", None),
         }
         try:
@@ -259,7 +271,7 @@ def _quotation_job_error_message(resultados: list[ResultadoCotacao] | None) -> s
             continue
         detalhe = str(getattr(result, "detalhes", "") or "").strip()
         if detalhe:
-            return re.sub(r"\s+", " ", detalhe)[:240]
+            return _safe_outbound_message(re.sub(r"\s+", " ", detalhe))[:240]
     return ""
 
 

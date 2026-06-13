@@ -152,7 +152,8 @@
               ${c.campos.map((f) => `<label class="field">
                 <span class="field-label">${F().esc(f.label)}</span>
                 <input class="field-input" data-key="${F().esc(f.key)}" type="${f.tipo === "password" ? "password" : "text"}"
-                       value="${F().esc(f.valor)}" autocomplete="off"/>
+                       value="${F().esc(f.valor)}" autocomplete="off"
+                       placeholder="${f.tipo === "password" && f.tem_valor ? "•••••• salva — deixe em branco para manter" : ""}"/>
               </label>`).join("")}
             </div>
           </div>`).join("")}
