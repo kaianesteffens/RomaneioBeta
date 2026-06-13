@@ -940,7 +940,7 @@ async def _executar_cotacoes_com_dados(
                     cnpj_dest = cnpj_destinatario
                     descricao_mercadoria = str(acfg.get("descricao_mercadoria", "Mercadoria"))
                     tipo_produto = str(acfg.get("tipo_produto", "Artigos Esportivos"))
-                    # Resolve email with legacy fallback (same logic as _build_agex_kwargs)
+                    # E-mail com fallback: instalações antigas guardavam o login (e-mail) no campo cnpj.
                     email_agex = str(acfg.get("email", "")).strip()
                     if not email_agex:
                         legacy_login = str(acfg.get("cnpj", "")).strip()

@@ -52,11 +52,6 @@ except Exception:
     def update_quotation_job_result(*a, **kw): return {"updated": False}
 
 try:
-    from quotation_normalization_shadow import run_shadow_normalization
-except Exception:
-    def run_shadow_normalization(*a, **kw): return None
-
-try:
     from remote_config import apply_safe_runtime_overrides
 except Exception:
     def apply_safe_runtime_overrides(config):

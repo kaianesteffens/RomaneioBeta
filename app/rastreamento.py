@@ -1084,7 +1084,6 @@ async def _rastrear_ssw(
         body_text = await page.inner_text("body")
         body_upper = body_text.upper()
 
-        # Verificar se entregue
         termos_entregue = ["ENTREGUE", "ENTREGA REALIZADA", "ENTREGA EFETUADA"]
         entregue = any(t in body_upper for t in termos_entregue)
 
@@ -1251,18 +1250,6 @@ async def _rastrear_alfa(
             resultado.status_texto = "Rastreamento indisponível no momento"
         else:
             resultado.status_texto = f"Erro ao rastrear: {msg or 'falha desconhecida'}"
-
-
-async def _rastrear_indisponivel(
-    resultado: ResultadoRastreio,
-    numero_nfe: str,
-    cnpj_emitente: str,
-    chave_acesso: str,
-) -> None:
-    """Handler para transportadoras cujo site de rastreamento esta fora do ar."""
-    resultado.status_texto = "Rastreamento não disponível para esta transportadora"
-    resultado.link_rastreio = ""
-    logger.info(f"[RASTREIO-{resultado.transportadora}] NF {numero_nfe}: rastreamento nao disponivel")
 
 
 async def _rastrear_ignorado(
