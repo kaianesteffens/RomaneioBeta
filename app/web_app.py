@@ -109,17 +109,12 @@ def emit(window: Any, evento: str, payload: dict | None = None) -> None:
         pass
 
 
-# Campos de credenciais por transportadora (espelha o schema de CONFIG.example.toml
-# e os campos mínimos de factory._REQUIRED_FIELDS).
+# Campos de credenciais por transportadora — derivados do registro único
+# (ProviderSpec.credential_fields em factory.py), preservando ordem e rótulos.
+from fretio.providers.factory import _PROVIDER_SPECS  # noqa: E402
+
 _CARRIER_FIELDS: dict[str, list[tuple[str, str, str]]] = {
-    "braspress": [("cnpj", "CNPJ", "text"), ("senha", "Senha", "password")],
-    "trd": [("email", "E-mail", "text"), ("senha", "Senha", "password")],
-    "agex": [("email", "E-mail", "text"), ("senha", "Senha", "password"), ("cnpj_remetente", "CNPJ remetente", "text")],
-    "eucatur": [("dominio", "Domínio", "text"), ("usuario", "Usuário", "text"), ("senha", "Senha", "password"), ("cnpj_pagador", "CNPJ pagador", "text")],
-    "rodonaves": [("dominio", "Domínio", "text"), ("usuario", "Usuário", "text"), ("senha", "Senha", "password"), ("cnpj_pagador", "CNPJ pagador", "text")],
-    "alfa": [("login", "Login", "text"), ("senha", "Senha", "password"), ("cnpj_remetente", "CNPJ remetente", "text")],
-    "coopex": [("dominio", "Domínio", "text"), ("usuario", "Usuário", "text"), ("senha", "Senha", "password"), ("cnpj_pagador", "CNPJ pagador", "text")],
-    "translovato": [("cnpj", "CNPJ", "text"), ("usuario", "Usuário", "text"), ("senha", "Senha", "password"), ("cnpj_remetente", "CNPJ remetente", "text")],
+    key: list(spec.credential_fields) for key, spec in _PROVIDER_SPECS.items()
 }
 
 
