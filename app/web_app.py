@@ -611,106 +611,11 @@ class RastreioMixin:
             })
 
 
-class Api(ConfigMixin, StartupMixin, RastreioMixin):
-    def __init__(self, empresa: str | None = None, config_path: Path | None = None) -> None:
-        self._empresa = empresa or ""
-        self._config_path = config_path
-        self._versao = _carregar_versao()
-        self._window: Any = None
-        self._update_info: Any = None
-        # Controlador de backend (lazy — só criado quando cotação/rastreio são usados).
-        self._sessao: Any = None
-        self._loop: Any = None
-        self._cotando = False
-        self._notas: list[Any] = []  # NotaFiscal carregadas (rastreio)
-        self._romaneios: list[dict] = []  # romaneios processados na sessão (dashboard)
-        self._last_cotacao: list[Any] = []  # últimos ResultadoCotacao (dashboard)
-        self._romaneio_texto = ""  # último romaneio calculado (handoff p/ cotação)
-
-    def attach_window(self, window: Any) -> None:
-        self._window = window
-        # Fechar a janela (X ou sair()) encerra worker + sessão Playwright.
-        try:
-            window.events.closed += self._teardown
-        except Exception:
-            pass
-
-    def _teardown(self) -> None:
-        # Encerra o worker assíncrono e a sessão Playwright (fecha o Chrome do
-        # Rodonaves e libera o user-data-dir). Sem isso o processo do Chrome vaza
-        # ao fechar a janela e o lock do perfil pode corromper a próxima abertura.
-        # Idempotente: zera _loop/_sessao antes, então chamadas repetidas são no-op.
-        loop, sessao = self._loop, self._sessao
-        self._loop = None
-        self._sessao = None
-        if loop is not None:
-            try:
-                loop.shutdown(cleanup_coro_factory=(sessao.cleanup if sessao is not None else None))
-            except Exception:
-                pass
-
-    def _emit(self, evento: str, payload: dict | None = None) -> None:
-        emit(self._window, evento, payload)
-
-    def _gate(self, feature: str) -> dict | None:
-        """Gating por licença/config remota (fail-open). Retorna erro se bloqueado."""
-        try:
-            from remote_permissions import feature_allowed_or_default, feature_message
-            if not feature_allowed_or_default(feature):
-                return {"erro": feature_message(feature)}
-        except Exception:
-            pass
-        return None
-
-    # --- leitura ---
-    def get_bootstrap(self) -> dict[str, Any]:
-        cfg = _load_config(self._config_path)
-        fretio = cfg.get("fretio", {}) if isinstance(cfg.get("fretio"), dict) else {}
-        tema = str(fretio.get("ui_tema", "sistema")).lower()
-
-        transportadoras = []
-        tcfg = cfg.get("transportadoras", {})
-        if isinstance(tcfg, dict):
-            for nome, sec in tcfg.items():
-                if isinstance(sec, dict):
-                    transportadoras.append({
-                        "nome": nome,
-                        "habilitado": bool(sec.get("habilitado", False)),
-                        "status": "pending",
-                    })
-
-        # Dashboard é estado de sessão (em memória); no POC inicia vazio,
-        # espelhando exatamente o app atual recém-aberto.
-        dashboard = {
-            "total_romaneios": 0,
-            "total_volumes": 0,
-            "melhor_frete": None,
-            "sucesso_pct": None,
-            "romaneios_recentes": [],
-        }
-        return {
-            "empresa": self._empresa,
-            "versao": self._versao,
-            "tema": tema,
-            "tema_efetivo": _resolver_tema_efetivo(tema),
-            "raio": str(fretio.get("ui_raio", "Suave")),
-            "botao": str(fretio.get("ui_botao", "Solido")),
-            "transportadoras": transportadoras,
-            "dashboard": dashboard,
-        }
-
-    def listar_empresas(self) -> list[str]:
-        return cc._listar_empresas()
-
-    # ── Cotação ────────────────────────────────────────────────────────────
-    def _ensure_backend(self) -> None:
-        if self._sessao is not None:
-            return
-        from cotacao_transportadoras import TransportadoraSession  # import pesado, lazy
-        from async_worker import AsyncWorkerLoop
-
-        self._sessao = TransportadoraSession(config_path=self._config_path)
-        self._loop = AsyncWorkerLoop(name="WebAsyncLoop")
+class CotacaoMixin:
+    """Cotação de frete: serialização de resultado, callbacks de progresso e a
+    coroutine de cotação. Delegate de domínio do Api (opera sobre self; superfície
+    pública pywebview inalterada). _ensure_backend fica no Api (infra compartilhada
+    com o rastreio)."""
 
     @staticmethod
     def _num(v: Any) -> Any:
@@ -813,7 +718,109 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin):
             self._cotando = False
             self._emit("cotacao_finished", {})
 
-    # ── Rastreio / NF-e ─────────────────────────────────────────────────────
+
+class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin):
+    def __init__(self, empresa: str | None = None, config_path: Path | None = None) -> None:
+        self._empresa = empresa or ""
+        self._config_path = config_path
+        self._versao = _carregar_versao()
+        self._window: Any = None
+        self._update_info: Any = None
+        # Controlador de backend (lazy — só criado quando cotação/rastreio são usados).
+        self._sessao: Any = None
+        self._loop: Any = None
+        self._cotando = False
+        self._notas: list[Any] = []  # NotaFiscal carregadas (rastreio)
+        self._romaneios: list[dict] = []  # romaneios processados na sessão (dashboard)
+        self._last_cotacao: list[Any] = []  # últimos ResultadoCotacao (dashboard)
+        self._romaneio_texto = ""  # último romaneio calculado (handoff p/ cotação)
+
+    def attach_window(self, window: Any) -> None:
+        self._window = window
+        # Fechar a janela (X ou sair()) encerra worker + sessão Playwright.
+        try:
+            window.events.closed += self._teardown
+        except Exception:
+            pass
+
+    def _teardown(self) -> None:
+        # Encerra o worker assíncrono e a sessão Playwright (fecha o Chrome do
+        # Rodonaves e libera o user-data-dir). Sem isso o processo do Chrome vaza
+        # ao fechar a janela e o lock do perfil pode corromper a próxima abertura.
+        # Idempotente: zera _loop/_sessao antes, então chamadas repetidas são no-op.
+        loop, sessao = self._loop, self._sessao
+        self._loop = None
+        self._sessao = None
+        if loop is not None:
+            try:
+                loop.shutdown(cleanup_coro_factory=(sessao.cleanup if sessao is not None else None))
+            except Exception:
+                pass
+
+    def _emit(self, evento: str, payload: dict | None = None) -> None:
+        emit(self._window, evento, payload)
+
+    def _gate(self, feature: str) -> dict | None:
+        """Gating por licença/config remota (fail-open). Retorna erro se bloqueado."""
+        try:
+            from remote_permissions import feature_allowed_or_default, feature_message
+            if not feature_allowed_or_default(feature):
+                return {"erro": feature_message(feature)}
+        except Exception:
+            pass
+        return None
+
+    # --- leitura ---
+    def get_bootstrap(self) -> dict[str, Any]:
+        cfg = _load_config(self._config_path)
+        fretio = cfg.get("fretio", {}) if isinstance(cfg.get("fretio"), dict) else {}
+        tema = str(fretio.get("ui_tema", "sistema")).lower()
+
+        transportadoras = []
+        tcfg = cfg.get("transportadoras", {})
+        if isinstance(tcfg, dict):
+            for nome, sec in tcfg.items():
+                if isinstance(sec, dict):
+                    transportadoras.append({
+                        "nome": nome,
+                        "habilitado": bool(sec.get("habilitado", False)),
+                        "status": "pending",
+                    })
+
+        # Dashboard é estado de sessão (em memória); no POC inicia vazio,
+        # espelhando exatamente o app atual recém-aberto.
+        dashboard = {
+            "total_romaneios": 0,
+            "total_volumes": 0,
+            "melhor_frete": None,
+            "sucesso_pct": None,
+            "romaneios_recentes": [],
+        }
+        return {
+            "empresa": self._empresa,
+            "versao": self._versao,
+            "tema": tema,
+            "tema_efetivo": _resolver_tema_efetivo(tema),
+            "raio": str(fretio.get("ui_raio", "Suave")),
+            "botao": str(fretio.get("ui_botao", "Solido")),
+            "transportadoras": transportadoras,
+            "dashboard": dashboard,
+        }
+
+    def listar_empresas(self) -> list[str]:
+        return cc._listar_empresas()
+
+    # ── Cotação ────────────────────────────────────────────────────────────
+    def _ensure_backend(self) -> None:
+        if self._sessao is not None:
+            return
+        from cotacao_transportadoras import TransportadoraSession  # import pesado, lazy
+        from async_worker import AsyncWorkerLoop
+
+        self._sessao = TransportadoraSession(config_path=self._config_path)
+        self._loop = AsyncWorkerLoop(name="WebAsyncLoop")
+
+    # ── NF-e ────────────────────────────────────────────────────────────────
     def nfe_selecionar(self) -> dict:
         if self._window is None:
             return {"erro": "Janela indisponível"}
