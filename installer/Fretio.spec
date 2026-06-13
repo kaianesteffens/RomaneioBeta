@@ -6,9 +6,9 @@ Gera: dist/Fretio/ com Fretio.exe + dependências
 
 from pathlib import Path
 import os
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
 
-project_root = Path(SPECPATH).parent / "app"  # Diretório do app com romaneio_app.py
+project_root = Path(SPECPATH).parent / "app"  # Diretório do app com web_app.py
 
 # ── Hidden imports (módulos que PyInstaller não detecta automaticamente) ───
 hiddenimports = [
@@ -45,8 +45,14 @@ hiddenimports = [
     "playwright",
     "playwright.async_api",
     "playwright.sync_api",
-    "PySide6",
-    "PySide6.QtSvg",
+    # UI web (pywebview + backend .NET WebView2 via pythonnet)
+    "webview",
+    "webview.platforms.edgechromium",
+    "webview.platforms.winforms",
+    "clr",
+    "clr_loader",
+    "bottle",
+    "proxy_tools",
     "PIL",
     "cryptography",
     "cryptography.hazmat.primitives.serialization",
@@ -68,13 +74,24 @@ hiddenimports = [
     "logging_conf",
     "extrator_nfe",
     "rastreamento",
-    "ui_components",
+    "web_app",
+    "app_bootstrap",
+    "startup",
 ]
-hiddenimports += collect_submodules("ui")
+hiddenimports += collect_submodules("webview")
 
 # ── Data files ────────────────────────────────────────────────────────────
 datas = []
 datas += collect_data_files("certifi")
+# pywebview: arquivos de bridge JS + libs nativas do backend WebView2
+datas += collect_data_files("webview")
+
+# UI web (HTML/CSS/JS) — vão para web/ no bundle one-folder
+web_dir = project_root / "web"
+if web_dir.is_dir():
+    for _f in web_dir.rglob("*"):
+        if _f.is_file():
+            datas.append((str(_f), str(_f.parent.relative_to(project_root))))
 
 # CONFIG.example.toml (template para o usuário)
 config_example = project_root / "fretio" / "CONFIG.example.toml"
@@ -120,14 +137,17 @@ if fonts_dir.is_dir():
         if font_file.is_file():
             datas.append((str(font_file), "assets/fonts"))
 
+# ── Binaries (DLLs nativas do WebView2/pythonnet) ─────────────────────────
+binaries = collect_dynamic_libs("webview")
+
 # ── Analysis ──────────────────────────────────────────────────────────────
 a = Analysis(
-    [str(project_root / "romaneio_app.py")],
+    [str(project_root / "web_app.py")],
     pathex=[
         str(project_root),
         str(project_root / "fretio" / "src"),
     ],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
