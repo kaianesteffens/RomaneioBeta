@@ -1382,6 +1382,37 @@ class TRDProvider(ProviderBase):
         paths["dir"] = str(base_dir)
         return paths
 
+    async def _aguardar_cep_cidade_entrega(self, *, tentativas: int = 16, intervalo_ms: int = 300) -> tuple[bool, bool, str, str]:
+        """Poll do auto-complete Angular do CEP/cidade-UF de entrega.
+
+        Lê #numeroCepEntregaInput e o input ng-model cepEntregaCidadeEstado até o
+        portal preencher (ou esgotar as tentativas). Retorna
+        (cep_ok, cidade_uf_ok, cep_val, cidade_val) — os dois últimos são os
+        últimos valores lidos (usados no log de diagnóstico do chamador).
+        Extraído de 4 cópias idênticas dentro de cotear()."""
+        cep_ok = False
+        cidade_uf_ok = False
+        cep_val = ""
+        cidade_val = ""
+        for _ in range(tentativas):
+            try:
+                cep_val = self._digits(await self._page.locator('#numeroCepEntregaInput').input_value())
+                cidade_val = (await self._page.evaluate(
+                    """() => {
+                        const el = document.querySelector('input[ng-model="vm.cotacao.cepEntregaCidadeEstado"]');
+                        return el ? el.value.trim() : '';
+                    }"""
+                )) or ""
+            except Exception:
+                cep_val = ""
+                cidade_val = ""
+            cep_ok = len(cep_val) == 8
+            cidade_uf_ok = len(cidade_val) >= 3
+            if cep_ok and cidade_uf_ok:
+                break
+            await self._page.wait_for_timeout(intervalo_ms)
+        return cep_ok, cidade_uf_ok, cep_val, cidade_val
+
     async def cotear(self, origem: str, destino: str, peso: float, valor: float,
                     volumes: int = 1, altura: float = 0.0, largura: float = 0.0,
                     comprimento: float = 0.0, cubagens: Optional[list[dict]] = None,
@@ -1633,25 +1664,7 @@ class TRDProvider(ProviderBase):
 
                 # No modo fornecedor com pagador=DESTINATARIO, o CNPJ destinatário
                 # é auto-preenchido (empresa logada). Aguardar CEP entrega auto-completar.
-                cep_ok = False
-                cidade_uf_ok = False
-                for _ in range(16):
-                    try:
-                        cep_val = self._digits(await self._page.locator('#numeroCepEntregaInput').input_value())
-                        cidade_val = (await self._page.evaluate(
-                            """() => {
-                                const el = document.querySelector('input[ng-model="vm.cotacao.cepEntregaCidadeEstado"]');
-                                return el ? el.value.trim() : '';
-                            }"""
-                        )) or ""
-                    except Exception:
-                        cep_val = ""
-                        cidade_val = ""
-                    cep_ok = len(cep_val) == 8
-                    cidade_uf_ok = len(cidade_val) >= 3
-                    if cep_ok and cidade_uf_ok:
-                        break
-                    await self._page.wait_for_timeout(300)
+                cep_ok, cidade_uf_ok, cep_val, cidade_val = await self._aguardar_cep_cidade_entrega()
 
                 # Fallback: preencher CEP entrega manualmente
                 if not cep_ok:
@@ -1665,23 +1678,7 @@ class TRDProvider(ProviderBase):
                             await loc_cep.press("Tab")
                         except Exception:
                             pass
-                        for _ in range(16):
-                            try:
-                                cep_val = self._digits(await self._page.locator('#numeroCepEntregaInput').input_value())
-                                cidade_val = (await self._page.evaluate(
-                                    """() => {
-                                        const el = document.querySelector('input[ng-model="vm.cotacao.cepEntregaCidadeEstado"]');
-                                        return el ? el.value.trim() : '';
-                                    }"""
-                                )) or ""
-                            except Exception:
-                                cep_val = ""
-                                cidade_val = ""
-                            cep_ok = len(cep_val) == 8
-                            cidade_uf_ok = len(cidade_val) >= 3
-                            if cep_ok and cidade_uf_ok:
-                                break
-                            await self._page.wait_for_timeout(300)
+                        cep_ok, cidade_uf_ok, cep_val, cidade_val = await self._aguardar_cep_cidade_entrega()
 
             else:
                 # Modo normal: preencher CNPJ destinatário
@@ -1710,25 +1707,7 @@ class TRDProvider(ProviderBase):
                     return None
 
                 # 1) Aguarda autocomplete natural do CEP/cidade/UF após CNPJ.
-                cep_ok = False
-                cidade_uf_ok = False
-                for _ in range(16):
-                    try:
-                        cep_val = self._digits(await self._page.locator('#numeroCepEntregaInput').input_value())
-                        cidade_val = (await self._page.evaluate(
-                            """() => {
-                                const el = document.querySelector('input[ng-model="vm.cotacao.cepEntregaCidadeEstado"]');
-                                return el ? el.value.trim() : '';
-                            }"""
-                        )) or ""
-                    except Exception:
-                        cep_val = ""
-                        cidade_val = ""
-                    cep_ok = len(cep_val) == 8
-                    cidade_uf_ok = len(cidade_val) >= 3
-                    if cep_ok and cidade_uf_ok:
-                        break
-                    await self._page.wait_for_timeout(300)
+                cep_ok, cidade_uf_ok, cep_val, cidade_val = await self._aguardar_cep_cidade_entrega()
 
                 # 2) Fallback: preencher CEP manualmente se não completou sozinho.
                 if not cep_ok:
@@ -1742,23 +1721,7 @@ class TRDProvider(ProviderBase):
                             await loc_cep.press("Tab")
                         except Exception:
                             pass
-                        for _ in range(16):
-                            try:
-                                cep_val = self._digits(await self._page.locator('#numeroCepEntregaInput').input_value())
-                                cidade_val = (await self._page.evaluate(
-                                    """() => {
-                                        const el = document.querySelector('input[ng-model="vm.cotacao.cepEntregaCidadeEstado"]');
-                                        return el ? el.value.trim() : '';
-                                    }"""
-                                )) or ""
-                            except Exception:
-                                cep_val = ""
-                                cidade_val = ""
-                            cep_ok = len(cep_val) == 8
-                            cidade_uf_ok = len(cidade_val) >= 3
-                            if cep_ok and cidade_uf_ok:
-                                break
-                            await self._page.wait_for_timeout(300)
+                        cep_ok, cidade_uf_ok, cep_val, cidade_val = await self._aguardar_cep_cidade_entrega()
 
             if not (cep_ok and cidade_uf_ok):
                 self.last_error = (
