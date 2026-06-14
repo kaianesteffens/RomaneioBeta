@@ -198,7 +198,7 @@ def test_char_nota_card_full_shape():
         produtos_resumo="Notebooks e perifericos",
         chave_acesso="CHAVE123",
     )
-    card = web_app._nota_card(2, nf)
+    card = web_app.nota_card(2, nf)
 
     assert card["indice"] == 2
     assert card["numero"] == "12345"
@@ -231,7 +231,7 @@ def test_char_nota_card_full_shape():
 def test_char_nota_card_chave_fallback_when_no_chave_acesso():
     # When chave_acesso is empty, chave falls back to "nf-{indice}-{numero}".
     nf = FakeNF(numero="777", transportadora_nome="DESCONHECIDA LTDA")
-    card = web_app._nota_card(5, nf)
+    card = web_app.nota_card(5, nf)
     assert card["chave"] == "nf-5-777"
     # Unknown carrier name (not in mapping) -> transp_display uses the raw name;
     # transp_bloco falls back to the first word of the name, uppercased.
@@ -250,7 +250,7 @@ def test_char_nota_card_security_cnpj_never_surfaced():
         destinatario_nome="ORGAO PUBLICO",
         destinatario_uf="SP",
     )
-    card = web_app._nota_card(1, nf)
+    card = web_app.nota_card(1, nf)
     blob = card["bloco_licitacao"] + "\n" + card["bloco_entrega"] + "\n" + card["header"]
     assert "11222333000181" not in blob   # emitente CNPJ never surfaced
     assert "99888777000166" not in blob   # destinatário CNPJ never surfaced
@@ -264,7 +264,7 @@ def test_char_nota_card_passes_unparsed_info_complementar_verbatim():
     # This is the current behavior — pinned so a later sanitization change is seen.
     raw = "<xml>conteudo bruto nao sanitizado</xml>"
     nf = FakeNF(numero="901", transportadora_nome="BRASPRESS", info_complementar=raw)
-    card = web_app._nota_card(1, nf)
+    card = web_app.nota_card(1, nf)
     assert card["bloco_licitacao"].endswith(
         "\n\nOutras informações da licitação:\n" + raw
     )
