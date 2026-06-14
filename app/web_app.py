@@ -553,15 +553,21 @@ class RastreioMixin:
         bloqueio = self._gate("rastreio")
         if bloqueio:
             return bloqueio
+        with self._op_lock:
+            if self._rastreando:
+                return {"erro": "Já existe um rastreamento em andamento"}
+            self._rastreando = True
         try:
             self._ensure_backend()
         except Exception as exc:
+            self._rastreando = False
             return {"erro": f"Falha ao preparar o rastreamento: {exc}"}
         try:
             from fretio.providers.base import find_chrome
             find_chrome()
         except FileNotFoundError:
             from cotacao_transportadoras import CHROME_MISSING_USER_MESSAGE
+            self._rastreando = False
             self._emit("chrome_missing", {"texto": CHROME_MISSING_USER_MESSAGE})
             return {"erro": CHROME_MISSING_USER_MESSAGE}
 
@@ -573,6 +579,7 @@ class RastreioMixin:
                 alvo = sub
         fut = self._loop.submit(lambda: self._coro_rastreio(list(alvo)))
         if fut is None:
+            self._rastreando = False
             return {"erro": "Não foi possível iniciar o rastreamento"}
         return {"ok": True, "total": len(alvo)}
 
@@ -609,6 +616,8 @@ class RastreioMixin:
             self._emit("rastreio_finished", {
                 "total": 0, "entregues": 0, "screenshots": 0, "erro": str(exc),
             })
+        finally:
+            self._rastreando = False
 
 
 class CotacaoMixin:
@@ -663,14 +672,16 @@ class CotacaoMixin:
         bloqueio = self._gate("cotacao")
         if bloqueio:
             return bloqueio
-        if self._cotando:
-            return {"erro": "Já existe uma cotação em andamento"}
+        with self._op_lock:
+            if self._cotando:
+                return {"erro": "Já existe uma cotação em andamento"}
+            self._cotando = True
         try:
             self._ensure_backend()
         except Exception as exc:  # backend indisponível
+            self._cotando = False
             return {"erro": f"Falha ao preparar a cotação: {exc}"}
 
-        self._cotando = True
         fut = self._loop.submit(lambda: self._coro_cotacao(texto, cnpj_remetente, cep_origem))
         if fut is None:
             self._cotando = False
@@ -730,6 +741,10 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin):
         self._sessao: Any = None
         self._loop: Any = None
         self._cotando = False
+        self._rastreando = False
+        # Serializa o check-and-set de _cotando/_rastreando: chamadas do js_api
+        # podem chegar concorrentes, então reservar a flag precisa ser atômico.
+        self._op_lock = threading.Lock()
         self._notas: list[Any] = []  # NotaFiscal carregadas (rastreio)
         self._romaneios: list[dict] = []  # romaneios processados na sessão (dashboard)
         self._last_cotacao: list[Any] = []  # últimos ResultadoCotacao (dashboard)
