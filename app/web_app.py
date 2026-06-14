@@ -933,6 +933,14 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin)
                 pass
         return {"cards": cards, "erros": erros, "total_notas": len(self._notas)}
 
+    def nfe_cards(self) -> dict:
+        """Reconstrói os cards das NF-e já carregadas (self._notas é a fonte da
+        verdade). A tela Rastreio chama isto no render para reexibir as notas após
+        navegar para outra página e voltar — sem isto os cards se perdiam e o
+        re-import era barrado pelo filtro de duplicados de nfe_selecionar."""
+        cards = [nota_card(i + 1, nf) for i, nf in enumerate(self._notas)]
+        return {"cards": cards, "total_notas": len(self._notas)}
+
     def abrir_externo(self, alvo: str) -> dict:
         """Abre arquivo (screenshot) ou URL (rastreio) no app padrão do sistema."""
         alvo = str(alvo or "").strip()

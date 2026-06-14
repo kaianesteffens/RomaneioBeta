@@ -50,6 +50,7 @@ EXPECTED_PUBLIC_SURFACE = {
     "get_dashboard": "(self) -> 'dict'",
     "get_romaneio_texto": "(self) -> 'dict'",
     "listar_empresas": "(self) -> 'list[str]'",
+    "nfe_cards": "(self) -> 'dict'",
     "nfe_selecionar": "(self) -> 'dict'",
     "rastreio_iniciar": "(self, chaves: 'list | None' = None) -> 'dict'",
     "rastreio_limpar": "(self) -> 'dict'",

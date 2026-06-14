@@ -210,3 +210,23 @@ def test_coro_rastreio_reports_tracking_usage_events(monkeypatch):
     asyncio.run(api._coro_rastreio([_NF()]))
     assert "started" in eventos
     assert ("finished", "ok") in eventos
+
+
+# --- Fix [P2]: cards de NF-e sobrevivem à navegação (reload do backend) --------
+
+def test_nfe_cards_rebuilds_from_notas(monkeypatch):
+    # nfe_cards() reconstrói os cards a partir de _notas (fonte da verdade), com
+    # índice 1-based na ordem de _notas — o frontend recarrega isto no render.
+    monkeypatch.setattr(web_app, "nota_card", lambda i, nf: {"indice": i, "nf": nf})
+    api = _api()
+    api._notas = ["A", "B", "C"]
+    out = api.nfe_cards()
+    assert out["total_notas"] == 3
+    assert [c["indice"] for c in out["cards"]] == [1, 2, 3]
+    assert [c["nf"] for c in out["cards"]] == ["A", "B", "C"]
+
+
+def test_nfe_cards_empty_when_no_notas():
+    api = _api()
+    api._notas = []
+    assert api.nfe_cards() == {"cards": [], "total_notas": 0}
