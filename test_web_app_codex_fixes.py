@@ -150,3 +150,63 @@ def test_startup_criar_empresa_case_insensitive_duplicate(monkeypatch):
 
 def test_webview2_runtime_present_returns_bool_without_raising():
     assert isinstance(web_app._webview2_runtime_present(), bool)
+
+
+# --- Fix [P1]: encerrar o processo após disparar o updater ---------------------
+
+class _ExitSentinel(Exception):
+    pass
+
+
+def test_startup_aplicar_update_force_exits_whole_process(monkeypatch):
+    import updater
+    chamadas = []
+    monkeypatch.setattr(updater, "apply_update", lambda info, callback=None: True)
+    monkeypatch.setattr(updater, "restart_app", lambda: chamadas.append("restart"))
+    monkeypatch.setattr(web_app.os, "_exit", lambda code: (_ for _ in ()).throw(_ExitSentinel(code)))
+    api = _api()
+    api._update_info = object()
+    api._teardown = lambda: chamadas.append("teardown")
+    import pytest
+    with pytest.raises(_ExitSentinel):
+        api.startup_aplicar_update()
+    assert "restart" in chamadas    # disparou o _apply_update.bat
+    assert "teardown" in chamadas   # fechou Chrome/Playwright antes de sair
+    # os._exit foi chamado (sentinela) -> o processo inteiro encerraria
+
+
+def test_startup_aplicar_update_no_update_returns_error_without_exit():
+    api = _api()
+    api._update_info = None
+    r = api.startup_aplicar_update()
+    assert r.get("ok") is False
+
+
+# --- Fix [P2]: telemetria restaurada nos fluxos web ----------------------------
+
+def test_coro_rastreio_reports_tracking_usage_events(monkeypatch):
+    import asyncio
+    import rastreamento
+    import extrator_nfe
+    import usage_reporter
+    eventos = []
+
+    async def fake_rastrear(notas, callback=None):
+        return []
+
+    monkeypatch.setattr(rastreamento, "rastrear_multiplas", fake_rastrear)
+    monkeypatch.setattr(extrator_nfe, "identificar_transportadora", lambda nf: "X")
+    monkeypatch.setattr(usage_reporter, "report_tracking_started", lambda metadata=None: eventos.append("started"))
+    monkeypatch.setattr(usage_reporter, "report_tracking_finished", lambda status, **k: eventos.append(("finished", status)))
+
+    api = _api()
+    api._emit = lambda *a, **k: None
+
+    class _NF:
+        numero = "1"
+        emitente_cnpj = "x"
+        chave_acesso = "abc"
+
+    asyncio.run(api._coro_rastreio([_NF()]))
+    assert "started" in eventos
+    assert ("finished", "ok") in eventos
