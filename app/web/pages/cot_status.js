@@ -46,49 +46,83 @@
     return msg;
   }
 
-  // tbodyId -> { provider -> <tr> }
+  function providerDe(payload) {
+    const p = payload || {};
+    let provider = String(p.provider || "").trim().toUpperCase();
+    if (!provider && p.resultado) provider = String(p.resultado.transportadora || "").trim().toUpperCase();
+    return provider;
+  }
+
+  // tbodyId -> { provider -> <tr> }   (refs do DOM atual)
   const tables = {};
+  // tbodyId -> { order: [providers], rows: { provider -> payload } }
+  // Guarda os payloads crus para reexibir o status ao voltar à tela: o re-render
+  // recria o <tbody> vazio e o dono (Cotação/Fornecedores) chama replay().
+  const store = {};
+
+  function renderRow(tbodyId, payload) {
+    const F = window.Fmt;
+    const tb = document.getElementById(tbodyId);
+    if (!tb) return;
+    const rows = tables[tbodyId] || (tables[tbodyId] = {});
+    const p = payload || {};
+    const resultado = p.resultado || null;
+    const provider = providerDe(p);
+    if (!provider) return;
+
+    let status = String(p.status || "").trim();
+    let mensagem = String(p.mensagem || "").trim();
+    let duration = p.duration_ms;
+    if (resultado) {
+      if (!status) status = resultado.status || "";
+      if (!mensagem) mensagem = resultado.detalhes || "";
+      if (duration == null) duration = resultado.duration_ms;
+    }
+    const key = statusKey(status, mensagem, resultado);
+    const label = STATUS_LABEL[key] || STATUS_LABEL.aguardando;
+    const cls = STATUS_CLASS[key] || "muted";
+    const stage = STAGE_LABEL[p.stage] || p.stage || "Aguardando";
+    const msg = limparMensagem(key, mensagem, label);
+    const tempo = F.tempo(duration);
+
+    let tr = rows[provider];
+    if (!tr) { tr = document.createElement("tr"); rows[provider] = tr; tb.appendChild(tr); }
+    tr.innerHTML = `
+      <td class="cot-prov">${F.esc(provider)}</td>
+      <td><span class="cot-pill ${cls}">${F.esc(label)}</span></td>
+      <td class="cot-stage">${F.esc(stage)}</td>
+      <td class="cot-msg" title="${F.esc(msg)}">${F.esc(msg)}</td>
+      <td class="cot-time">${F.esc(tempo)}</td>`;
+  }
 
   window.CotStatus = {
     reset(tbodyId) {
       tables[tbodyId] = {};
+      store[tbodyId] = { order: [], rows: {} };
       const tb = document.getElementById(tbodyId);
       if (tb) tb.innerHTML = "";
     },
     upsert(tbodyId, payload) {
-      const F = window.Fmt;
-      const tb = document.getElementById(tbodyId);
-      if (!tb) return;
-      const rows = tables[tbodyId] || (tables[tbodyId] = {});
-      const p = payload || {};
-      const resultado = p.resultado || null;
-      let provider = String(p.provider || "").trim().toUpperCase();
-      if (!provider && resultado) provider = String(resultado.transportadora || "").trim().toUpperCase();
+      const provider = providerDe(payload);
       if (!provider) return;
-
-      let status = String(p.status || "").trim();
-      let mensagem = String(p.mensagem || "").trim();
-      let duration = p.duration_ms;
-      if (resultado) {
-        if (!status) status = resultado.status || "";
-        if (!mensagem) mensagem = resultado.detalhes || "";
-        if (duration == null) duration = resultado.duration_ms;
-      }
-      const key = statusKey(status, mensagem, resultado);
-      const label = STATUS_LABEL[key] || STATUS_LABEL.aguardando;
-      const cls = STATUS_CLASS[key] || "muted";
-      const stage = STAGE_LABEL[p.stage] || p.stage || "Aguardando";
-      const msg = limparMensagem(key, mensagem, label);
-      const tempo = F.tempo(duration);
-
-      let tr = rows[provider];
-      if (!tr) { tr = document.createElement("tr"); rows[provider] = tr; tb.appendChild(tr); }
-      tr.innerHTML = `
-        <td class="cot-prov">${F.esc(provider)}</td>
-        <td><span class="cot-pill ${cls}">${F.esc(label)}</span></td>
-        <td class="cot-stage">${F.esc(stage)}</td>
-        <td class="cot-msg" title="${F.esc(msg)}">${F.esc(msg)}</td>
-        <td class="cot-time">${F.esc(tempo)}</td>`;
+      const st = store[tbodyId] || (store[tbodyId] = { order: [], rows: {} });
+      if (!(provider in st.rows)) st.order.push(provider);
+      st.rows[provider] = payload;
+      renderRow(tbodyId, payload);
+    },
+    // Reconstrói a tabela a partir dos payloads guardados (após re-render da página).
+    replay(tbodyId) {
+      const st = store[tbodyId];
+      tables[tbodyId] = {};               // refs antigas apontam p/ DOM destruído
+      const tb = document.getElementById(tbodyId);
+      if (tb) tb.innerHTML = "";
+      if (!st) return false;
+      for (const prov of st.order) renderRow(tbodyId, st.rows[prov]);
+      return st.order.length > 0;
+    },
+    has(tbodyId) {
+      const st = store[tbodyId];
+      return !!(st && st.order.length);
     },
   };
 })();

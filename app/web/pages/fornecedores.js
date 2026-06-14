@@ -4,6 +4,13 @@
 
 (function () {
   let running = false;
+  const RESUMO_ANDAMENTO = "Cotação em andamento. As respostas aparecem conforme cada transportadora finaliza.";
+
+  // Estado da cotação FOB por sessão (sobrevive à navegação; re-hidratado no
+  // render). A tabela de status mora no store do CotStatus ("fornStatusBody").
+  function st(app) {
+    return app.state.fornecedores || (app.state.fornecedores = { running: false, started: false, resumo: "" });
+  }
 
   function maskCNPJ(v) {
     const d = v.replace(/\D/g, "").slice(0, 14);
@@ -39,23 +46,31 @@
 
   async function cotar(app) {
     const form = coletarForm();
-    running = true;
-    window.CotStatus.reset("fornStatusBody");
-    document.getElementById("fornStatusWrap").hidden = false;
-    document.getElementById("fornResult").textContent = "Cotação em andamento. As respostas aparecem conforme cada transportadora finaliza.";
+    // Antes da confirmação do backend, só o feedback de carregamento — não zera
+    // resultado/tabela ainda, senão uma cotação REJEITADA apagaria o resultado
+    // anterior já concluído nesta sessão (preservado em app.state.fornecedores).
     const btn = document.getElementById("fornCotar");
     btn.disabled = true; btn.classList.add("loading");
     const res = await (await app.api()).fornecedor_cotar(form);
     if (res && res.erro) {
       btn.disabled = false; btn.classList.remove("loading");
-      running = false;
       document.getElementById("fornResult").textContent = res.erro;
       app.toast(res.erro.split("\n")[0]);
+      return;
     }
+    // Backend aceitou: agora sim marca em andamento, vira dono e zera o anterior.
+    running = true;
+    const s = st(app);
+    s.running = true; s.started = true; s.resumo = RESUMO_ANDAMENTO;
+    app.beginOp("cotacao");
+    window.CotStatus.reset("fornStatusBody");
+    document.getElementById("fornStatusWrap").hidden = false;
+    document.getElementById("fornResult").textContent = RESUMO_ANDAMENTO;
   }
 
-  function finalizar() {
+  function finalizar(app) {
     running = false;
+    if (app) st(app).running = false;
     const btn = document.getElementById("fornCotar");
     if (btn) { btn.disabled = false; btn.classList.remove("loading"); }
   }
@@ -64,7 +79,8 @@
   window.Pages.fornecedores = {
     title: "Fornecedores",
     render(view, app) {
-      running = false;
+      const s = st(app);
+      running = !!s.running;
       view.innerHTML = `
         <div class="cot-cols">
           <section class="card cot-card">
@@ -115,24 +131,37 @@
         try { await navigator.clipboard.writeText(txt); app.toast("Resultado copiado"); }
         catch { app.toast("Não foi possível copiar"); }
       });
+
+      // Re-hidrata o resultado/status da cotação FOB desta sessão (Codex P2).
+      if (s.started) {
+        $("#fornStatusWrap", view).hidden = false;
+        window.CotStatus.replay("fornStatusBody");
+        if (s.resumo) $("#fornResult", view).textContent = s.resumo;
+        if (s.running) {
+          const btn = $("#fornCotar", view);
+          btn.disabled = true; btn.classList.add("loading");
+        }
+      }
     },
 
     onEvent(evt, app) {
+      const s = st(app);
       switch (evt.event) {
         case "cotacao_progress":
           window.CotStatus.upsert("fornStatusBody", evt.payload || {});
           break;
         case "cotacao_result": {
+          s.resumo = (evt.payload && evt.payload.resumo) || "";
           const el = document.getElementById("fornResult");
-          if (el) el.textContent = (evt.payload && evt.payload.resumo) || "";
+          if (el) el.textContent = s.resumo;
           break;
         }
         case "cotacao_finished":
-          finalizar();
+          finalizar(app);
           break;
         case "chrome_missing":
           app.toast((evt.payload && evt.payload.texto) || "Google Chrome não encontrado");
-          finalizar();
+          finalizar(app);
           break;
       }
     },
