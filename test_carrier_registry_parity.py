@@ -24,6 +24,16 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "app"))
 sys.path.insert(0, str(ROOT / "app" / "fretio" / "src"))
 
+# pywebview não é instalado no ambiente de CI (ubuntu); web_app faz `import webview`
+# no load. Stuba a superfície mínima (mesmo padrão de test_char_web_app_serializers.py).
+import types
+if "webview" not in sys.modules:
+    sys.modules["webview"] = types.SimpleNamespace(
+        OPEN_DIALOG=10,
+        create_window=lambda *a, **k: None,
+        start=lambda *a, **k: None,
+    )
+
 from fretio.providers.factory import (
     _PROVIDER_SPECS,
     _REQUIRED_FIELDS,
