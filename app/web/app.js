@@ -21,10 +21,20 @@ const TITULOS = {
 window.App = {
   state: { empresa: "", versao: "", tema: "escuro", transportadoras: [], dashboard: {} },
   page: "dashboard",
+  // Dono (página que iniciou) de cada operação longa, por família de evento.
+  // Eventos de operação são roteados ao dono mesmo quando ele não está visível,
+  // para o resultado/progresso sobreviver à navegação. null = nenhuma em curso.
+  opOwners: { cotacao: null, rastreio: null },
   view: () => $("#view"),
   api: apiBridge,
   toast,
   fmt: () => window.Fmt,
+
+  // Marca a página atual como dona da operação. Não rouba o dono de uma operação
+  // já em andamento (o backend rejeita a 2ª) — preserva o roteamento da original.
+  beginOp(family) {
+    if (family in this.opOwners && !this.opOwners[family]) this.opOwners[family] = this.page;
+  },
 
   navigate(name) {
     if (!TITULOS[name]) return;
@@ -86,6 +96,18 @@ function toast(msg) {
 }
 
 /* ── Canal Python -> JS ────────────────────────────────────────────────── */
+// Eventos de operação longa: mapeados à família cujo dono os recebe mesmo fora
+// de vista. Sem isto, ao navegar antes do término, o resultado é entregue à
+// página ativa (que o ignora) e some ao voltar à tela de origem.
+const OP_FAMILY = {
+  cotacao_progress: "cotacao", cotacao_result: "cotacao", cotacao_finished: "cotacao",
+  rastreio_progress: "rastreio", rastreio_finished: "rastreio",
+  // chrome_missing da cotação é assíncrono (coroutine) — roteia ao dono p/ o aviso
+  // não sumir se o usuário já navegou. O do rastreio é síncrono no rastreio_iniciar
+  // (usuário ainda na tela); sem dono de cotação, cai na página ativa, como antes.
+  chrome_missing: "cotacao",
+};
+
 window.onBackendEvent = function (evt) {
   if (!evt || !evt.event) return;
   // Handlers globais
@@ -96,11 +118,17 @@ window.onBackendEvent = function (evt) {
   } else if (evt.event === "toast") {
     toast((evt.payload && evt.payload.texto) || "");
   }
-  // Encaminha para a página ativa
-  const mod = window.Pages[window.App.page];
+  // Roteia eventos de operação ao dono (mesmo fora de vista); os demais vão para
+  // a página ativa, como antes.
+  const fam = OP_FAMILY[evt.event];
+  const alvo = (fam && window.App.opOwners[fam]) || window.App.page;
+  const mod = window.Pages[alvo];
   if (mod && mod.onEvent) {
     try { mod.onEvent(evt, window.App); } catch (e) { /* isola erro de página */ }
   }
+  // Operação terminou: libera o dono (próximo início recomeça limpo).
+  if (evt.event === "cotacao_finished") window.App.opOwners.cotacao = null;
+  else if (evt.event === "rastreio_finished") window.App.opOwners.rastreio = null;
 };
 
 /* ── Boot ──────────────────────────────────────────────────────────────── */
