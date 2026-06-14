@@ -8,7 +8,7 @@
 
 - Branch de trabalho: **`refactor/codebase-cleanup`** (criada a partir de `master`).
   `master` está **intacto** e **nada foi pushed**. Trabalhe nesta branch.
-- Estado: **23 commits**, **767 testes verdes**, pacote `app/cotacao/` **pyflakes-limpo**.
+- Estado: **25 commits**, **771 testes verdes**, pacote `app/cotacao/` **pyflakes-limpo**.
 - O app foi migrado de PySide6 para **UI web** (pywebview/WebView2): shell em
   `app/web_app.py` + `app/web/*` (HTML/CSS/JS). Backend Python intacto.
 - Memória do projeto: `refactor-codebase-cleanup` (resumo) e `ui-web-migration`.
@@ -40,6 +40,8 @@
 | `2348dcf` | 7 passo 1 | Extrai `StartupMixin` (2º delegate) |
 | `aa1ed1a` | 7 passo 1 | Extrai `RastreioMixin` (3º delegate) |
 | `5e71a8f` | 7 passo 1 | Extrai `CotacaoMixin` (4º delegate) |
+| `53ad54b` | 7 passo 1 | Extrai `RomaneioMixin` (5º delegate — split completo) |
+| `5b4283b` | 7 passo 3 | Guardas de concorrência (`_rastreando` + lock thread-safe) |
 
 **Fase 6 passos 1 e 3 = CONCLUÍDOS.** Passo 2 = núcleo seguro feito (registry +
 3 consumidores deduplicados + parity test). Falta o que está marcado abaixo
@@ -141,20 +143,19 @@ regressão de provider. Não mexa no parsing sem fixture.
 
 Já feito: teardown determinístico (`c0f5138`). Falta:
 
-1. **[CONCLUÍDO os 4 delegates nomeados] Dividir `web_app.Api`** (god-object) em delegates por domínio.
+1. **[CONCLUÍDO] Dividir `web_app.Api`** (god-object) em delegates por domínio.
    - **FEITO**: golden da superfície pública (`test_char_web_app_api_surface.py`, 30 métodos +
-     assinaturas exatas — o contrato pywebview) + **4 mixins extraídos** via composição por herança:
-     `ConfigMixin` (7), `StartupMixin` (8), `RastreioMixin` (4), `CotacaoMixin` (7) —
-     `class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin)`. 26 métodos saíram do Api;
-     restaram 20 no shell (infra `_emit`/`_gate`/`_teardown`/`_ensure_backend`/`attach_window` +
-     nav/lifecycle + grupo romaneio/fornecedor/nfe/dashboard).
+     assinaturas exatas — o contrato pywebview) + **5 mixins extraídos** via composição por herança:
+     `ConfigMixin` (7), `StartupMixin` (8), `RastreioMixin` (4), `CotacaoMixin` (7), `RomaneioMixin` (6) —
+     `class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin)`. ~32 métodos
+     saíram do god-object; restaram **14 no shell Api** (infra `_emit`/`_gate`/`_teardown`/`_ensure_backend`/
+     `attach_window` + nav/lifecycle `abrir_app`/`trocar_empresa`/`sair`/`abrir_externo`/`abrir_screenshots`
+     + `get_bootstrap`/`listar_empresas`/`nfe_selecionar`/`get_dashboard`).
    - **Padrão usado**: mixin definido ANTES de `class Api`, corpos movidos **verbatim** (operam
      sobre `self` → superfície pywebview e estado compartilhado idênticos). Verificação por delegate:
      golden de superfície + char serializers + `python app/web_app.py --smoke OUT` + suíte completa.
-   - **FALTA (opcional)**: 5º delegate `RomaneioMixin`/`FornecedorMixin` para o grupo restante
-     (`romaneio_processar`/`get_romaneio_texto`/`fornecedor_cotar`/`_montar_romaneio_fornecedor`/
-     `_obter_*`/`nfe_selecionar`/`get_dashboard`). Parte disso é Fase 7 passo 2 (mover apresentação
-     `_montar_romaneio_fornecedor` para um formatter de domínio).
+   - **Resíduo p/ Fase 7 passo 2**: `_montar_romaneio_fornecedor` (hoje em `RomaneioMixin`) é
+     apresentação e deveria virar formatter de domínio reutilizável (ver passo 2 abaixo).
 
 2. **Mover lógica de apresentação para fora da ponte**: `_nota_card`,
    `_validar_local_entrega`, `_montar_romaneio_fornecedor` → um formatter de domínio
@@ -164,8 +165,9 @@ Já feito: teardown determinístico (`c0f5138`). Falta:
      `R$ 1234.56` (ponto, sem milhar) em vez de `R$ 1.234,56`. O parser aceita ambos, então
      é cosmético — só corrija com cuidado para não quebrar o handoff.
 
-3. **Guardas de concorrência**: adicionar guarda `_rastreando` em andamento e tornar
-   `_cotando` thread-safe.
+3. **[CONCLUÍDO — `5b4283b`] Guardas de concorrência**: guarda `_rastreando` (espelha `_cotando`)
+   + `self._op_lock` torna o check-and-set de ambas as flags atômico; a flag é liberada em todo
+   caminho de falha e no `finally` das coroutines. Teste: `test_web_app_concurrency_guards.py`.
 
 4. **Aposentar o contrato legado** — só DEPOIS de migrar todos os providers:
    - **Pergunta em aberto**: quantos dos 8 providers já aceitam um `cotar()` com forma
