@@ -730,7 +730,173 @@ class CotacaoMixin:
             self._emit("cotacao_finished", {})
 
 
-class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin):
+class RomaneioMixin:
+    """Romaneio por PDF e cotação de fornecedor (frete FOB). Delegate de domínio
+    do Api (opera sobre self; superfície pública pywebview inalterada)."""
+
+    # ── Romaneio (PDF) ──────────────────────────────────────────────────────
+    def romaneio_processar(self) -> dict:
+        if self._window is None:
+            return {"erro": "Janela indisponível"}
+        bloqueio = self._gate("romaneio")
+        if bloqueio:
+            return bloqueio
+        paths = self._window.create_file_dialog(
+            webview.OPEN_DIALOG,
+            allow_multiple=False,
+            file_types=("PDF de romaneio (*.pdf)", "Todos os arquivos (*.*)"),
+        )
+        if not paths:
+            return {"cancelado": True}
+        arq = paths[0] if isinstance(paths, (list, tuple)) else paths
+
+        from extrator_pedidos import ExtratorPedidos
+        extrator = ExtratorPedidos()
+        try:
+            pedidos = extrator.extrair_arquivo(arq)
+        except Exception as exc:
+            return {"erro": f"Erro ao processar PDF: {exc}"}
+        if not pedidos:
+            return {"erro": "Nenhum pedido encontrado no arquivo. Verifique se o PDF tem o formato esperado."}
+
+        ok, msg = _validar_local_entrega(extrator, pedidos)
+        if not ok:
+            return {"erro": msg}
+
+        try:
+            if len(pedidos) == 1:
+                html = extrator.formatar_pedido_html(pedidos[0])
+            else:
+                html = extrator.formatar_pedidos_agrupados_html(pedidos)
+        except ValueError as exc:
+            return {"erro": str(exc)}
+
+        texto = html.replace("<br>", "\n")
+        destino = "—"
+        try:
+            d0 = getattr(pedidos[0], "local_entrega", "") or ""
+            norm = extrator.normalizar_local_entrega(d0) if hasattr(extrator, "normalizar_local_entrega") else d0
+            destino = (norm or d0 or "—").split("\n")[0] or "—"
+        except Exception:
+            pass
+
+        from datetime import date
+        self._romaneios.append({
+            "data": date.today().strftime("%d/%m"),
+            "nome": Path(arq).name,
+            "destino": destino,
+            "volumes": len(pedidos),
+        })
+        self._romaneio_texto = texto
+        return {
+            "ok": True, "texto": texto, "arquivo": Path(arq).name,
+            "pedidos": len(pedidos), "destino": destino,
+        }
+
+    def get_romaneio_texto(self) -> dict:
+        return {"texto": self._romaneio_texto}
+
+    # ── Fornecedores (frete FOB) ────────────────────────────────────────────
+    @staticmethod
+    def _obter_cnpj_empresa(cfg: dict) -> str:
+        import re
+        transp = cfg.get("transportadoras", {}) or {}
+        cnpj = re.sub(r"\D", "", str((transp.get("braspress") or {}).get("cnpj", "") or ""))
+        if len(cnpj) == 14:
+            return cnpj
+        agex = transp.get("agex") or {}
+        for chave in ("cnpj_remetente", "cnpj"):
+            cnpj = re.sub(r"\D", "", str(agex.get(chave, "") or ""))
+            if len(cnpj) == 14:
+                return cnpj
+        cnpj = re.sub(r"\D", "", str((transp.get("rodonaves") or {}).get("cnpj_pagador", "") or ""))
+        return cnpj if len(cnpj) == 14 else ""
+
+    @staticmethod
+    def _obter_cep_empresa(cfg: dict) -> str:
+        import re
+        rom = cfg.get("romaneio", {}) or {}
+        cep = re.sub(r"\D", "", str(rom.get("cep_origem", "") or ""))
+        return cep if len(cep) == 8 else ""
+
+    def _montar_romaneio_fornecedor(self, form: dict) -> tuple[str, str]:
+        """Porta de CotacaoMixin._montar_romaneio_fornecedor (lê de um dict do form web)."""
+        import re
+        cfg = _load_config(self._config_path)
+        cnpj_empresa = self._obter_cnpj_empresa(cfg)
+        cep_empresa = self._obter_cep_empresa(cfg)
+        cep_forn = re.sub(r"\D", "", str(form.get("cep", "")))
+
+        def fbr(txt: Any) -> float:
+            t = re.sub(r"[R$\s]", "", str(txt or "").strip())
+            t = t.replace(".", "").replace(",", ".")
+            return float(t) if t else 0.0
+
+        try:
+            qtd = int(str(form.get("qtd", "")).strip() or "0")
+        except ValueError:
+            qtd = 0
+        alt, larg, comp = fbr(form.get("alt")), fbr(form.get("larg")), fbr(form.get("comp"))
+        peso_cx_txt = str(form.get("peso_cx", "")).strip()
+        peso_total_txt = str(form.get("peso_total", "")).strip()
+        valor = fbr(form.get("valor"))
+
+        if peso_cx_txt:
+            peso_caixa = fbr(peso_cx_txt)
+            peso_total = peso_caixa * qtd
+        elif peso_total_txt:
+            peso_total = fbr(peso_total_txt)
+            peso_caixa = peso_total / qtd if qtd > 0 else 0.0
+        else:
+            raise ValueError("Informe o peso por volume ou o peso total (pelo menos um é obrigatório)")
+
+        cubagem_unit = (alt * larg * comp) / 1_000_000
+        cubagem_total = cubagem_unit * qtd
+
+        erros: list[str] = []
+        if len(cnpj_empresa) != 14:
+            erros.append("CNPJ da empresa não configurado (Configurações > Credenciais)")
+        if len(cep_empresa) != 8:
+            erros.append("CEP da empresa não configurado (Configurações > Empresa > CEP de origem)")
+        if len(cep_forn) != 8:
+            erros.append("CEP do fornecedor inválido (deve ter 8 dígitos)")
+        if qtd <= 0:
+            erros.append("Quantidade de volumes deve ser maior que zero")
+        if alt <= 0 or larg <= 0 or comp <= 0:
+            erros.append("Dimensões devem ser maiores que zero")
+        if peso_total <= 0:
+            erros.append("Peso deve ser maior que zero")
+        if erros:
+            raise ValueError("\n".join(erros))
+
+        c = cnpj_empresa
+        cnpj_fmt = f"{c[:2]}.{c[2:5]}.{c[5:8]}/{c[8:12]}-{c[12:]}"
+        cep_fmt = f"{cep_empresa[:5]}-{cep_empresa[5:]}"
+        lines = [
+            f"CNPJ/CPF: {cnpj_fmt}",
+            f"CEP: {cep_fmt}",
+            f"- VOL: {qtd}",
+            f"- CUBAGEM: {cubagem_total:.6f} m3",
+            f"- PESO: {peso_total:.2f} kg",
+            f"- TOTAL: R$ {valor:.2f}",
+            f"{qtd} x Volume fornecedor - {peso_caixa:.3f} kg - {cubagem_unit:.6f} m3 - {int(alt)}x{int(larg)}x{int(comp)}",
+        ]
+        return "\n".join(lines), cep_forn
+
+    def fornecedor_cotar(self, form: dict) -> dict:
+        import re
+        bloqueio = self._gate("cotacao")
+        if bloqueio:
+            return bloqueio
+        try:
+            texto, cep_forn = self._montar_romaneio_fornecedor(form or {})
+        except ValueError as exc:
+            return {"erro": str(exc)}
+        cnpj_forn = re.sub(r"\D", "", str((form or {}).get("cnpj", "")))
+        return self.cotacao_iniciar(texto, cnpj_remetente=cnpj_forn, cep_origem=cep_forn)
+
+
+class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin):
     def __init__(self, empresa: str | None = None, config_path: Path | None = None) -> None:
         self._empresa = empresa or ""
         self._config_path = config_path
@@ -925,167 +1091,6 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin):
             "sub_sucesso": f"{ok_cot} de {total_cot} transportadoras" if total_cot else "",
             "romaneios_recentes": list(reversed(roms))[:6],
         }
-
-    # ── Romaneio (PDF) ──────────────────────────────────────────────────────
-    def romaneio_processar(self) -> dict:
-        if self._window is None:
-            return {"erro": "Janela indisponível"}
-        bloqueio = self._gate("romaneio")
-        if bloqueio:
-            return bloqueio
-        paths = self._window.create_file_dialog(
-            webview.OPEN_DIALOG,
-            allow_multiple=False,
-            file_types=("PDF de romaneio (*.pdf)", "Todos os arquivos (*.*)"),
-        )
-        if not paths:
-            return {"cancelado": True}
-        arq = paths[0] if isinstance(paths, (list, tuple)) else paths
-
-        from extrator_pedidos import ExtratorPedidos
-        extrator = ExtratorPedidos()
-        try:
-            pedidos = extrator.extrair_arquivo(arq)
-        except Exception as exc:
-            return {"erro": f"Erro ao processar PDF: {exc}"}
-        if not pedidos:
-            return {"erro": "Nenhum pedido encontrado no arquivo. Verifique se o PDF tem o formato esperado."}
-
-        ok, msg = _validar_local_entrega(extrator, pedidos)
-        if not ok:
-            return {"erro": msg}
-
-        try:
-            if len(pedidos) == 1:
-                html = extrator.formatar_pedido_html(pedidos[0])
-            else:
-                html = extrator.formatar_pedidos_agrupados_html(pedidos)
-        except ValueError as exc:
-            return {"erro": str(exc)}
-
-        texto = html.replace("<br>", "\n")
-        destino = "—"
-        try:
-            d0 = getattr(pedidos[0], "local_entrega", "") or ""
-            norm = extrator.normalizar_local_entrega(d0) if hasattr(extrator, "normalizar_local_entrega") else d0
-            destino = (norm or d0 or "—").split("\n")[0] or "—"
-        except Exception:
-            pass
-
-        from datetime import date
-        self._romaneios.append({
-            "data": date.today().strftime("%d/%m"),
-            "nome": Path(arq).name,
-            "destino": destino,
-            "volumes": len(pedidos),
-        })
-        self._romaneio_texto = texto
-        return {
-            "ok": True, "texto": texto, "arquivo": Path(arq).name,
-            "pedidos": len(pedidos), "destino": destino,
-        }
-
-    def get_romaneio_texto(self) -> dict:
-        return {"texto": self._romaneio_texto}
-
-    # ── Fornecedores (frete FOB) ────────────────────────────────────────────
-    @staticmethod
-    def _obter_cnpj_empresa(cfg: dict) -> str:
-        import re
-        transp = cfg.get("transportadoras", {}) or {}
-        cnpj = re.sub(r"\D", "", str((transp.get("braspress") or {}).get("cnpj", "") or ""))
-        if len(cnpj) == 14:
-            return cnpj
-        agex = transp.get("agex") or {}
-        for chave in ("cnpj_remetente", "cnpj"):
-            cnpj = re.sub(r"\D", "", str(agex.get(chave, "") or ""))
-            if len(cnpj) == 14:
-                return cnpj
-        cnpj = re.sub(r"\D", "", str((transp.get("rodonaves") or {}).get("cnpj_pagador", "") or ""))
-        return cnpj if len(cnpj) == 14 else ""
-
-    @staticmethod
-    def _obter_cep_empresa(cfg: dict) -> str:
-        import re
-        rom = cfg.get("romaneio", {}) or {}
-        cep = re.sub(r"\D", "", str(rom.get("cep_origem", "") or ""))
-        return cep if len(cep) == 8 else ""
-
-    def _montar_romaneio_fornecedor(self, form: dict) -> tuple[str, str]:
-        """Porta de CotacaoMixin._montar_romaneio_fornecedor (lê de um dict do form web)."""
-        import re
-        cfg = _load_config(self._config_path)
-        cnpj_empresa = self._obter_cnpj_empresa(cfg)
-        cep_empresa = self._obter_cep_empresa(cfg)
-        cep_forn = re.sub(r"\D", "", str(form.get("cep", "")))
-
-        def fbr(txt: Any) -> float:
-            t = re.sub(r"[R$\s]", "", str(txt or "").strip())
-            t = t.replace(".", "").replace(",", ".")
-            return float(t) if t else 0.0
-
-        try:
-            qtd = int(str(form.get("qtd", "")).strip() or "0")
-        except ValueError:
-            qtd = 0
-        alt, larg, comp = fbr(form.get("alt")), fbr(form.get("larg")), fbr(form.get("comp"))
-        peso_cx_txt = str(form.get("peso_cx", "")).strip()
-        peso_total_txt = str(form.get("peso_total", "")).strip()
-        valor = fbr(form.get("valor"))
-
-        if peso_cx_txt:
-            peso_caixa = fbr(peso_cx_txt)
-            peso_total = peso_caixa * qtd
-        elif peso_total_txt:
-            peso_total = fbr(peso_total_txt)
-            peso_caixa = peso_total / qtd if qtd > 0 else 0.0
-        else:
-            raise ValueError("Informe o peso por volume ou o peso total (pelo menos um é obrigatório)")
-
-        cubagem_unit = (alt * larg * comp) / 1_000_000
-        cubagem_total = cubagem_unit * qtd
-
-        erros: list[str] = []
-        if len(cnpj_empresa) != 14:
-            erros.append("CNPJ da empresa não configurado (Configurações > Credenciais)")
-        if len(cep_empresa) != 8:
-            erros.append("CEP da empresa não configurado (Configurações > Empresa > CEP de origem)")
-        if len(cep_forn) != 8:
-            erros.append("CEP do fornecedor inválido (deve ter 8 dígitos)")
-        if qtd <= 0:
-            erros.append("Quantidade de volumes deve ser maior que zero")
-        if alt <= 0 or larg <= 0 or comp <= 0:
-            erros.append("Dimensões devem ser maiores que zero")
-        if peso_total <= 0:
-            erros.append("Peso deve ser maior que zero")
-        if erros:
-            raise ValueError("\n".join(erros))
-
-        c = cnpj_empresa
-        cnpj_fmt = f"{c[:2]}.{c[2:5]}.{c[5:8]}/{c[8:12]}-{c[12:]}"
-        cep_fmt = f"{cep_empresa[:5]}-{cep_empresa[5:]}"
-        lines = [
-            f"CNPJ/CPF: {cnpj_fmt}",
-            f"CEP: {cep_fmt}",
-            f"- VOL: {qtd}",
-            f"- CUBAGEM: {cubagem_total:.6f} m3",
-            f"- PESO: {peso_total:.2f} kg",
-            f"- TOTAL: R$ {valor:.2f}",
-            f"{qtd} x Volume fornecedor - {peso_caixa:.3f} kg - {cubagem_unit:.6f} m3 - {int(alt)}x{int(larg)}x{int(comp)}",
-        ]
-        return "\n".join(lines), cep_forn
-
-    def fornecedor_cotar(self, form: dict) -> dict:
-        import re
-        bloqueio = self._gate("cotacao")
-        if bloqueio:
-            return bloqueio
-        try:
-            texto, cep_forn = self._montar_romaneio_fornecedor(form or {})
-        except ValueError as exc:
-            return {"erro": str(exc)}
-        cnpj_forn = re.sub(r"\D", "", str((form or {}).get("cnpj", "")))
-        return self.cotacao_iniciar(texto, cnpj_remetente=cnpj_forn, cep_origem=cep_forn)
 
     def abrir_app(self) -> dict:
         if self._window is not None:
