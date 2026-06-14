@@ -198,7 +198,7 @@ jobs:
           if ($ok) {
             Write-Host "WebView2 bootstrapper baixado: $((Get-Item $dest).Length) bytes"
           } else {
-            Write-Warning "Nao foi possivel baixar o WebView2 bootstrapper. O instalador seguira sem ele (Win11 ja possui o runtime; Win10 podera precisar instala-lo manualmente)."
+            throw "Nao foi possivel baixar o WebView2 bootstrapper apos 3 tentativas. A UI roda em WebView2; publicar um instalador sem o bootstrapper deixaria Win10/imagens corporativas sem runtime e sem como iniciar a UI nova. Abortando o release."
           }
 
       - name: Run build.bat (official flow)

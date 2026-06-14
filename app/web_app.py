@@ -361,11 +361,21 @@ class StartupMixin:
         except Exception as exc:
             return {"ok": False, "erro": str(exc)}
         if ok:
+            # restart_app() lança o _apply_update.bat e chama sys.exit(0); mas este
+            # método roda numa thread do bridge do pywebview, onde sys.exit encerra só
+            # a thread, não o processo. O .bat espera ESTE PID terminar para copiar os
+            # arquivos — sem encerrar o processo, o update trava em "Reiniciando…".
             try:
-                restart_app()
+                restart_app()  # lança o .bat
+            except SystemExit:
+                pass           # o sys.exit(0) interno não mata o processo aqui
             except Exception:
                 pass
-            return {"ok": True}
+            try:
+                self._teardown()  # fecha Chrome/Playwright antes de sair
+            except Exception:
+                pass
+            os._exit(0)  # encerra o PROCESSO inteiro -> o .bat aplica e reinicia
         return {"ok": False, "erro": "Não foi possível aplicar a atualização agora."}
 
     def startup_empresas(self) -> list:
@@ -530,16 +540,38 @@ class RastreioMixin:
             })
 
         try:
+            from usage_reporter import report_tracking_started, report_tracking_finished
+        except Exception:
+            def report_tracking_started(*a, **k):
+                pass
+
+            def report_tracking_finished(*a, **k):
+                pass
+
+        try:
+            report_tracking_started(metadata={"total": len(notas_track)})
+        except Exception:
+            pass
+
+        try:
             resultados = await rastrear_multiplas(notas_track, callback=_cb)
             entregues = sum(1 for r in resultados if getattr(r, "entregue", False))
             com_ss = sum(1 for r in resultados if getattr(r, "screenshot_path", ""))
             self._emit("rastreio_finished", {
                 "total": len(resultados), "entregues": entregues, "screenshots": com_ss,
             })
+            try:
+                report_tracking_finished("ok", metadata={"total": len(resultados), "entregues": entregues})
+            except Exception:
+                pass
         except Exception as exc:
             self._emit("rastreio_finished", {
                 "total": 0, "entregues": 0, "screenshots": 0, "erro": str(exc),
             })
+            try:
+                report_tracking_finished("error", metadata={"erro": type(exc).__name__})
+            except Exception:
+                pass
         finally:
             self._rastreando = False
 
@@ -718,6 +750,11 @@ class RomaneioMixin:
             "volumes": len(pedidos),
         })
         self._romaneio_texto = texto
+        try:
+            from usage_reporter import report_romaneio_processed
+            report_romaneio_processed("ok", metadata={"pedidos": len(pedidos)})
+        except Exception:
+            pass
         return {
             "ok": True, "texto": texto, "arquivo": Path(arq).name,
             "pedidos": len(pedidos), "destino": destino,
@@ -888,6 +925,12 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin)
         base = len(self._notas)
         self._notas.extend(novas)
         cards = [nota_card(base + i + 1, nf) for i, nf in enumerate(novas)]
+        if novas:
+            try:
+                from usage_reporter import report_nfe_imported
+                report_nfe_imported("ok", metadata={"quantidade": len(novas)})
+            except Exception:
+                pass
         return {"cards": cards, "erros": erros, "total_notas": len(self._notas)}
 
     def abrir_externo(self, alvo: str) -> dict:
