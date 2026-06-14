@@ -150,6 +150,13 @@ class ConfigMixin:
             ok = False
         return {"ok": ok, "tema": modo, "tema_efetivo": _resolver_tema_efetivo(modo)}
 
+    @staticmethod
+    def _norm_ufs(value) -> list:
+        """Normaliza ufs_atendidas: aceita lista OU string separada por vírgula
+        (configs antigas guardam "SP,RS"). Retorna UFs em maiúsculas, sem vazios."""
+        items = value.split(",") if isinstance(value, str) else (value or [])
+        return [str(x).strip().upper() for x in items if str(x).strip()]
+
     def config_get(self) -> dict:
         cfg = _load_config(self._config_path)
         fb = cfg.get("fretio", {}) or {}
@@ -162,7 +169,7 @@ class ConfigMixin:
             carriers.append({
                 "nome": nome,
                 "habilitado": bool(sec.get("habilitado", False)),
-                "ufs_atendidas": [str(x).upper() for x in (sec.get("ufs_atendidas", []) or [])],
+                "ufs_atendidas": self._norm_ufs(sec.get("ufs_atendidas")),
                 "campos": [
                     {
                         "key": k, "label": lbl, "tipo": tp,
@@ -252,7 +259,7 @@ class ConfigMixin:
             if "habilitado" in data:
                 t["habilitado"] = bool(data["habilitado"])
             if "ufs_atendidas" in data:
-                t["ufs_atendidas"] = [str(x).upper() for x in (data.get("ufs_atendidas") or [])]
+                t["ufs_atendidas"] = self._norm_ufs(data.get("ufs_atendidas"))
 
         return {"ok": self._write_config(mut)}
 
@@ -362,13 +369,30 @@ class StartupMixin:
         return {"ok": False, "erro": "Não foi possível aplicar a atualização agora."}
 
     def startup_empresas(self) -> list:
+        # Semeia a config por empresa a partir de um CONFIG.toml legado (raiz) em
+        # upgrades, ANTES de listar — senão a lista vem vazia e o usuário perderia
+        # as credenciais existentes. Idempotente (no-op se já houver empresas).
+        try:
+            cc._migrar_config_se_necessario()
+        except Exception:
+            pass
         return cc._listar_empresas()
 
     def startup_criar_empresa(self, nome: str) -> dict:
-        nome = str(nome or "").strip()
-        if not nome:
-            return {"ok": False, "erro": "Informe um nome para a empresa."}
-        if nome in cc._listar_empresas():
+        import re
+        # Sanitiza separadores/reservados (espelha o seletor Qt antigo) antes de
+        # criar a pasta, e rejeita nomes que escapem de empresas/ (path traversal).
+        nome = re.sub(r'[<>:"/\\|?*]', "_", str(nome or "").strip())
+        if not nome or nome in (".", ".."):
+            return {"ok": False, "erro": "Informe um nome válido para a empresa."}
+        try:
+            dest = cc._empresa_config_path(nome).resolve()
+            if cc._empresas_dir().resolve() not in dest.parents:
+                return {"ok": False, "erro": "Nome de empresa inválido."}
+        except Exception:
+            return {"ok": False, "erro": "Nome de empresa inválido."}
+        # Duplicata case-insensitive (o filesystem do Windows não diferencia caixa).
+        if nome.lower() in {e.lower() for e in cc._listar_empresas()}:
             return {"ok": False, "erro": "Já existe uma empresa com esse nome."}
         try:
             cc._criar_config_empresa_vazia(nome)
@@ -390,6 +414,18 @@ class StartupMixin:
         empresa = str(empresa or "").strip()
         if not empresa:
             return {"ok": False, "erro": "Empresa inválida."}
+        # Trocar de empresa reusa a mesma instância Api (navegação por load_url),
+        # então encerra a sessão/loop da empresa anterior e zera o estado em memória
+        # — senão a cotação/rastreio da empresa B reusaria a sessão/credenciais da A
+        # (e o dashboard/NF-e vazaria entre empresas).
+        try:
+            self._teardown()
+        except Exception:
+            pass
+        self._notas = []
+        self._romaneios = []
+        self._last_cotacao = []
+        self._romaneio_texto = ""
         self._empresa = empresa
         self._config_path = cc._empresa_config_path(empresa)
         self._versao = _carregar_versao()
@@ -560,6 +596,12 @@ class CotacaoMixin:
         bloqueio = self._gate("cotacao")
         if bloqueio:
             return bloqueio
+        # Romaneio colado (sem cnpj_remetente) também passa pelo gate "romaneio";
+        # cotação de fornecedor/FOB (cnpj_remetente preenchido) fica só sob "cotacao".
+        if not str(cnpj_remetente or "").strip():
+            bloqueio_rom = self._gate("romaneio")
+            if bloqueio_rom:
+                return bloqueio_rom
         with self._op_lock:
             if self._cotando:
                 return {"erro": "Já existe uma cotação em andamento"}
@@ -1007,6 +1049,46 @@ def _run_dev(args) -> None:
     webview.start()
 
 
+def _webview2_runtime_present() -> bool:
+    """True se o runtime do Edge WebView2 está instalado (mesma checagem do
+    instalador Inno: EdgeUpdate Clients\\{F3017226-...} 'pv' em HKLM/HKCU).
+    Fail-open: qualquer erro assume PRESENTE, para nunca bloquear o boot por engano."""
+    if os.name != "nt":
+        return True
+    try:
+        import winreg
+        client = r"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+        candidatos = (
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"),
+            (winreg.HKEY_LOCAL_MACHINE, client),
+            (winreg.HKEY_CURRENT_USER, client),
+        )
+        for hive, sub in candidatos:
+            try:
+                with winreg.OpenKey(hive, sub) as key:
+                    pv, _ = winreg.QueryValueEx(key, "pv")
+                    if pv:
+                        return True
+            except OSError:
+                continue
+        return False
+    except Exception:
+        return True  # fail-open: nunca bloquear o boot por erro na checagem
+
+
+def _aviso_webview2_ausente() -> None:
+    msg = (
+        "O Fretio precisa do componente Microsoft Edge WebView2 Runtime, que não "
+        "está instalado neste computador.\n\nInstale o WebView2 Runtime (Evergreen) "
+        "e abra o Fretio novamente:\nhttps://go.microsoft.com/fwlink/p/?LinkId=2124703"
+    )
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, msg, "Fretio — WebView2 necessário", 0x10)
+    except Exception:
+        print(msg)
+
+
 def _run_producao() -> None:
     """Produção: partida de processo + tela de partida (licença/versão/update/empresa)."""
     from app_bootstrap import run_process_startup
@@ -1019,6 +1101,13 @@ def _run_producao() -> None:
         report_app_started()
     except Exception:
         pass
+
+    # Cliente que atualizou in-app (Qt->WebView2) sem o runtime WebView2: abrir a
+    # janela daria tela em branco. Avisa com instruções e não inicia, em vez de
+    # falhar mudo. Só em build empacotado (frozen); em dev nunca bloqueia.
+    if getattr(sys, "frozen", False) and not _webview2_runtime_present():
+        _aviso_webview2_ausente()
+        return
 
     api = Api()
     window = webview.create_window(
