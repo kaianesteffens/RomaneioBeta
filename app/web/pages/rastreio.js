@@ -5,6 +5,13 @@
 (function () {
   const cards = {}; // chave -> elemento do card
 
+  // Estado de rastreamento por sessão (sobrevive à navegação). Os cards em si são
+  // recarregados do backend (nfe_cards); aqui guardamos só os resultados e a UI.
+  // tracking = há um rastreamento DESTA tela em curso cujos eventos nos interessam.
+  function st(app) {
+    return app.state.rastreio || (app.state.rastreio = { results: {}, progress: "", screens: false, tracking: false });
+  }
+
   function cardHTML(c) {
     const F = window.Fmt;
     return `
@@ -68,10 +75,14 @@
 
   async function rastrear(app, chaves) {
     setProgresso("Iniciando rastreamento…");
+    st(app).progress = "Iniciando rastreamento…";
     const bt = document.getElementById("rastTrack");
     if (bt) bt.disabled = true;
     const res = await (await app.api()).rastreio_iniciar(chaves || null);
-    if (res && res.erro) { app.toast(res.erro); setProgresso(""); atualizarBotoes(); }
+    if (res && res.erro) { app.toast(res.erro); setProgresso(""); st(app).progress = ""; atualizarBotoes(); return; }
+    // Dono só após o backend aceitar (evita reter o dono num rastreio rejeitado).
+    app.beginOp("rastreio");
+    st(app).tracking = true;
   }
 
   function limpar(app) {
@@ -81,7 +92,40 @@
     setProgresso("");
     document.getElementById("rastScreens").hidden = true;
     atualizarBotoes();
+    const s = st(app); s.results = {}; s.progress = ""; s.screens = false; s.tracking = false;
+    // A coroutine de rastreio NÃO é cancelada pelo backend (rastreio_limpar só zera
+    // _notas), então libera o dono p/ os eventos em voo não voltarem a esta tela e
+    // ressuscitarem o estado já limpo (tracking=false já os ignora se ficarmos aqui).
+    if (app.opOwners.rastreio === app.page) app.opOwners.rastreio = null;
     app.api().then((a) => a.rastreio_limpar());
+  }
+
+  // Recarrega as NF-e importadas (backend = fonte da verdade) e re-aplica os
+  // resultados de rastreamento desta sessão. Chamado no render para os cards e o
+  // status sobreviverem à navegação para outra tela e volta (Codex P2).
+  async function reidratar(app) {
+    const a = await app.api();
+    if (!a.nfe_cards) return;
+    let res;
+    try { res = await a.nfe_cards(); } catch (e) { return; }
+    const box = document.getElementById("rastCards");
+    if (!box) return;  // saiu da tela enquanto carregava
+    const lista = (res && res.cards) || [];
+    if (lista.length) {
+      // Reconstrói do zero (não insere sobre o que já existe) — evita cards
+      // duplicados se uma seleção/render concorrente já populou o box.
+      box.innerHTML = "";
+      for (const k in cards) delete cards[k];
+      for (const c of lista) {
+        box.insertAdjacentHTML("afterbegin", cardHTML(c));
+        cards[c.chave] = box.querySelector(`.nfe-card[data-chave="${CSS.escape(c.chave)}"]`);
+      }
+      atualizarBotoes();
+    }
+    const s = st(app);
+    for (const chave in s.results) aplicarResultado(chave, s.results[chave]);
+    if (s.progress) setProgresso(s.progress);
+    if (s.screens) { const b = document.getElementById("rastScreens"); if (b) b.hidden = false; }
   }
 
   function aplicarResultado(chave, r) {
@@ -129,7 +173,9 @@
         </div>
         <div class="rast-cards" id="rastCards">${placeholder()}</div>`;
 
-      view.addEventListener("click", (e) => {
+      // Delegação no container de cards (recriado a cada render) — evita acumular
+      // listeners no #view a cada visita à tela.
+      $("#rastCards", view).addEventListener("click", (e) => {
         const el = e.target.closest("[data-open]");
         if (el) { app.api().then((a) => a.abrir_externo(el.getAttribute("data-open"))); }
       });
@@ -137,28 +183,40 @@
       $("#rastTrack", view).addEventListener("click", () => rastrear(app, null));
       $("#rastClear", view).addEventListener("click", () => limpar(app));
       $("#rastScreens", view).addEventListener("click", () => app.api().then((a) => a.abrir_screenshots()));
+
+      reidratar(app);
     },
 
     onEvent(evt, app) {
+      const s = st(app);
       switch (evt.event) {
         case "rastreio_progress": {
+          if (!s.tracking) break;  // operação abandonada (Limpar): ignora eventos em voo
           const p = evt.payload || {};
-          setProgresso(`Rastreando… ${p.indice}/${p.total}`);
+          s.progress = `Rastreando… ${p.indice}/${p.total}`;
+          if (p.chave) s.results[p.chave] = p.resultado;
+          setProgresso(s.progress);
           aplicarResultado(p.chave, p.resultado);
           break;
         }
         case "rastreio_finished": {
+          if (!s.tracking) break;
           const p = evt.payload || {};
-          setProgresso(`Rastreamento concluído: ${p.entregues || 0}/${p.total || 0} entregue(s)` +
-            (p.screenshots ? ` — ${p.screenshots} screenshot(s)` : ""));
+          s.progress = `Rastreamento concluído: ${p.entregues || 0}/${p.total || 0} entregue(s)` +
+            (p.screenshots ? ` — ${p.screenshots} screenshot(s)` : "");
+          s.screens = !!p.screenshots;
+          s.tracking = false;
+          setProgresso(s.progress);
           atualizarBotoes();
-          if (p.screenshots) document.getElementById("rastScreens").hidden = false;
+          if (p.screenshots) { const b = document.getElementById("rastScreens"); if (b) b.hidden = false; }
           if (p.erro) app.toast("Erro no rastreamento: " + p.erro);
           break;
         }
         case "chrome_missing":
           app.toast((evt.payload && evt.payload.texto) || "Google Chrome não encontrado");
           setProgresso("");
+          s.progress = "";
+          s.tracking = false;
           atualizarBotoes();
           break;
       }
