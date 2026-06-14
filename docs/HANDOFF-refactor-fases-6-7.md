@@ -8,7 +8,7 @@
 
 - Branch de trabalho: **`refactor/codebase-cleanup`** (criada a partir de `master`).
   `master` está **intacto** e **nada foi pushed**. Trabalhe nesta branch.
-- Estado: **25 commits**, **771 testes verdes**, pacote `app/cotacao/` **pyflakes-limpo**.
+- Estado: **27 commits**, **775 testes verdes**, pacote `app/cotacao/` **pyflakes-limpo**.
 - O app foi migrado de PySide6 para **UI web** (pywebview/WebView2): shell em
   `app/web_app.py` + `app/web/*` (HTML/CSS/JS). Backend Python intacto.
 - Memória do projeto: `refactor-codebase-cleanup` (resumo) e `ui-web-migration`.
@@ -42,6 +42,8 @@
 | `5e71a8f` | 7 passo 1 | Extrai `CotacaoMixin` (4º delegate) |
 | `53ad54b` | 7 passo 1 | Extrai `RomaneioMixin` (5º delegate — split completo) |
 | `5b4283b` | 7 passo 3 | Guardas de concorrência (`_rastreando` + lock thread-safe) |
+| `1e64e98` | 7 passo 2 | Apresentação sai da ponte p/ `web_presenters.py` |
+| `193b509` | 6 passo 4 | Colapsa 4 cópias do poll de CEP-autocomplete do TRD |
 
 **Fase 6 passos 1 e 3 = CONCLUÍDOS.** Passo 2 = núcleo seguro feito (registry +
 3 consumidores deduplicados + parity test). Falta o que está marcado abaixo
@@ -114,17 +116,24 @@ Já feito: `_finalizar` no `_processar_resultado` (`ecd7d6d`). Falta:
    `error_context` reexportam as funções (compat). Teste por-padrão:
    `test_error_classifiers.py` (+ identidade de fonte única).
 
-4. **Deduplicação de providers** (protegido por `test_provider_regressions.py` — mas
-   verifique **cópia por cópia** que são byte-idênticas antes de unificar; muitas têm
-   variações sutis por transportadora):
-   - Loop de auto-complete de CEP (TRD ×4) → helper compartilhado.
-   - Parse de R$/prazo (Rodonaves ×4, COOPEX/EUCATUR) → helper em `provider_utils.py`.
-   - JS de native-setter (~12 cópias) → helper em `provider_utils.py`.
-   - **NÃO** toque nos blocos de captcha/CDP/Turnstile nem em timings/seletores (ver DO NOT TOUCH).
+4. **[PARCIAL] Deduplicação de providers**. Auditoria (read-only) feita: as "duplicações"
+   são em grande parte **divergentes por provider** ou intra-arquivo, NÃO compartilhadas.
+   - **FEITO (`193b509`)**: loop de auto-complete de CEP do TRD (4 cópias byte-idênticas →
+     `TRDProvider._aguardar_cep_cidade_entrega`, golden `test_trd_cep_autocomplete.py`).
+   - **DEIXADO QUIETO (recomendação da auditoria, baixo valor/alto risco)**: parse de R$/prazo —
+     só o **rodonaves** repete (e a regex de prazo varia `|day`; é o provider mais frágil,
+     parsing de resultado, sem verificação ao vivo). `agex`/`translovato`/`braspress` têm regex
+     DIVERGENTES; `eucatur`/`coopex` são outra família (XML SSW + prazo por data). Native-setter
+     JS (~12 cópias) NÃO é byte-idêntico (2 estilos) e várias cópias ficam em zonas CDP frágeis;
+     `provider_utils.py` já tem os conversores numéricos. **Não unificar sem fixture/verificação real.**
+   - **NÃO** toque em captcha/CDP/Turnstile, JS SSW `ce2()/cep()`, nem `trd.py:782-794` (máscara SSW char-a-char).
 
-5. **Unificar COOPEX e EUCATUR** num `SswProvider` base (~95% idênticos) parametrizado
-   por nome/wait/cuba-grouping, adotando o `_cleanup_step` seguro do EUCATUR. Mantenha
-   nomes de campo e funções JS de trigger **byte-idênticos** (ver DO NOT TOUCH).
+5. **[ADIADO — sessão dedicada] Unificar COOPEX e EUCATUR** num `SswProvider` base. As perguntas
+   1 e 2 estão RESOLVIDAS (adotar volumes-overwrite da COOPEX; rejeitar CPF cedo). MAS: é o código
+   mais frágil do projeto (campos SSW `f2/f4/cuba1..11`, JS `ce2/cep/pag/f_c/sim`, todos DO NOT TOUCH)
+   e SEM cobertura de teste de portal. Exige golden tests dos dois providers (result-text + cuba +
+   coteir) + verificação no portal real ANTES de extrair a base. Não fazer "às cegas".
+   Parametrizar por nome/wait/cuba, adotando o `_cleanup_step` seguro do EUCATUR; campos/JS byte-idênticos.
    - **Pergunta em aberto a resolver antes**: a lógica de cuba diverge — COOPEX agrupa
      por dimensão, EUCATUR expande direto. Isso é regra intencional por carrier ou drift
      acidental? Pode mudar a cotação de romaneios multi-caixa. Decida antes de unificar.
@@ -157,19 +166,23 @@ Já feito: teardown determinístico (`c0f5138`). Falta:
    - **Resíduo p/ Fase 7 passo 2**: `_montar_romaneio_fornecedor` (hoje em `RomaneioMixin`) é
      apresentação e deveria virar formatter de domínio reutilizável (ver passo 2 abaixo).
 
-2. **Mover lógica de apresentação para fora da ponte**: `_nota_card`,
-   `_validar_local_entrega`, `_montar_romaneio_fornecedor` → um formatter de domínio
-   (ex.: módulo de romaneio/extrator_nfe) reutilizado. **Pin o formato FOB com golden
-   test antes** (o char test já cobre o formato exato — não mude a string sem atualizar).
-   - Quirk conhecido (caracterizado, decida se corrige): o TOTAL do romaneio FOB sai
-     `R$ 1234.56` (ponto, sem milhar) em vez de `R$ 1.234,56`. O parser aceita ambos, então
-     é cosmético — só corrija com cuidado para não quebrar o handoff.
+2. **[CONCLUÍDO — `1e64e98`] Mover lógica de apresentação para fora da ponte**: `nota_card`,
+   `validar_local_entrega`, `montar_romaneio_fornecedor` (+ `obter_cnpj/cep_empresa`) movidos
+   para `app/web_presenters.py` (funções puras). web_app reexporta/delega; `_montar_romaneio_fornecedor`
+   virou wrapper fino (carrega config + delega). Formato FOB idêntico (char serializers verdes).
+   - Quirk conhecido (mantido, caracterizado): o TOTAL do romaneio FOB sai `R$ 1234.56` (ponto,
+     sem milhar) em vez de `R$ 1.234,56`. O parser aceita ambos — cosmético, NÃO corrigido.
 
 3. **[CONCLUÍDO — `5b4283b`] Guardas de concorrência**: guarda `_rastreando` (espelha `_cotando`)
    + `self._op_lock` torna o check-and-set de ambas as flags atômico; a flag é liberada em todo
    caminho de falha e no `finally` das coroutines. Teste: `test_web_app_concurrency_guards.py`.
 
-4. **Aposentar o contrato legado** — só DEPOIS de migrar todos os providers:
+4. **[BLOQUEADO] Aposentar o contrato legado** — só DEPOIS de migrar todos os providers. Auditado:
+   **translovato** ainda está no caminho legado `coteir`, e os outros 7 só fazem
+   `return await super().cotar(request)` → cai em `coteir` via `ProviderBase`. Logo o fallback
+   `coteir` + `cotacao_legada_to_quote_response` (`base.py`) é **load-bearing** e NÃO pode ser
+   removido com segurança agora. Pré-requisito: dar um `cotar` próprio à translovato E reescrever
+   a lógica real de cada provider p/ consumir `QuoteRequest` direto. Detalhes abaixo:
    - **Pergunta em aberto**: quantos dos 8 providers já aceitam um `cotar()` com forma
      `QuoteRequest`? Faça uma auditoria por-provider. Enquanto houver provider no caminho
      legado, **mantenha** o fallback `coteir` + `cotacao_legada_to_quote_response`
@@ -180,11 +193,13 @@ Já feito: teardown determinístico (`c0f5138`). Falta:
    - **NÃO** renomeie `coteir` (ver DO NOT TOUCH) — `base.cotar` despacha por esse nome
      exato nos 8 providers; rename só em PR atômico dedicado, com a regressão verde.
 
-5. **Limpeza do frontend** (`app/web/`): de-duplicar máscaras de CNPJ/CEP e o ciclo de
-   vida do driver de cotação em helpers compartilhados; fazer `window.Pages` o registro
-   único; consolidar `$`/`apiBridge`/`toast` num core carregado primeiro (hoje `app.js`
-   carrega por último — funciona porque `$`/`apiBridge` são `const` de escopo global de
-   script clássico, mas é frágil; mover para `format.js` que carrega primeiro).
+5. **[ADIADO — verificação visual] Limpeza do frontend** (`app/web/`): de-duplicar máscaras de
+   CNPJ/CEP e o ciclo de vida do driver de cotação em helpers compartilhados; fazer `window.Pages`
+   o registro único; consolidar `$`/`apiBridge`/`toast` num core carregado primeiro (hoje `app.js`
+   carrega por último — funciona porque `$`/`apiBridge` são `const` de escopo global de script
+   clássico, mas é frágil; mover para `format.js` que carrega primeiro).
+   **Sem cobertura de teste Python** — fazer com a skill `run-romaneio` (web_shot por página) p/
+   verificação visual a cada mudança. Não fazer às cegas.
 
 ---
 
