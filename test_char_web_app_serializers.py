@@ -229,14 +229,34 @@ def test_char_nota_card_full_shape():
 
 
 def test_char_nota_card_chave_fallback_when_no_chave_acesso():
-    # When chave_acesso is empty, chave falls back to "nf-{indice}-{numero}".
+    # When chave_acesso is empty, chave falls back to "nf-{numero}" (NO index):
+    # the tracking callback can't see the card index, so the key must not depend
+    # on it — see test_nota_card_chave_matches_rastreio_callback below.
     nf = FakeNF(numero="777", transportadora_nome="DESCONHECIDA LTDA")
     card = web_app.nota_card(5, nf)
-    assert card["chave"] == "nf-5-777"
+    assert card["chave"] == "nf-777"
     # Unknown carrier name (not in mapping) -> transp_display uses the raw name;
     # transp_bloco falls back to the first word of the name, uppercased.
     assert card["header"].startswith("[5] NF-e 777 — DESCONHECIDA LTDA")
     assert "TRANSPORTADORA: DESCONHECIDA" in card["bloco_licitacao"]
+
+
+def test_nota_card_chave_matches_rastreio_callback():
+    # REGRESSION (PR #85, P3): for an NF-e without a parseable chave_acesso, the
+    # card key (data-chave / `cards` map in rastreio.js) and the key emitted in
+    # rastreio_progress.chave MUST be identical, or the status never reaches the
+    # card. Both sides derive it from web_presenters.chave_nota — assert they
+    # agree, regardless of the card index.
+    from web_presenters import chave_nota
+
+    nf = FakeNF(numero="777", transportadora_nome="DESCONHECIDA LTDA")
+    card = web_app.nota_card(5, nf)
+    assert card["chave"] == chave_nota(nf) == "nf-777"
+
+    # NF-e WITH a valid 44-digit chave_acesso: both sides use it verbatim.
+    nf2 = FakeNF(numero="888", chave_acesso="A" * 44)
+    card2 = web_app.nota_card(2, nf2)
+    assert card2["chave"] == chave_nota(nf2) == "A" * 44
 
 
 def test_char_nota_card_security_cnpj_never_surfaced():
