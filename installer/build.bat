@@ -66,6 +66,19 @@ REM ── 2. Instalar dependencias ──────────────�
 echo.
 echo [2/5] Instalando dependencias Python...
 "%PY%" -m pip install --upgrade pip==%PINNED_PIP_VERSION% --quiet --disable-pip-version-check 2>nul
+REM Backend de build (PEP 517) para sdists sem wheel — ex.: proxy_tools (dep do
+REM pywebview, sdist-only). O Python embeddable instala so o pip via get-pip; sem
+REM setuptools no env, o ._pth do embeddable faz a build isolation resolver o
+REM backend contra o env principal (vazio) e o build falha com
+REM "Cannot import 'setuptools.build_meta'". Instalamos setuptools/wheel aqui e
+REM usamos --no-build-isolation no install do lock (abaixo) para buildar o sdist
+REM com o setuptools do proprio env.
+"%PY%" -m pip install setuptools==82.0.1 wheel==0.47.0 --quiet --disable-pip-version-check
+if %ERRORLEVEL% neq 0 (
+    echo ERRO: Falha ao instalar setuptools/wheel ^(backend de build PEP 517^).
+    %FB_PAUSE_CMD%
+    exit /b 1
+)
 if not exist "%REQ_LOCK%" (
     echo ERRO: requirements-lock.txt nao encontrado.
     echo      O build reprodutivel exige o lockfile existente.
@@ -74,7 +87,7 @@ if not exist "%REQ_LOCK%" (
     exit /b 1
 )
 echo      Usando lockfile: %REQ_LOCK%
-"%PY%" -m pip install --no-deps -r "%REQ_LOCK%" --quiet --disable-pip-version-check
+"%PY%" -m pip install --no-deps --no-build-isolation -r "%REQ_LOCK%" --quiet --disable-pip-version-check
 if %ERRORLEVEL% neq 0 (
     echo ERRO: Falha ao instalar dependencias pelo lockfile!
     %FB_PAUSE_CMD%
