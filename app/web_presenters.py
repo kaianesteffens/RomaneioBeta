@@ -13,6 +13,15 @@ import re
 from typing import Any
 
 
+def chave_nota(nf: Any) -> str:
+    """Chave canônica de uma NF-e. Para NF-e cuja chave de acesso de 44 dígitos
+    não é parseável (ex.: DANFE em PDF), cai no número da nota. ESTA é a única
+    fonte da chave: o card (data-chave / mapa `cards` no frontend) e o evento
+    `rastreio_progress.chave` PRECISAM usá-la para casar — senão o status nunca
+    chega ao card. Não inclua o índice: o callback de rastreio não o conhece."""
+    return getattr(nf, "chave_acesso", "") or f"nf-{nf.numero}"
+
+
 def nota_card(indice: int, nf: Any) -> dict:
     """Monta os dados de um card de NF-e (porta de _criar_card_nfe, só texto)."""
     from extrator_nfe import identificar_transportadora, parsear_info_complementar
@@ -93,7 +102,7 @@ def nota_card(indice: int, nf: Any) -> dict:
         "header": header,
         "bloco_licitacao": "\n".join(lic).rstrip(),
         "bloco_entrega": "\n".join(entrega).rstrip(),
-        "chave": getattr(nf, "chave_acesso", "") or f"nf-{indice}-{nf.numero}",
+        "chave": chave_nota(nf),
         "numero": nf.numero,
     }
 

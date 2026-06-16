@@ -33,6 +33,7 @@ import webview  # noqa: E402
 
 import company_config as cc  # noqa: E402
 from web_presenters import (  # noqa: E402
+    chave_nota,
     montar_romaneio_fornecedor,
     nota_card,
     validar_local_entrega,
@@ -508,7 +509,10 @@ class RastreioMixin:
         alvo = self._notas
         if chaves:
             cset = set(chaves)
-            sub = [n for n in self._notas if (getattr(n, "chave_acesso", "") in cset)]
+            # Casa pela chave canônica (chave_nota), não por chave_acesso cru: do
+            # contrário NF-e sem chave de 44 dígitos (cuja chave do frontend é
+            # "nf-<numero>") nunca entrariam no subconjunto selecionado.
+            sub = [n for n in self._notas if chave_nota(n) in cset]
             if sub:
                 alvo = sub
         fut = self._loop.submit(lambda: self._coro_rastreio(list(alvo)))
@@ -530,7 +534,7 @@ class RastreioMixin:
                 "cnpj_emitente": nf.emitente_cnpj,
                 "chave_acesso": nf.chave_acesso,
             })
-            chaves.append(getattr(nf, "chave_acesso", "") or f"nf-{nf.numero}")
+            chaves.append(chave_nota(nf))
 
         def _cb(indice: int, total: int, resultado: Any) -> None:
             chave = chaves[indice - 1] if 0 <= indice - 1 < len(chaves) else ""
