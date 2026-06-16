@@ -122,6 +122,11 @@ def sanitize_error_payload(text: str) -> str:
         sanitized,
     )
     sanitized = re.sub(
+        r"(?<!\d)\d{44}(?!\d)",
+        "[NFE_KEY_REDACTED]",
+        sanitized,
+    )
+    sanitized = re.sub(
         r"\b\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}\b",
         "[CNPJ_REDACTED]",
         sanitized,
@@ -345,19 +350,6 @@ def _get_machine_hash() -> str:
         return sha256(f"{node}|{user}".encode()).hexdigest()[:12]
     except Exception:
         return "unknown"
-
-
-def _get_license_key() -> str:
-    """Lê a chave de licença salva (para identificar o cliente)."""
-    try:
-        f = Path(os.getenv("APPDATA", "")) / "Fretio" / "license.key"
-        if f.exists():
-            key = f.read_text(encoding="utf-8").strip()
-            # Retorna só os primeiros 9 chars para privacidade (FBOT-XXXX)
-            return key[:9] if len(key) > 9 else key
-    except Exception:
-        pass
-    return "?"
 
 
 def _get_saved_license_key() -> str:

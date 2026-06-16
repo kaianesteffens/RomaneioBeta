@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
+from dataclasses import dataclass
 import asyncio
 import re
 import time
 import traceback
 
+from . import deps
 from .common import (
     ResultadoCotacao,
     ProviderCotacaoStatus,
@@ -20,7 +22,6 @@ from .common import (
     provider_progress_from_resultado,
     normalize_provider_progress_status,
     normalize_provider_progress_message,
-    ProviderFactory,
     QuoteResponse,
     quote_request_from_legacy_kwargs,
     quote_response_to_resultado_cotacao,
@@ -43,101 +44,33 @@ from .session_manager import (
     _is_chrome_missing_error,
 )
 from .error_context import build_quotation_error_diagnostic, report_provider_error
-
-
-# ---------------------------------------------------------------------------
-# Helpers para classificação de erros — definidos em escopo de módulo para
-# evitar redefinição a cada chamada da função assíncrona principal.
-# ---------------------------------------------------------------------------
-
-def _is_business_error(detail: str) -> bool:
-    """Detecta erros de negócio (destino não atendido, rota fora de cobertura).
-
-    Esses erros são normais e não devem ser reportados nem gerar retry."""
-    if not detail:
-        return False
-    d = str(detail).lower()
-    patterns = (
-        "destino fora da cobertura",
-        "cepdestino não atendido",
-        "cep destino não atendido",
-        "não atendemos esse cep",
-        "destino possivelmente não atendido",
-        "destino possìvelmente não atendido",
-        "rota não atendida",
-        "cidade de destino",
-        "transportadora não atende",
-        "transportadora n o atende",
-        "cidade de destino n o",
-        "n o atendida",
-        "não atendido",
-        "nao atendido",
-        "fora de cobertura",
-        "fora da cobertura",
-        "não atendemos",
-        "cepnão atendemos",
-        "sem precificação automática no ssw",
-        "sem precificacao automatica no ssw",
-        "não cadastrada",
-        "nao cadastrada",
-        "rota:",
-    )
-    return any(p in d for p in patterns)
-
-
-_TRANSIENT_PATTERNS = (
-    "target page, context or browser has been closed",
-    "target closed",
-    "frame was detached",
-    "net::err_aborted",
-    "net::err_connection",
-    "net::err_name",
-    "net::err_timed_out",
-    "net::err_internet",
-    "net::err_network",
-    "formulário de cotação não carregou",
-    "formulario de cotacao nao carregou",
-    "page.goto",
-    "valor de frete nao encontrado",
-    "valor de frete não encontrado",
-    # Variantes reais retornadas pelos portais ("não foi encontrado", parsing do
-    # resultado falhou, portal não devolveu cotação) — operacionais, não bugs.
-    "valor de frete nao foi encontrado",
-    "valor de frete não foi encontrado",
-    "valor não encontrado no resultado",
-    "valor nao encontrado no resultado",
-    "portal não retornou resultado",
-    "portal nao retornou resultado",
-    # Antifraude / captcha do portal e portal que não terminou de carregar.
-    "recaptcha não resolvido",
-    "recaptcha nao resolvido",
-    "bloqueio antifraude",
-    "jquery não carregou",
-    "jquery nao carregou",
-    "timeout aguardando resultado",
+from .error_classifiers import (
+    _is_business_error,
+    _is_expected_transient_failure,
+    _is_expected_transient_failure_str,
 )
 
 
-def _is_expected_transient_failure(erro: BaseException) -> bool:
-    """Detecta falhas transitórias esperadas de provider que NÃO devem ir para report_error.
+@dataclass(frozen=True)
+class CotacaoOutcome:
+    """Resultado bruto de uma execução de provider em ``_run_cotacao``.
 
-    Timeouts do provider e erros de rede/browser são falhas controladas — não bugs no código."""
-    if isinstance(erro, TimeoutError):
-        return True
-    err_str = str(erro).lower()
-    return any(p in err_str for p in _TRANSIENT_PATTERNS)
+    Substitui a 7-tupla posicional que era desempacotada em
+    ``_processar_resultado``. ``cotacao`` é o retorno do provider
+    (``QuoteResponse``, objeto legado ou ``None``); ``erro`` é a exceção
+    capturada (ou ``None`` em sucesso)."""
+
+    i: int
+    nome: str
+    provider: Any
+    kwargs: dict[str, Any]
+    cotacao: Any = None
+    erro: BaseException | None = None
+    duration_ms: int = 0
 
 
-def _is_expected_transient_failure_str(detail: str) -> bool:
-    """Mesmos critérios de _is_expected_transient_failure, mas para strings de last_error.
-
-    Usado quando o provider capturou a exceção internamente e retornou None."""
-    if not detail:
-        return False
-    d = detail.lower()
-    if "timeout" in d or "timed out" in d:
-        return True
-    return any(p in d for p in _TRANSIENT_PATTERNS)
+# Classificadores de erro (_is_business_error / _is_expected_transient_failure*)
+# foram unificados em error_classifiers.py e importados acima.
 
 
 # ---------------------------------------------------------------------------
@@ -517,7 +450,7 @@ async def _executar_cotacoes_com_dados(
         effective_config,
         contexto="cotacao",
     )
-    provider_factory = ProviderFactory(config=effective_config)
+    provider_factory = deps.ProviderFactory(config=effective_config)
     transportadoras_cfg = effective_config.get("transportadoras", {}) if isinstance(effective_config, dict) else {}
     if not isinstance(transportadoras_cfg, dict):
         transportadoras_cfg = {}
@@ -940,7 +873,7 @@ async def _executar_cotacoes_com_dados(
                     cnpj_dest = cnpj_destinatario
                     descricao_mercadoria = str(acfg.get("descricao_mercadoria", "Mercadoria"))
                     tipo_produto = str(acfg.get("tipo_produto", "Artigos Esportivos"))
-                    # Resolve email with legacy fallback (same logic as _build_agex_kwargs)
+                    # E-mail com fallback: instalações antigas guardavam o login (e-mail) no campo cnpj.
                     email_agex = str(acfg.get("email", "")).strip()
                     if not email_agex:
                         legacy_login = str(acfg.get("cnpj", "")).strip()
@@ -1348,19 +1281,31 @@ async def _executar_cotacoes_com_dados(
                     provider.coteir(**kwargs),
                     timeout=effective_timeout,
                 )
-            return i, nome, provider, kwargs, retorno_provider, None, _duration_ms()
+            return CotacaoOutcome(
+                i=i, nome=nome, provider=provider, kwargs=kwargs,
+                cotacao=retorno_provider, duration_ms=_duration_ms(),
+            )
         except asyncio.TimeoutError:
             last_step = getattr(provider, '_passo_atual', 'desconhecido')
-            return i, nome, provider, kwargs, None, TimeoutError(
-                f"Timeout de {effective_timeout}s na cotação {nome} (passo: {last_step})"
-            ), _duration_ms()
+            return CotacaoOutcome(
+                i=i, nome=nome, provider=provider, kwargs=kwargs,
+                erro=TimeoutError(
+                    f"Timeout de {effective_timeout}s na cotação {nome} (passo: {last_step})"
+                ),
+                duration_ms=_duration_ms(),
+            )
         except asyncio.CancelledError as exc:
             detalhe = str(exc).strip() or "sem detalhe"
-            return i, nome, provider, kwargs, None, RuntimeError(
-                f"Cotação {nome} cancelada: {detalhe}"
-            ), _duration_ms()
+            return CotacaoOutcome(
+                i=i, nome=nome, provider=provider, kwargs=kwargs,
+                erro=RuntimeError(f"Cotação {nome} cancelada: {detalhe}"),
+                duration_ms=_duration_ms(),
+            )
         except Exception as exc:
-            return i, nome, provider, kwargs, None, exc, _duration_ms()
+            return CotacaoOutcome(
+                i=i, nome=nome, provider=provider, kwargs=kwargs,
+                erro=exc, duration_ms=_duration_ms(),
+            )
 
     async def _exec(i: int, nome: str, provider: Any, kwargs: dict[str, Any]):
         is_alfa = nome.upper() == "ALFA"
@@ -1375,13 +1320,10 @@ async def _executar_cotacoes_com_dados(
             return await _run_cotacao(i, nome, provider, kwargs, is_alfa)
 
     def _processar_resultado(res, resultados, falhas_para_retry):
-        """Processa resultado de _exec, retorna (ResultadoCotacao|None, ok: bool)."""
-        nonlocal concluidas
+        """Despacha um CotacaoOutcome para o handler da sua forma de resultado."""
 
-        if not isinstance(res, tuple) or len(res) != 7:
-            msg = f"Executor retornou formato inesperado de resultado: {type(res).__name__}"
-            _log_diag(msg)
-            r = ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=msg)
+        def _finalizar(r):
+            nonlocal concluidas
             concluidas += 1
             resultados.append(r)
             _emitir_progresso(
@@ -1390,11 +1332,22 @@ async def _executar_cotacoes_com_dados(
                 resultado=r,
                 provider_status=provider_progress_from_resultado(r, stage="resultado"),
             )
+
+        if not isinstance(res, CotacaoOutcome):
+            msg = f"Executor retornou formato inesperado de resultado: {type(res).__name__}"
+            _log_diag(msg)
+            r = ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=msg)
+            _finalizar(r)
             return
 
-        _i, nome_task, provider_task, kwargs_task, cotacao, erro, duration_ms = res
+        nome_task = res.nome
+        provider_task = res.provider
+        kwargs_task = res.kwargs
+        cotacao = res.cotacao
+        erro = res.erro
+        duration_ms = res.duration_ms
 
-        if isinstance(erro, BaseException):
+        def _handle_exception():
             erro_str = str(erro)
             # Erros de negócio não devem ser reportados nem gerar retry
             if _is_business_error(erro_str):
@@ -1403,14 +1356,7 @@ async def _executar_cotacoes_com_dados(
                     transportadora=nome_task, status="nao_atendido", detalhes=erro_str,
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
                 return
             tb = ''.join(traceback.format_exception(type(erro), erro, erro.__traceback__))
             _log_diag(f"Erro em cotação {nome_task}: {type(erro).__name__}: {erro}\n{tb}")
@@ -1452,17 +1398,10 @@ async def _executar_cotacoes_com_dados(
                     detalhes=f"{type(erro).__name__}: {erro}",
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
             return
 
-        if erro is not None:
+        def _handle_erro_simples():
             erro_str = str(erro)
             # Erros de negócio não devem ser reportados nem gerar retry
             if _is_business_error(erro_str):
@@ -1471,14 +1410,7 @@ async def _executar_cotacoes_com_dados(
                     transportadora=nome_task, status="nao_atendido", detalhes=erro_str,
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
                 return
             _log_diag(f"Erro em cotação {nome_task}: {erro}")
             if falhas_para_retry is not None:
@@ -1489,17 +1421,11 @@ async def _executar_cotacoes_com_dados(
                     transportadora=nome_task, status="erro", detalhes=str(erro),
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
             return
 
-        if isinstance(cotacao, QuoteResponse):
+        def _handle_quote_response():
+            nonlocal concluidas
             quote_response = cotacao
             if quote_response.duration_ms is None:
                 quote_response.duration_ms = duration_ms
@@ -1578,7 +1504,8 @@ async def _executar_cotacoes_com_dados(
             )
             return
 
-        if cotacao is not None:
+        def _handle_legacy():
+            nonlocal concluidas
             try:
                 transportadora = str(getattr(cotacao, "transportadora", nome_task))
                 valor_frete = float(getattr(cotacao, "valor_frete", 0.0))
@@ -1591,14 +1518,7 @@ async def _executar_cotacoes_com_dados(
                     detalhes=f"Resultado inválido: {parse_exc}",
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
                 return
 
             r = ResultadoCotacao(
@@ -1617,7 +1537,8 @@ async def _executar_cotacoes_com_dados(
                 resultado=r,
                 provider_status=provider_progress_from_resultado(r, stage="resultado"),
             )
-        else:
+
+        def _handle_none():
             detalhe = None
             if provider_task is not None:
                 detalhe = getattr(provider_task, "last_error", None)
@@ -1634,14 +1555,7 @@ async def _executar_cotacoes_com_dados(
                     transportadora=nome_task, status="nao_atendido", detalhes=str(detalhe),
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
                 return
 
             # Falhas transitórias de rede/browser capturadas internamente pelo provider
@@ -1657,14 +1571,7 @@ async def _executar_cotacoes_com_dados(
                         transportadora=nome_task, status="erro", detalhes=str(detalhe),
                         duration_ms=duration_ms,
                     )
-                    concluidas += 1
-                    resultados.append(r)
-                    _emitir_progresso(
-                        concluidas=concluidas,
-                        total=total_cotacoes,
-                        resultado=r,
-                        provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                    )
+                    _finalizar(r)
                 return
 
             # Normaliza a mensagem removendo partes variáveis (ex: paths de diagnóstico TRD)
@@ -1705,14 +1612,24 @@ async def _executar_cotacoes_com_dados(
                     transportadora=nome_task, status="erro", detalhes=str(detalhe),
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
+
+        # Dispatch por forma do resultado. _handle_erro_simples cobre o caminho
+        # defensivo de `erro` truthy não-exceção (nenhum producer de _run_cotacao
+        # gera isso hoje, mas é preservado).
+        if isinstance(erro, BaseException):
+            _handle_exception()
+            return
+        if erro is not None:
+            _handle_erro_simples()
+            return
+        if isinstance(cotacao, QuoteResponse):
+            _handle_quote_response()
+            return
+        if cotacao is not None:
+            _handle_legacy()
+        else:
+            _handle_none()
 
     # ── Rodada 1: executa todas as cotações ──
     falhas_para_retry: list[tuple[str, Any, dict[str, Any]]] = []

@@ -161,10 +161,9 @@ class ExtratorPedidos:
         numero = match.group(1) if match else "N/A"
         logger.debug("_extrair_pedido_pagina: numero=%s", numero)
 
-        # Extrair CNPJ do cliente
         match = CNPJ_CLIENTE_RE.search(texto)
         cnpj = match.group(1) if match else "N/A"
-        logger.debug("_extrair_pedido_pagina: cnpj=%s", cnpj)
+        logger.debug("_extrair_pedido_pagina: cnpj_encontrado=%s", "sim" if match else "nao")
 
         # Extrair local de entrega (da seÃ§Ã£o de ObservaÃ§Ãµes)
         local_entrega = self._extrair_local_entrega(texto)

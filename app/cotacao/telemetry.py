@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 from typing import Any
+import inspect
 
-from .common import *
-from .validation import _normalizar_ufs_atendidas_cached
+from . import deps
+from .common import (
+    KNOWN_CARRIERS,
+    ResultadoCotacao,
+    normalize_carrier_name,
+)
 
 def _quotation_usage_metadata(
     dados: dict[str, Any] | None,
@@ -137,9 +142,9 @@ def _report_quotation_usage_results(
             job_id=job_id,
         )
         finished_status = "ok" if any(getattr(r, "status", "") == "ok" for r in results) else "error"
-        report_quotation_finished(finished_status, duration_ms=duration_ms, metadata=metadata)
+        deps.report_quotation_finished(finished_status, duration_ms=duration_ms, metadata=metadata)
         for provider, payload in carrier_results.items():
-            report_carrier_quotation_result(
+            deps.report_carrier_quotation_result(
                 provider,
                 payload["status"],
                 duration_ms=payload["duration_ms"],

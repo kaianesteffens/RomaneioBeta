@@ -8,6 +8,9 @@ sys.path.insert(0, str(ROOT / "app"))
 sys.path.insert(0, str(ROOT / "app" / "fretio" / "src"))
 
 import cotacao_transportadoras as ct
+from cotacao import deps
+from cotacao import orchestrator as cotacao_orchestrator
+from cotacao import session_manager as cotacao_session_manager
 
 
 def test_cep_helpers_normalize_map_uf_and_filter_supported_states():
@@ -50,7 +53,7 @@ def test_obter_cep_origem_default_applies_remote_override(monkeypatch):
 def test_remote_cep_origem_override_is_used_before_origin_validation(monkeypatch):
     monkeypatch.setattr(ct, "_diag_log_enabled", lambda: False)
     monkeypatch.setattr(
-        ct,
+        cotacao_orchestrator,
         "apply_safe_runtime_overrides",
         lambda config: {
             "romaneio": {"cep_origem": "99740000"},
@@ -69,7 +72,7 @@ def test_remote_cep_origem_override_is_used_before_origin_validation(monkeypatch
         def is_available(self, nome):
             return False
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
 
     dados = {
         "destino_cep": "90010123",
@@ -192,7 +195,7 @@ def test_cubagens_validas_discards_invalid_rows():
 
 
 def test_rodonaves_setup_error_does_not_escape_except_scope(monkeypatch):
-    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
 
     class FakeFactory:
         def __init__(self, config):
@@ -217,7 +220,7 @@ def test_rodonaves_setup_error_does_not_escape_except_scope(monkeypatch):
         def create(self, nome, **kwargs):
             raise RuntimeError("falha fake rodonaves")
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
 
     config = {
         "fretio": {},
@@ -289,10 +292,10 @@ def test_session_lazy_prelogin_runs_for_new_trd_provider(monkeypatch):
 
 def test_eucatur_mais_de_11_volumes_com_cubagem_nao_bloqueia(monkeypatch):
     """Eucatur > 11 volumes deve seguir para o provider quando há cubagem total."""
-    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
     reportados = []
-    monkeypatch.setattr(ct, "report_error_message", lambda *a, **kw: reportados.append(a))
-    monkeypatch.setattr(ct, "report_error", lambda *a, **kw: reportados.append(a))
+    monkeypatch.setattr(deps, "report_error_message", lambda *a, **kw: reportados.append(a))
+    monkeypatch.setattr(deps, "report_error", lambda *a, **kw: reportados.append(a))
     chamadas = []
 
     class FakeEucaturProvider:
@@ -330,7 +333,7 @@ def test_eucatur_mais_de_11_volumes_com_cubagem_nao_bloqueia(monkeypatch):
         def create(self, nome, **kwargs):
             return FakeEucaturProvider()
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
 
     config = {
         "fretio": {},
@@ -364,10 +367,10 @@ def test_eucatur_mais_de_11_volumes_com_cubagem_nao_bloqueia(monkeypatch):
 
 def test_coopex_mais_de_11_volumes_com_cubagem_nao_bloqueia(monkeypatch):
     """COOPEX > 11 volumes deve seguir para o provider quando há cubagem total."""
-    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
     reportados = []
-    monkeypatch.setattr(ct, "report_error_message", lambda *a, **kw: reportados.append(a))
-    monkeypatch.setattr(ct, "report_error", lambda *a, **kw: reportados.append(a))
+    monkeypatch.setattr(deps, "report_error_message", lambda *a, **kw: reportados.append(a))
+    monkeypatch.setattr(deps, "report_error", lambda *a, **kw: reportados.append(a))
     chamadas = []
 
     class FakeCoopexProvider:
@@ -405,7 +408,7 @@ def test_coopex_mais_de_11_volumes_com_cubagem_nao_bloqueia(monkeypatch):
         def create(self, nome, **kwargs):
             return FakeCoopexProvider()
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
 
     config = {
         "fretio": {},
@@ -438,7 +441,7 @@ def test_coopex_mais_de_11_volumes_com_cubagem_nao_bloqueia(monkeypatch):
 
 
 def test_translovato_cotacao_e_enfileirada_com_kwargs_esperados(monkeypatch):
-    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
     chamadas = []
 
     class FakeTranslovatoProvider:
@@ -482,7 +485,7 @@ def test_translovato_cotacao_e_enfileirada_com_kwargs_esperados(monkeypatch):
             assert nome == "translovato"
             return FakeTranslovatoProvider()
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
 
     config = {
         "fretio": {},
@@ -527,7 +530,7 @@ def test_translovato_cotacao_e_enfileirada_com_kwargs_esperados(monkeypatch):
 
 
 def test_translovato_config_incompleta_retorna_resultado_controlado(monkeypatch):
-    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
 
     class FakeFactory:
         def __init__(self, config):
@@ -548,7 +551,7 @@ def test_translovato_config_incompleta_retorna_resultado_controlado(monkeypatch)
         def create(self, nome, **kwargs):
             raise AssertionError("provider incompleto não deveria ser criado")
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
 
     config = {
         "fretio": {},
@@ -579,9 +582,9 @@ def test_translovato_config_incompleta_retorna_resultado_controlado(monkeypatch)
 
 def test_timeout_provider_nao_chama_report_error(monkeypatch):
     """TimeoutError de provider não deve acionar report_error — é falha controlada."""
-    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
     report_error_calls = []
-    monkeypatch.setattr(ct, "report_error", lambda *a, **kw: report_error_calls.append(a))
+    monkeypatch.setattr(deps, "report_error", lambda *a, **kw: report_error_calls.append(a))
 
     class FakeTimeoutProvider:
         nome = "TRD"
@@ -616,7 +619,7 @@ def test_timeout_provider_nao_chama_report_error(monkeypatch):
                 return FakeTimeoutProvider()
             return None
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
 
     config = {
         "fretio": {},
@@ -649,7 +652,7 @@ def test_timeout_provider_nao_chama_report_error(monkeypatch):
 def test_chrome_ausente_gera_no_maximo_um_report(monkeypatch):
     """Chrome ausente deve gerar no máximo 1 report estruturado com event=chrome_missing."""
     reports = []
-    monkeypatch.setattr(ct, "report_provider_error", lambda provider, stage, message, **kw: reports.append((provider, stage, kw)))
+    monkeypatch.setattr(cotacao_session_manager, "report_provider_error", lambda provider, stage, message, **kw: reports.append((provider, stage, kw)))
 
     import fretio.providers.base as base_mod
     monkeypatch.setattr(
@@ -657,7 +660,7 @@ def test_chrome_ausente_gera_no_maximo_um_report(monkeypatch):
         "find_chrome",
         lambda: (_ for _ in ()).throw(FileNotFoundError("Google Chrome nao encontrado. Instale o Chrome para usar o Fretio.")),
     )
-    monkeypatch.setattr(ct, "_kill_orphan_Fretio_chromes", lambda: None)
+    monkeypatch.setattr(cotacao_session_manager, "_kill_orphan_Fretio_chromes", lambda: None)
     monkeypatch.setattr(ct, "_carregar_config", lambda config_path=None: {})
 
     messages_callback = []
@@ -672,8 +675,8 @@ def test_chrome_ausente_gera_no_maximo_um_report(monkeypatch):
 def test_chrome_ausente_na_cotacao_reporta_uma_vez(monkeypatch):
     reports = []
     create_calls = []
-    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
-    monkeypatch.setattr(ct, "report_provider_error", lambda provider, stage, message, **kw: reports.append((provider, stage, kw)))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(cotacao_orchestrator, "report_provider_error", lambda provider, stage, message, **kw: reports.append((provider, stage, kw)))
 
     class FakeFactory:
         def __init__(self, config):
@@ -693,7 +696,7 @@ def test_chrome_ausente_na_cotacao_reporta_uma_vez(monkeypatch):
             create_calls.append(nome)
             raise FileNotFoundError("Google Chrome nao encontrado. Instale o Chrome para usar o Fretio.")
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
 
     dados = {
         "destino_cep": "90010123",
@@ -724,14 +727,14 @@ def test_chrome_ausente_na_cotacao_reporta_uma_vez(monkeypatch):
 
 def test_trd_retornou_none_sem_diag_path_nao_reporta_duas_vezes(monkeypatch):
     """Normalização da mensagem TRD evita flood por path de diagnóstico variável."""
-    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
     mensagens_reportadas = []
 
     def fake_report(msg, context=""):
         mensagens_reportadas.append(msg)
 
-    monkeypatch.setattr(ct, "report_error_message", fake_report)
-    monkeypatch.setattr(ct, "report_error", lambda *a, **kw: None)
+    monkeypatch.setattr(deps, "report_error_message", fake_report)
+    monkeypatch.setattr(deps, "report_error", lambda *a, **kw: None)
 
     class FakeTRDProvider:
         nome = "TRD"
@@ -770,7 +773,7 @@ def test_trd_retornou_none_sem_diag_path_nao_reporta_duas_vezes(monkeypatch):
                 return FakeTRDProvider()
             return None
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
 
     config = {
         "fretio": {},
@@ -816,10 +819,10 @@ def test_erros_fake_nao_aparecem_em_fluxo_producao():
 def test_rodonaves_transient_errors_viram_falha_controlada(monkeypatch):
     """Erros transitórios da Rodonaves (timeout, page closed, frame detached, ERR_ABORTED)
     capturados em last_error NÃO devem ser reportados à API e devem gerar retry."""
-    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
     reportados = []
-    monkeypatch.setattr(ct, "report_error_message", lambda *a, **kw: reportados.append(a))
-    monkeypatch.setattr(ct, "report_error", lambda *a, **kw: reportados.append(a))
+    monkeypatch.setattr(deps, "report_error_message", lambda *a, **kw: reportados.append(a))
+    monkeypatch.setattr(deps, "report_error", lambda *a, **kw: reportados.append(a))
 
     mensagens_transient = [
         "Page.goto Timeout 15000ms para https://cliente.rte.com.br/?showLogin=true",
@@ -870,7 +873,7 @@ def test_rodonaves_transient_errors_viram_falha_controlada(monkeypatch):
                     return FakeRodonavesProvider()
                 return None
 
-        monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+        monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
         reportados.clear()
 
         config = {
@@ -904,10 +907,10 @@ def test_rodonaves_transient_errors_viram_falha_controlada(monkeypatch):
 
 def test_copex_timeout_aguardando_resultado_falha_controlada(monkeypatch):
     """Timeout no passo aguardando_resultado da Copex vira falha controlada sem report_error."""
-    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
     report_calls = []
-    monkeypatch.setattr(ct, "report_error", lambda *a, **kw: report_calls.append(a))
-    monkeypatch.setattr(ct, "report_error_message", lambda *a, **kw: report_calls.append(a))
+    monkeypatch.setattr(deps, "report_error", lambda *a, **kw: report_calls.append(a))
+    monkeypatch.setattr(deps, "report_error_message", lambda *a, **kw: report_calls.append(a))
 
     class FakeCopexTimeout:
         nome = "COOPEX"
@@ -944,7 +947,7 @@ def test_copex_timeout_aguardando_resultado_falha_controlada(monkeypatch):
                 return FakeCopexTimeout()
             return None
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
 
     config = {
         "fretio": {},
@@ -975,12 +978,12 @@ def test_copex_timeout_aguardando_resultado_falha_controlada(monkeypatch):
 
 def test_quotation_jobs_client_falha_nao_altera_cotacao(monkeypatch):
     """Falha em create_quotation_job não deve bloquear nem alterar a cotação."""
-    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
 
     def _raise(*a, **kw):
         raise RuntimeError("Conexão com servidor de jobs falhou")
 
-    monkeypatch.setattr(ct, "create_quotation_job", _raise)
+    monkeypatch.setattr(deps, "create_quotation_job", _raise)
 
     class FakeOKProvider:
         nome = "TRD"
@@ -1016,7 +1019,7 @@ def test_quotation_jobs_client_falha_nao_altera_cotacao(monkeypatch):
                 return FakeOKProvider()
             return None
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
 
     config = {
         "fretio": {},
@@ -1046,7 +1049,7 @@ def test_quotation_jobs_client_falha_nao_altera_cotacao(monkeypatch):
 
 
 def test_orquestrador_faz_fallback_para_coteir_quando_cotar_request_falha(monkeypatch):
-    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
 
     class FakeFallbackProvider:
         nome = "TRD"
@@ -1085,7 +1088,7 @@ def test_orquestrador_faz_fallback_para_coteir_quando_cotar_request_falha(monkey
                 return FakeFallbackProvider()
             return None
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
 
     config = {
         "fretio": {},
@@ -1115,7 +1118,7 @@ def test_orquestrador_faz_fallback_para_coteir_quando_cotar_request_falha(monkey
 
 
 def test_eucatur_falha_com_mensagem_clara_sem_documento_pagador(monkeypatch):
-    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
 
     class FakeFactory:
         def __init__(self, config):
@@ -1143,7 +1146,7 @@ def test_eucatur_falha_com_mensagem_clara_sem_documento_pagador(monkeypatch):
         def create(self, nome, **kwargs):
             raise AssertionError("não deve criar provider sem documento pagador")
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
     config = {"fretio": {}, "romaneio": {"cep_origem": "69000000", "cnpj_pagador_padrao": ""}}
     dados = {
         "destino_cep": "69000100",
@@ -1167,7 +1170,7 @@ def test_eucatur_falha_com_mensagem_clara_sem_documento_pagador(monkeypatch):
 
 
 def test_coopex_usa_documento_pagador_padrao_da_empresa(monkeypatch):
-    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
     chamadas = []
 
     class FakeCoopexProvider:
@@ -1207,7 +1210,7 @@ def test_coopex_usa_documento_pagador_padrao_da_empresa(monkeypatch):
             assert kwargs["cnpj_pagador"] == "12345678000190"
             return FakeCoopexProvider()
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
     config = {"fretio": {}, "romaneio": {"cep_origem": "01310100", "cnpj_pagador_padrao": "12.345.678/0001-90"}}
     dados = {
         "destino_cep": "01310200",

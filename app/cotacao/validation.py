@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import Any
 import re
 
-from .common import CEP_ORIGEM_PADRAO, ConfigManager
+from .common import CEP_ORIGEM_PADRAO
 
 def _digits_cached(value: str) -> str:
     return re.sub(r"\D", "", value)
