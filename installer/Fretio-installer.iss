@@ -63,6 +63,13 @@ Name: "desktopicon"; Description: "Criar atalho na Área de Trabalho"; GroupDesc
 ; Copia toda a pasta dist\Fretio\ para {app}
 Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+; Bootstrapper do Microsoft Edge WebView2 Runtime (Evergreen, per-user).
+; A interface roda em WebView2. No Windows 11 o runtime já vem instalado; em
+; Windows 10/imagens corporativas pode faltar. O build deve baixar
+; installer\MicrosoftEdgeWebview2Setup.exe (https://go.microsoft.com/fwlink/p/?LinkId=2124703);
+; se ausente, esta linha é ignorada e o passo de instalação não roda.
+Source: "MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall skipifsourcedoesntexist
+
 ; Nenhum CONFIG.toml é instalado no %APPDATA%. O app cria a config por empresa no
 ; primeiro uso, com as URLs padrão (sem nenhuma credencial do desenvolvedor).
 
@@ -79,6 +86,9 @@ Name: "{group}\Desinstalar {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; Comment: "Cotação automática de fretes"
 
 [Run]
+; Instala o WebView2 Runtime se ausente (a interface depende dele)
+Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; Check: WebView2Ausente; Flags: waituntilterminated skipifdoesntexist; StatusMsg: "Instalando o componente WebView2..."
+
 ; Executar após instalação
 Filename: "{app}\{#MyAppExeName}"; Description: "Executar {#MyAppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
@@ -96,6 +106,21 @@ var
 function DeveSubstituirInstalacao(): Boolean;
 begin
   Result := _substituirInstalacao;
+end;
+
+function WebView2Ausente(): Boolean;
+var
+  _v: String;
+  _clients: String;
+begin
+  _clients := 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+  Result := True;
+  if RegQueryStringValue(HKLM, 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', _v) and (_v <> '') then
+    Result := False
+  else if RegQueryStringValue(HKLM, _clients, 'pv', _v) and (_v <> '') then
+    Result := False
+  else if RegQueryStringValue(HKCU, _clients, 'pv', _v) and (_v <> '') then
+    Result := False;
 end;
 
 function _existeInstalacaoAtual(): Boolean;

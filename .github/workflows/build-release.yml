@@ -170,6 +170,36 @@ jobs:
           if (-not (Select-String -Path "installer\requirements-lock.txt" -Pattern "^cryptography==48\.0\.0$" -Quiet)) {
             throw "cryptography==48.0.0 nao encontrado no lock"
           }
+          if (-not (Select-String -Path "installer\requirements-lock.txt" -Pattern "^pywebview==" -Quiet)) {
+            throw "pywebview nao encontrado no lock (a UI roda em WebView2)"
+          }
+          if (Select-String -Path "installer\requirements-lock.txt" -Pattern "^PySide6" -Quiet) {
+            throw "PySide6 ainda presente no lock; a UI Qt foi removida"
+          }
+
+      - name: Download WebView2 Runtime bootstrapper
+        shell: pwsh
+        run: |
+          # A interface roda em WebView2. O instalador (Fretio-installer.iss) embute
+          # este bootstrapper Evergreen (per-user) e so o executa quando o runtime
+          # faltar (Windows 10/imagens sem Edge). No Windows 11 ja vem instalado.
+          $dest = "installer\MicrosoftEdgeWebview2Setup.exe"
+          $url = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+          $ok = $false
+          for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -MaximumRedirection 10 -TimeoutSec 60
+              if ((Test-Path $dest) -and ((Get-Item $dest).Length -gt 100000)) { $ok = $true }
+            } catch {
+              Write-Host "Tentativa $i de download falhou: $($_.Exception.Message)"
+              Start-Sleep -Seconds 5
+            }
+          }
+          if ($ok) {
+            Write-Host "WebView2 bootstrapper baixado: $((Get-Item $dest).Length) bytes"
+          } else {
+            throw "Nao foi possivel baixar o WebView2 bootstrapper apos 3 tentativas. A UI roda em WebView2; publicar um instalador sem o bootstrapper deixaria Win10/imagens corporativas sem runtime e sem como iniciar a UI nova. Abortando o release."
+          }
 
       - name: Run build.bat (official flow)
         working-directory: installer

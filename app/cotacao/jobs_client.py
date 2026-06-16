@@ -6,8 +6,28 @@ from typing import Any
 import re
 import threading
 
-from .common import *
+from . import deps
+from .common import (
+    KNOWN_CARRIERS,
+    MODO_FOCO_TRANSPORTADORA,
+    ResultadoCotacao,
+    _log_diag,
+    normalize_carrier_name,
+    provider_progress_from_resultado,
+)
+from .error_context import sanitize_context
+from .romaneio_parser import _normalizar_romaneio_colado
 from .telemetry import _usage_status_from_result, _value_cents_from_frete, _carrier_usage_defaults
+
+def _safe_outbound_message(value: Any) -> str:
+    # Mensagem por transportadora vai para /api/quotations/jobs. Remove tags
+    # inline e passa pelo sanitizador forte para não carregar HTML/DOM cru do
+    # portal, e-mail, CNPJ/CPF ou chave de NF-e (o sanitizador de contexto só
+    # derruba blocos HTML completos, não tags soltas).
+    sem_tags = re.sub(r"(?is)<[^>]+>", " ", str(value or ""))
+    cleaned = sanitize_context(sem_tags)
+    return cleaned if isinstance(cleaned, str) else ""
+
 
 def _coerce_enabled_flag(value: Any, default: bool = True) -> bool:
     if value is None:
@@ -40,7 +60,7 @@ def _quotation_job_carrier_lists(config: dict[str, Any]) -> tuple[list[str], lis
         if foco:
             configured = canonical == foco
         try:
-            remote_allowed, _message = carrier_enabled_or_message(canonical)
+            remote_allowed, _message = deps.carrier_enabled_or_message(canonical)
         except Exception:
             remote_allowed = True
         if configured and remote_allowed:
@@ -91,7 +111,7 @@ def _create_quotation_job_best_effort(source_type: str, payload: dict[str, Any])
 
     def _criar() -> None:
         try:
-            holder["result"] = create_quotation_job(source_type, payload=payload, wait=True)
+            holder["result"] = deps.create_quotation_job(source_type, payload=payload, wait=True)
         except Exception as exc:  # noqa: BLE001 - best-effort, nunca propaga
             holder["error"] = exc
 
@@ -148,7 +168,7 @@ def _quotation_job_result_payload(
             "value_cents": _value_cents_from_frete(getattr(result, "valor_frete", None)),
             "progress_status": progress.status,
             "stage": progress.stage,
-            "message": progress.mensagem,
+            "message": _safe_outbound_message(progress.mensagem),
             "error_code": getattr(result, "error_code", None),
         }
         try:
@@ -259,7 +279,7 @@ def _quotation_job_error_message(resultados: list[ResultadoCotacao] | None) -> s
             continue
         detalhe = str(getattr(result, "detalhes", "") or "").strip()
         if detalhe:
-            return re.sub(r"\s+", " ", detalhe)[:240]
+            return _safe_outbound_message(re.sub(r"\s+", " ", detalhe))[:240]
     return ""
 
 
@@ -273,7 +293,7 @@ def _finish_quotation_job_best_effort(
     if not job_id:
         return
     try:
-        update_result = update_quotation_job_result(
+        update_result = deps.update_quotation_job_result(
             job_id,
             status,
             result=result,

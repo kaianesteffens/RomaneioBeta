@@ -853,8 +853,8 @@ class BraspressPlaywrightProvider(ProviderBase):
                         f" valorText={str(result_dom.get('valorText', '') or '')!r}"
                         f" prazoText={str(result_dom.get('prazoText', '') or '')!r}"
                     )
-                self.last_error = f"Valor do frete não encontrado no resultado ({dom_diag} trecho: {trecho})"
-                logger.error(f"[Braspress] {self.last_error}")
+                self.last_error = "Valor do frete não encontrado no resultado"
+                logger.error(f"[Braspress] {self.last_error} ({dom_diag} trecho: {trecho})")
                 return None
 
             logger.info(f"[Braspress] Cotação: R$ {valor_frete:.2f} - {prazo_dias} dias")

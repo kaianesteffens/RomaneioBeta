@@ -34,8 +34,8 @@ def test_quotation_usage_metadata_keeps_only_non_sensitive_shipping_fields():
 def test_report_quotation_usage_results_uses_sanitized_metadata(monkeypatch):
     finished_calls = []
     carrier_calls = []
-    monkeypatch.setattr("cotacao.telemetry.report_quotation_finished", lambda *a, **kw: finished_calls.append((a, kw)))
-    monkeypatch.setattr("cotacao.telemetry.report_carrier_quotation_result", lambda *a, **kw: carrier_calls.append((a, kw)))
+    monkeypatch.setattr("cotacao.deps.report_quotation_finished", lambda *a, **kw: finished_calls.append((a, kw)))
+    monkeypatch.setattr("cotacao.deps.report_carrier_quotation_result", lambda *a, **kw: carrier_calls.append((a, kw)))
 
     _report_quotation_usage_results(
         config={"transportadoras": {"braspress": {"habilitado": True}}},

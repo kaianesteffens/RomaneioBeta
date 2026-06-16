@@ -6,13 +6,22 @@ from pathlib import Path
 from typing import Any, Callable
 import asyncio
 import os
-import subprocess
+import sys
 import time
 
-from .common import *
+from fretio.providers.factory import slowness_priority_for_provider
+
+from . import deps
+from .common import (
+    KNOWN_CARRIERS,
+    MODO_FOCO_TRANSPORTADORA,
+    _log_diag,
+    _logger,
+    _remote_disabled_results_for_config,
+    _trd_headless_config_value,
+)
 from .config import _carregar_config
 from .validation import _uf_atendida
-from .telemetry import _remote_disabled_results_for_config
 from .error_context import is_expected_prelogin_failure, report_provider_error
 from .circuit_breaker import ProviderCircuitBreaker
 
@@ -110,15 +119,9 @@ def _kill_orphan_Fretio_chromes() -> None:
 
 # Prioridade de lentidão: maior = mais lento (baseado em testes reais).
 # Usado para iniciar os mais lentos primeiro e para ordenar resultados.
+# Derivado do registro único (ProviderSpec.slowness_priority em factory.py).
 _PRIORIDADE_LENTIDAO: dict[str, int] = {
-    "TRD": 700,
-    "ALFA": 600,
-    "BRASPRESS": 500,
-    "TRANSLOVATO": 450,
-    "EUCATUR": 400,
-    "COOPEX": 350,
-    "RODONAVES": 300,
-    "AGEX": 100,
+    nome.upper(): slowness_priority_for_provider(nome) for nome in KNOWN_CARRIERS
 }
 
 # Timeouts por provider (fluxos reais medidos):
@@ -243,7 +246,7 @@ class TransportadoraSession:
 
     def __init__(self, config_path: Path | None = None):
         self.config = _carregar_config(config_path=config_path)
-        self.provider_factory = ProviderFactory(config=self.config)
+        self.provider_factory = deps.ProviderFactory(config=self.config)
         self._provider_sessions = _ProviderSessionRegistry()
         self._circuit_breaker = ProviderCircuitBreaker()
         self._inicializado = False
@@ -462,7 +465,7 @@ class TransportadoraSession:
                 effective_config,
                 contexto="pre-login",
             )
-            provider_factory = ProviderFactory(config=effective_config)
+            provider_factory = deps.ProviderFactory(config=effective_config)
 
             bcfg = provider_factory.get_provider_config("braspress")
             if bcfg.get("habilitado", True):

@@ -84,8 +84,11 @@ class ProviderBase(ABC):
             return None
         text = re.sub(r"(?is)<[^>]+>", " ", text)
         text = re.sub(r"\s*\(diagnóstico salvo em:[^)]*\)", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\b\d{14}\b", "***", text)
-        text = re.sub(r"\b\d{11}\b", "***", text)
+        # DOM com tags viradas em espaço produz "12.345.678 / 0001-95"; cola o
+        # separador aos dígitos para o documento não escapar do mascaramento.
+        text = re.sub(r"(?<=\d)\s*([./\-])\s*(?=\d)", r"\1", text)
+        text = re.sub(r"(?<!\d)\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}(?!\d)", "***", text)
+        text = re.sub(r"(?<!\d)\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?!\d)", "***", text)
         text = re.sub(r"\s+", " ", text).strip()
         return text or None
 

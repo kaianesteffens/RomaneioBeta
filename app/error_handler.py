@@ -193,7 +193,7 @@ class ErrorHandler:
     @classmethod
     def report_to_server(cls, error_data: dict[str, Any]) -> bool:
         """
-        Envia erro para servidor (GitHub Gist via error_reporter).
+        Envia erro para o servidor próprio (via error_reporter).
         
         Args:
             error_data: Dicionário com dados do erro

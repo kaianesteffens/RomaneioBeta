@@ -54,6 +54,7 @@ sys.path.insert(0, str(ROOT / "app"))
 sys.path.insert(0, str(ROOT / "app" / "fretio" / "src"))
 
 import cotacao_transportadoras as ct
+from cotacao import deps
 import remote_permissions as rp
 
 
@@ -117,10 +118,8 @@ def test_disabled_carrier_is_skipped_before_provider_creation(monkeypatch):
             create_calls.append((nome, kwargs))
             return FakeProvider()
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
-    monkeypatch.setattr(
-        ct,
-        "carrier_enabled_or_message",
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "carrier_enabled_or_message",
         lambda carrier: (
             False,
             ct.CARRIER_DISABLED_MESSAGE,
@@ -229,8 +228,8 @@ def test_orchestrator_includes_translovato_when_enabled_and_configured(monkeypat
             create_calls.append((nome, kwargs))
             return FakeProvider()
 
-    monkeypatch.setattr(ct, "ProviderFactory", FakeFactory)
-    monkeypatch.setattr(ct, "carrier_enabled_or_message", lambda carrier: (True, ""))
+    monkeypatch.setattr(deps, "ProviderFactory", FakeFactory)
+    monkeypatch.setattr(deps, "carrier_enabled_or_message", lambda carrier: (True, ""))
     monkeypatch.setattr(ct, "_diag_log_enabled", lambda: False)
 
     config = {
