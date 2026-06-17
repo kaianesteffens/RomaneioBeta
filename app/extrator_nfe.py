@@ -746,8 +746,25 @@ def parsear_info_complementar(info: str) -> dict:
     extras_licitacao: list[str] = []
     extras_entrega: list[str] = list(local_extra_lines)
 
+    # Rótulos cujo campo já foi extraído para a forma estruturada. Uma linha
+    # rotulada que repita um desses (ex.: a NF traz "Processo:" duas vezes, ou
+    # uma variante que o extrator estruturado só casou na 1ª ocorrência) não deve
+    # vazar para "Outras informações" — senão o campo aparece duas vezes no card.
+    _chaves_estruturadas = (
+        "pedido_compra", "pedido_venda", "processo", "pe", "ata", "contrato",
+        "empenho", "of", "entrega", "pagamento", "crm",
+    )
+    rotulos_duplicados = tuple(
+        padrao
+        for chave in _chaves_estruturadas
+        if result.get(chave)
+        for padrao in rotulos[chave]
+    )
+
     for idx, linha in enumerate(linhas):
         if idx in used_indices:
+            continue
+        if rotulos_duplicados and _casa_rotulos(linha, rotulos_duplicados):
             continue
         texto_linha = re.sub(
             r"^(?:OBS(?:ERVACOES?|ERV)?|OUTRAS?\s+INFORMA(?:COES|ÇÕES)(?:\s+DA)?\s+(?:LICITA(?:CAO|ÇÃO)|ENTREGA))\s*[:\-]?\s*",
