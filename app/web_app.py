@@ -901,7 +901,7 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin)
         paths = self._window.create_file_dialog(
             webview.OPEN_DIALOG,
             allow_multiple=True,
-            file_types=("XML NF-e (*.xml)", "Todos os arquivos (*.*)"),
+            file_types=("Arquivos XML de NFe (*.xml)", "Todos os arquivos (*.*)"),
         )
         if not paths:
             return {"cancelado": True}
