@@ -74,7 +74,9 @@
       $("#romSelect", view).addEventListener("click", () => selecionar(app));
       $("#romClear", view).addEventListener("click", () => limpar(app));
       $("#romCopy", view).addEventListener("click", async () => {
-        const txt = $("#romResult", view).textContent || "";
+        // O destino espera os <br> literais; o preview usa quebras de linha
+        // para legibilidade, então reconvertemos \n -> <br> ao copiar.
+        const txt = ($("#romResult", view).textContent || "").replace(/\n/g, "<br>");
         try { await navigator.clipboard.writeText(txt); app.toast("Romaneio copiado"); }
         catch { app.toast("Não foi possível copiar"); }
       });
