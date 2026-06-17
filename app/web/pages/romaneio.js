@@ -74,9 +74,10 @@
       $("#romSelect", view).addEventListener("click", () => selecionar(app));
       $("#romClear", view).addEventListener("click", () => limpar(app));
       $("#romCopy", view).addEventListener("click", async () => {
-        // O destino espera os <br> literais; o preview usa quebras de linha
-        // para legibilidade, então reconvertemos \n -> <br> ao copiar.
-        const txt = ($("#romResult", view).textContent || "").replace(/\n/g, "<br>");
+        // O destino espera o <br> literal ao final de cada linha, mas as
+        // quebras de linha devem ser mantidas (não amontoar tudo numa linha só).
+        // Por isso anexamos <br> antes de cada \n, preservando a quebra real.
+        const txt = ($("#romResult", view).textContent || "").replace(/\n/g, "<br>\n");
         try { await navigator.clipboard.writeText(txt); app.toast("Romaneio copiado"); }
         catch { app.toast("Não foi possível copiar"); }
       });
