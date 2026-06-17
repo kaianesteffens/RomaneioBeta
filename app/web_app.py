@@ -831,6 +831,7 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin)
     def _emit(self, evento: str, payload: dict | None = None) -> None:
         emit(self._window, evento, payload)
 
+
     def _gate(self, feature: str) -> dict | None:
         """Gating por licença/config remota (fail-open). Retorna erro se bloqueado."""
         try:
@@ -997,21 +998,17 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin)
         }
 
     def abrir_app(self) -> dict:
-        if self._window is not None:
-            try:
-                self._window.load_url(_index_path())
-            except Exception as exc:
-                return {"ok": False, "erro": str(exc)}
-        return {"ok": True}
+        # A navegação é feita no JS, DEPOIS de aguardar este retorno (ver
+        # app/web/startup.js). Navegar aqui via load_url trocaria a página antes
+        # do pywebview resolver o callback de retorno deste método, gerando
+        # JavascriptException ('_returnValuesCallbacks.abrir_app.<id> is not a
+        # function'). Devolvemos o destino relativo (mesma pasta web/) e o cliente
+        # navega na sequência, já com o callback resolvido — sem corrida.
+        return {"ok": True, "navegar": "index.html"}
 
     def trocar_empresa(self) -> dict:
-        """Volta para o seletor de empresa (recarrega a tela de partida)."""
-        if self._window is not None:
-            try:
-                self._window.load_url(_startup_path() + "?fase=empresa")
-            except Exception as exc:
-                return {"ok": False, "erro": str(exc)}
-        return {"ok": True}
+        """Volta para o seletor de empresa. Navegação feita no JS — ver abrir_app."""
+        return {"ok": True, "navegar": "startup.html?fase=empresa"}
 
     def sair(self) -> dict:
         try:
