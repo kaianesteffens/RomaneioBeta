@@ -138,8 +138,14 @@ async function renderEmpresas() {
   $("#suEntrar").addEventListener("click", async () => {
     if (!empresaSel) return;
     const r = await (await apiBridge()).startup_entrar(empresaSel);
-    if (r && r.ok) (await apiBridge()).abrir_app();
-    else toast((r && r.erro) || "Falha ao entrar");
+    if (r && r.ok) {
+      // Navega só DEPOIS do await — o backend resolveu o callback de retorno do
+      // pywebview, então trocar a página agora não deixa callback órfão. Navegar
+      // no Python (load_url) correria com essa resolução e dispararia
+      // JavascriptException ('_returnValuesCallbacks.abrir_app.<id> is not a function').
+      const nav = await (await apiBridge()).abrir_app();
+      window.location.assign((nav && nav.navegar) || "index.html");
+    } else toast((r && r.erro) || "Falha ao entrar");
   });
 }
 

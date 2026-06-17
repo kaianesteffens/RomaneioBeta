@@ -138,7 +138,11 @@ function bindShell() {
   $("#backBtn").addEventListener("click", () => window.App.navigate("dashboard"));
   $("#empresaChip").addEventListener("click", async () => {
     const a = await apiBridge();
-    if (a.trocar_empresa) a.trocar_empresa();
+    if (!a.trocar_empresa) return;
+    // Navega no JS após o await (callback de retorno já resolvido) — ver abrir_app
+    // em startup.js: navegar no Python correria com a resolução do callback.
+    const r = await a.trocar_empresa();
+    if (r && r.ok) window.location.assign(r.navegar || "startup.html?fase=empresa");
   });
   $("#themeToggle").addEventListener("click", toggleTema);
   $("#cmdkBtn").addEventListener("click", () => toast("Command palette (Ctrl+K) — em breve"));
