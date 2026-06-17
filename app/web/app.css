@@ -365,8 +365,10 @@ svg { display: block; }
 .nfe-block { border-radius: 10px; padding: 9px 11px; border: 1px solid var(--border); }
 .nfe-block.lic { background: var(--accent-dim); border-color: var(--accent-border); }
 .nfe-block.ent { background: var(--green-dim); border-color: color-mix(in srgb, var(--green) 35%, transparent); }
-.nfe-block-title { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: var(--accent); margin-bottom: 5px; }
+.nfe-block-title { font-size: 11px; font-weight: 700; letter-spacing: 0.04em; color: var(--accent); margin-bottom: 5px;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .nfe-block.ent .nfe-block-title { color: var(--green); }
+.nfe-copy { font-size: 10px; font-weight: 700; letter-spacing: 0.03em; flex: none; }
 .nfe-block pre {
   font-family: "Consolas", "JetBrains Mono", monospace; font-size: 11px;
   line-height: 1.55; color: var(--ink2); white-space: pre-wrap; word-break: break-word; margin: 0;

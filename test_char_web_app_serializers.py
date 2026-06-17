@@ -276,6 +276,22 @@ def test_char_nota_card_security_cnpj_never_surfaced():
     assert "99888777000166" not in blob   # destinatário CNPJ never surfaced
 
 
+def test_char_nota_card_does_not_duplicate_structured_label_in_extras():
+    # REGRESSION: quando a NF repete um rótulo já estruturado (aqui "Processo"),
+    # a 2ª ocorrência não deve vazar para "Outras informações da licitação" —
+    # senão o campo aparece duas vezes no card.
+    raw = (
+        "Processo: 123/2024 | PE: 10/2024 | Empenho: 555 | "
+        "Processo: 123/2024 | Obs: entregar pela manha"
+    )
+    nf = FakeNF(numero="902", transportadora_nome="BRASPRESS", info_complementar=raw)
+    card = web_app.nota_card(1, nf)
+    lic = card["bloco_licitacao"]
+    # "Processo: 123/2024" aparece só na linha estruturada, não nas observações.
+    assert lic.count("123/2024") == 1, lic
+    assert "entregar pela manha" in lic  # texto realmente extra é preservado
+
+
 def test_char_nota_card_passes_unparsed_info_complementar_verbatim():
     # QUIRK (pinned, NOT a fix): any info_complementar text that the parser does
     # not recognize as a structured field is captured as 'outras_info_licitacao'
