@@ -831,6 +831,29 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin)
     def _emit(self, evento: str, payload: dict | None = None) -> None:
         emit(self._window, evento, payload)
 
+    def _navegar_apos_retorno(self, url: str) -> None:
+        """Agenda load_url para DEPOIS que o método de API tiver retornado.
+
+        pywebview resolve o retorno de um método de `api` chamando um callback JS
+        na página atual (window.pywebview._returnValuesCallbacks.<metodo>.<id>).
+        Se navegarmos (load_url) ainda dentro do método, a página é trocada e esse
+        callback some antes da resolução, gerando JavascriptException
+        ('_returnValuesCallbacks.<metodo>.<id> is not a function') na thread do
+        webview. Adiar a navegação para outra thread garante que o método retorne
+        e o callback seja resolvido na página ainda viva antes de navegarmos.
+        """
+        if self._window is None:
+            return
+
+        def _go() -> None:
+            time.sleep(0.05)
+            try:
+                self._window.load_url(url)
+            except Exception:
+                pass
+
+        threading.Thread(target=_go, name="nav-defer", daemon=True).start()
+
     def _gate(self, feature: str) -> dict | None:
         """Gating por licença/config remota (fail-open). Retorna erro se bloqueado."""
         try:
@@ -997,20 +1020,17 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin)
         }
 
     def abrir_app(self) -> dict:
-        if self._window is not None:
-            try:
-                self._window.load_url(_index_path())
-            except Exception as exc:
-                return {"ok": False, "erro": str(exc)}
+        # Navega só depois de retornar: load_url síncrono aqui trocaria a página
+        # antes do pywebview resolver o retorno deste método, gerando
+        # JavascriptException ('_returnValuesCallbacks.abrir_app.<id> is not a
+        # function'). Ver _navegar_apos_retorno.
+        self._navegar_apos_retorno(_index_path())
         return {"ok": True}
 
     def trocar_empresa(self) -> dict:
         """Volta para o seletor de empresa (recarrega a tela de partida)."""
-        if self._window is not None:
-            try:
-                self._window.load_url(_startup_path() + "?fase=empresa")
-            except Exception as exc:
-                return {"ok": False, "erro": str(exc)}
+        # Navegação adiada — ver abrir_app/_navegar_apos_retorno.
+        self._navegar_apos_retorno(_startup_path() + "?fase=empresa")
         return {"ok": True}
 
     def sair(self) -> dict:
