@@ -19,11 +19,17 @@
         <div class="nfe-head">${F.esc(c.header)}</div>
         <div class="nfe-blocks">
           <div class="nfe-block lic">
-            <div class="nfe-block-title">DADOS DA LICITAÇÃO</div>
+            <div class="nfe-block-title">
+              <span>DADOS DA LICITAÇÃO</span>
+              <button class="link-btn nfe-copy" type="button" data-copy="lic">Copiar</button>
+            </div>
             <pre>${F.esc(c.bloco_licitacao)}</pre>
           </div>
           <div class="nfe-block ent">
-            <div class="nfe-block-title">DADOS DA ENTREGA</div>
+            <div class="nfe-block-title">
+              <span>DADOS DA ENTREGA</span>
+              <button class="link-btn nfe-copy" type="button" data-copy="ent">Copiar</button>
+            </div>
             <pre>${F.esc(c.bloco_entrega)}</pre>
           </div>
         </div>
@@ -176,8 +182,19 @@
       // Delegação no container de cards (recriado a cada render) — evita acumular
       // listeners no #view a cada visita à tela.
       $("#rastCards", view).addEventListener("click", (e) => {
-        const el = e.target.closest("[data-open]");
-        if (el) { app.api().then((a) => a.abrir_externo(el.getAttribute("data-open"))); }
+        const open = e.target.closest("[data-open]");
+        if (open) { app.api().then((a) => a.abrir_externo(open.getAttribute("data-open"))); return; }
+        const copy = e.target.closest("[data-copy]");
+        if (copy) {
+          // Copia o texto do bloco (licitação/entrega) — selecionar no WebView2 é
+          // pouco prático, então damos um botão como na tela Romaneio.
+          const bloco = copy.closest(".nfe-block");
+          const pre = bloco && bloco.querySelector("pre");
+          const txt = (pre && pre.textContent) || "";
+          navigator.clipboard.writeText(txt)
+            .then(() => app.toast("Texto copiado"))
+            .catch(() => app.toast("Não foi possível copiar"));
+        }
       });
       $("#rastSelect", view).addEventListener("click", () => selecionar(app));
       $("#rastTrack", view).addEventListener("click", () => rastrear(app, null));
