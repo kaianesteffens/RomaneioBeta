@@ -434,9 +434,14 @@ class AGEXProvider(ProviderBase):
         self._logged_in = False
 
     async def _salvar_debug(self, sufixo: str) -> None:
+        import os
+        # Dumps de HTML/screenshot pós-login só em modo debug explícito (CWE-312):
+        # em produção FRETIO_PROVIDER_DEBUG não é definido, evitando gravar páginas
+        # autenticadas em disco a cada cotação.
+        if not os.environ.get("FRETIO_PROVIDER_DEBUG"):
+            return
         try:
             if self._page:
-                import os
                 debug_dir = os.path.join(os.environ.get("APPDATA", "."), "Fretio")
                 os.makedirs(debug_dir, exist_ok=True)
                 await self._page.screenshot(

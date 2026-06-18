@@ -397,7 +397,9 @@ class CoopexProvider(ProviderBase):
             f"coletar=S, R${valor}"
         )
         campos_seguros = re.sub(r"(?<!\d)\d{11,14}(?!\d)", "***", str(form_check))
-        logger.info(f"[{self.nome}] Campos SSW: {campos_seguros}")
+        # DEBUG (não INFO): o dump de campos SSW pode conter CNPJ pagador/remetente/
+        # destinatário; mantê-lo fora dos logs de produção (CWE-532).
+        logger.debug(f"[{self.nome}] Campos SSW: {campos_seguros}")
 
     async def _submeter_e_extrair(self) -> Optional[Cotacao]:
         """Submete a cotação e extrai o resultado."""
