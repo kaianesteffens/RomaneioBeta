@@ -201,6 +201,10 @@ def _apply_error_api_url(url: str, *, source: str) -> bool:
     url = str(url or "").strip()
     if not url:
         return False
+    from url_safety import is_safe_api_url
+    if not is_safe_api_url(url):
+        _diag("WARN", f"error_api_url rejeitada (esquema/host inseguro) de {source}")
+        return False
     _error_api_url = url
     _diag("INFO", f"error_api_url carregado de {source}")
     return True
