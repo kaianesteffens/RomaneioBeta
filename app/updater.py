@@ -43,12 +43,10 @@ def _safe_bat_version(version: Any) -> str:
 
 # Timeout para requisições HTTP (segundos)
 _HTTP_TIMEOUT = 30
-# Releases sao publicadas no proprio repositorio. O repo legado de releases
-# permanece como fallback de leitura para clientes/builds antigos durante a
-# transicao (releases ja publicadas la continuam resolviveis).
+# Releases sao publicadas e lidas exclusivamente no repositorio principal.
+# A dependencia do antigo repo de releases foi removida (unificacao de releases).
 _DEFAULT_GITHUB_REPOS = (
     "kaianesteffens/RomaneioBeta",
-    "kaianesteffens/RomaneioBeta-releases",
 )
 _GITHUB_REPO_ENV_VARS = (
     "FRETIO_GITHUB_REPO",

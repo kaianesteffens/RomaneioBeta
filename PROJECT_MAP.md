@@ -38,7 +38,7 @@ Stack principal:
 
 - `kaianesteffens/RomaneioBeta`: desktop, UI, automacoes locais, providers, updater e instalador.
 - `kaianesteffens/RomaneioBeta-server`: API FastAPI para licencas, configuracao remota, versoes, logs, eventos, jobs e admin.
-- `kaianesteffens/RomaneioBeta-releases`: repositorio legado de releases; mantido apenas como fallback de leitura do updater para clientes/builds antigos. Novas releases sao publicadas no proprio `kaianesteffens/RomaneioBeta`.
+- `kaianesteffens/RomaneioBeta-releases`: repositorio legado desativado. O updater le e publica releases exclusivamente no proprio `kaianesteffens/RomaneioBeta` (dependencia do repo de releases removida).
 
 ## Entradas principais
 

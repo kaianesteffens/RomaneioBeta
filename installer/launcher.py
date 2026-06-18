@@ -45,7 +45,6 @@ except ImportError:
 
 GITHUB_REPOS = (
     "kaianesteffens/RomaneioBeta",
-    "kaianesteffens/RomaneioBeta-releases",
 )
 _APPDATA_ROOT = Path(os.environ.get("APPDATA", Path.home()))
 _LOCALAPPDATA_ROOT = Path(os.environ.get("LOCALAPPDATA", _APPDATA_ROOT))
