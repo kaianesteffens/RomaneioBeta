@@ -32,7 +32,10 @@ try:
 except ImportError:
     _HAS_TK = False
 
-GITHUB_REPOS = ("kaianesteffens/RomaneioBeta-releases",)
+GITHUB_REPOS = (
+    "kaianesteffens/RomaneioBeta",
+    "kaianesteffens/RomaneioBeta-releases",
+)
 _APPDATA_ROOT = Path(os.environ.get("APPDATA", Path.home()))
 _LOCALAPPDATA_ROOT = Path(os.environ.get("LOCALAPPDATA", _APPDATA_ROOT))
 _PROGRAMFILES_ROOTS = tuple(

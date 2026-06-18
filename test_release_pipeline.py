@@ -47,6 +47,8 @@ def test_updater_collects_repo_aliases_from_config_and_env(monkeypatch, tmp_path
         "owner/legacy",
         "owner/fallback",
     ]
+    # Novas releases vao para o proprio repositorio; o repo legado segue como fallback.
+    assert "kaianesteffens/RomaneioBeta" in candidates
     assert "kaianesteffens/RomaneioBeta-releases" in candidates
 
 
@@ -328,7 +330,8 @@ def test_build_release_workflow_requires_explicit_version_and_safe_publication()
     assert "required: true" in workflow_text
     assert "Input version deve usar formato X.Y ou X.Y.Z" in workflow_text
     assert 'Set-Content -Path "app\\version.txt" -Value $version' in workflow_text
-    assert "RELEASES_TOKEN e obrigatorio para publish_release=true" in workflow_text
+    assert "Publicar release em outro repositorio" in workflow_text
+    assert "exige RELEASES_TOKEN" in workflow_text
     assert "Release oficial exige UPDATE_SIGNING_PRIVATE_KEY_B64 e UPDATE_PUBLIC_KEY_B64" in workflow_text
     assert "publish_release=false; apenas artefatos internos do workflow foram gerados" in workflow_text
     assert "if: env.PUBLISH_RELEASE == 'true'" in workflow_text

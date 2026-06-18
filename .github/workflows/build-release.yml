@@ -24,7 +24,7 @@ on:
         required: true
         type: string
       publish_release:
-        description: "Publicar release oficial no repositorio de releases"
+        description: "Publicar release oficial no proprio repositorio"
         required: true
         default: true
         type: boolean
@@ -42,7 +42,7 @@ jobs:
       HAS_RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN != '' }}
       PUBLISH_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || (github.event_name != 'workflow_dispatch' && github.event.client_payload.publish_release != 'false') }}
       HAS_UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_B64 != '' }}
-      RELEASE_REPO: ${{ vars.RELEASE_REPO || 'kaianesteffens/RomaneioBeta-releases' }}
+      RELEASE_REPO: ${{ vars.RELEASE_REPO || github.repository }}
       RELEASE_REPO_ALIASES: ${{ vars.RELEASE_REPO_ALIASES }}
       UPDATE_PUBLIC_KEY_B64: ${{ vars.UPDATE_PUBLIC_KEY_B64 }}
       ALLOW_UNSIGNED_DEV_RELEASE: ${{ vars.ALLOW_UNSIGNED_DEV_RELEASE || 'false' }}
@@ -58,7 +58,7 @@ jobs:
         id: release_inputs
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
           INPUT_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event.client_payload.version }}
         run: |
           $version = $env:INPUT_VERSION.Trim()
@@ -74,9 +74,11 @@ jobs:
           $hasReleaseToken = $env:HAS_RELEASES_TOKEN -eq "true"
           $hasPrivateKey = $env:HAS_UPDATE_SIGNING_KEY -eq "true"
           $hasPublicKey = -not [string]::IsNullOrWhiteSpace($env:UPDATE_PUBLIC_KEY_B64)
+          $releaseRepo = $env:RELEASE_REPO
+          $isSameRepo = $releaseRepo -eq $env:GITHUB_REPOSITORY
 
-          if ($publishRelease -and -not $hasReleaseToken) {
-            throw "RELEASES_TOKEN e obrigatorio para publish_release=true. Use publish_release=false somente para build interno sem publicacao externa."
+          if ($publishRelease -and -not $isSameRepo -and -not $hasReleaseToken) {
+            throw "Publicar release em outro repositorio ($releaseRepo) exige RELEASES_TOKEN. Para publicar no proprio repositorio ($env:GITHUB_REPOSITORY) o GITHUB_TOKEN automatico ja basta."
           }
           if ($publishRelease -and (-not $hasPrivateKey -or -not $hasPublicKey)) {
             throw "Release oficial exige UPDATE_SIGNING_PRIVATE_KEY_B64 e UPDATE_PUBLIC_KEY_B64. Use publish_release=false e ALLOW_UNSIGNED_DEV_RELEASE=true apenas para build dev interno."
@@ -379,7 +381,7 @@ jobs:
         if: env.PUBLISH_RELEASE == 'true'
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           $ver = "${{ steps.meta.outputs.version }}"
           $tag = "v$ver"

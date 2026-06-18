@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 
-_DEFAULT_GITHUB_REPO = "kaianesteffens/RomaneioBeta-releases"
+_DEFAULT_GITHUB_REPO = "kaianesteffens/RomaneioBeta"
 _DEFAULT_LICENSE_API_URL = "https://fretio.api.br/api/licenses/validate"
 _DEFAULT_LICENSE_CONFIG_API_URL = "https://fretio.api.br/api/licenses/config"
 _DEFAULT_VERSION_API_URL = "https://fretio.api.br/api/version/latest"

@@ -1,7 +1,7 @@
 [fretio]
 fator_cubagem = 6000
 cache_dir = "cache"
-github_repo = "kaianesteffens/RomaneioBeta-releases"  # Repositório GitHub para auto-update
+github_repo = "kaianesteffens/RomaneioBeta"  # Repositório GitHub para auto-update
 github_repo_aliases = []  # Repositórios extras/fallback para sobreviver a renomeações
 version_api_url = "https://fretio.api.br/api/version/latest"  # Endpoint publico para descobrir latest_version/download_url/mandatory
 # license_api_url é o servidor novo de licenças; license_url é o fallback antigo via Gist.

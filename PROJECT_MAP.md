@@ -38,7 +38,7 @@ Stack principal:
 
 - `kaianesteffens/RomaneioBeta`: desktop, UI, automacoes locais, providers, updater e instalador.
 - `kaianesteffens/RomaneioBeta-server`: API FastAPI para licencas, configuracao remota, versoes, logs, eventos, jobs e admin.
-- `kaianesteffens/RomaneioBeta-releases`: repositorio publico/auxiliar para releases e metadados quando usado pelo updater.
+- `kaianesteffens/RomaneioBeta-releases`: repositorio legado de releases; mantido apenas como fallback de leitura do updater para clientes/builds antigos. Novas releases sao publicadas no proprio `kaianesteffens/RomaneioBeta`.
 
 ## Entradas principais
 
@@ -363,7 +363,7 @@ Fluxo atual do workflow `Desktop CI` (`.github/workflows/ci.yml`):
 Fluxo atual do workflow `Build and Release Fretio`:
 
 - Execucao manual via `workflow_dispatch` com input obrigatorio `version` (`X.Y` ou `X.Y.Z`).
-- `publish_release=true` e release oficial exigem `RELEASES_TOKEN`, `UPDATE_SIGNING_PRIVATE_KEY_B64` e `UPDATE_PUBLIC_KEY_B64`.
+- `publish_release=true` publica no proprio repositorio com o `GITHUB_TOKEN` automatico e exige `UPDATE_SIGNING_PRIVATE_KEY_B64` e `UPDATE_PUBLIC_KEY_B64`. `RELEASES_TOKEN` so e necessario para publicar em um repositorio diferente (`RELEASE_REPO`).
 - `publish_release=false` serve apenas para artefato interno; se faltar assinatura, exige `ALLOW_UNSIGNED_DEV_RELEASE=true` e nao publica release externa.
 
 Cuidados:

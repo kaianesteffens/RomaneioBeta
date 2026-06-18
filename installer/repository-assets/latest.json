@@ -8,8 +8,8 @@
   ],
   "version": "2.55",
   "repo_asset_max_bytes": 99614720,
-  "release_repo": "kaianesteffens/RomaneioBeta-releases",
-  "release_repo_aliases": "kaianesteffens/RomaneioBeta-releases",
+  "release_repo": "kaianesteffens/RomaneioBeta",
+  "release_repo_aliases": "kaianesteffens/RomaneioBeta",
   "skipped_repo_assets": [],
   "release_assets": [
     "Fretio-Setup-latest.exe",
