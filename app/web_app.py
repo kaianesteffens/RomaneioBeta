@@ -265,20 +265,29 @@ class ConfigMixin:
         return {"ok": self._write_config(mut)}
 
     def config_salvar_credenciais(self, nome: str, campos: dict) -> dict:
+        import secure_credentials
+
         nome = str(nome)
         allowed = {k for k, _, _ in _CARRIER_FIELDS.get(nome, [])}
         senha_keys = {k for k, _, tp in _CARRIER_FIELDS.get(nome, []) if tp == "password"}
+
+        # Senhas vão para o Windows Credential Manager (aplicadas via
+        # overlay_secure_credentials em tempo de cotação) e NUNCA são gravadas em
+        # texto claro no CONFIG.toml (CWE-312). Senha em branco = manter a já salva.
+        for k, v in (campos or {}).items():
+            if k in senha_keys and k in allowed:
+                v = str(v)
+                if v:
+                    secure_credentials.set_credential(self._empresa, nome, k, v)
 
         def mut(cfg):
             t = cfg.setdefault("transportadoras", {}).setdefault(nome, {})
             for k, v in (campos or {}).items():
                 if k not in allowed:
                     continue
-                v = str(v)
-                # Senha em branco = manter a já salva (a UI nunca recebe a senha).
-                if k in senha_keys and v == "":
+                if k in senha_keys:
                     continue
-                t[k] = v
+                t[k] = str(v)
 
         return {"ok": self._write_config(mut)}
 
