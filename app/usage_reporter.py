@@ -189,11 +189,12 @@ def _get_config_value(key: str) -> str:
 
 
 def _get_usage_api_url() -> str:
+    from url_safety import require_https_url
     for env_name in ("FRETIO_USAGE_API_URL", "FRETEBOT_USAGE_API_URL"):
         url = os.environ.get(env_name, "").strip()
         if url:
-            return url
-    return _get_config_value("usage_api_url") or DEFAULT_USAGE_API_URL
+            return require_https_url(url, DEFAULT_USAGE_API_URL)
+    return require_https_url(_get_config_value("usage_api_url") or DEFAULT_USAGE_API_URL, DEFAULT_USAGE_API_URL)
 
 
 def _get_app_version() -> str:

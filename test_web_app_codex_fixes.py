@@ -26,7 +26,9 @@ import web_app
 
 
 def _api():
-    return web_app.Api(empresa="teste", config_path=None)
+    api = web_app.Api(empresa="teste", config_path=None)
+    api._license_ok = True  # sessão licenciada por padrão nos testes
+    return api
 
 
 def _nao_cria(_nome):

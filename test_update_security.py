@@ -53,13 +53,13 @@ def _fake_update_info(tmp_path: Path) -> updater.UpdateInfo:
     return updater.UpdateInfo(
         tag="v2.0",
         version="2.0",
-        download_url="https://example.test/Fretio-Update-latest.zip",
+        download_url="https://github.com/owner/repo/releases/download/v2.0/Fretio-Update-latest.zip",
         asset_name="Fretio-Update-latest.zip",
         asset_size=10,
         release_notes="",
         html_url="https://example.test/release",
         source_repo="owner/repo",
-        signature_download_url="https://example.test/Fretio-Update-latest.zip.sig",
+        signature_download_url="https://github.com/owner/repo/releases/download/v2.0/Fretio-Update-latest.zip.sig",
         signature_asset_name="Fretio-Update-latest.zip.sig",
     )
 

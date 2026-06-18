@@ -31,7 +31,7 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from update_security import verify_update_signature
+from update_security import verify_update_signature, UpdateSignatureError
 
 
 def _safe_bat_version(version: Any) -> str:
@@ -424,6 +424,27 @@ def _asset_name_from_download_url(download_url: str) -> str:
     return name or "update.zip"
 
 
+# Hosts permitidos para baixar binários de update. A URL pode vir de um endpoint
+# de versão configurável (version_api_url); restringir esquema/host barra SSRF e
+# redirecionamento para hosts arbitrários (CWE-918). browser_download_url do GitHub
+# usa github.com (redireciona internamente para *.githubusercontent.com).
+_ALLOWED_DOWNLOAD_HOST_SUFFIXES = (
+    "github.com",
+    "githubusercontent.com",
+)
+
+
+def _validate_download_url(url: str) -> str:
+    """Retorna a URL se for https:// em host permitido; senão levanta ValueError."""
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError(f"download_url precisa ser https, recebido esquema={parsed.scheme!r}")
+    host = (parsed.hostname or "").lower()
+    if not any(host == suffix or host.endswith("." + suffix) for suffix in _ALLOWED_DOWNLOAD_HOST_SUFFIXES):
+        raise ValueError(f"download_url com host fora da allowlist: {host!r}")
+    return url
+
+
 def _check_server_version(
     version_api_url: str,
     current_version: str,
@@ -443,6 +464,7 @@ def _check_server_version(
         _log("Endpoint de versao sem update: latest=%s", latest_version)
         return None
 
+    download_url = _validate_download_url(download_url)
     asset_name = _asset_name_from_download_url(download_url)
     return UpdateInfo(
         tag=latest_version,
@@ -629,6 +651,7 @@ def apply_update(
     _log("Caminho do ZIP baixado: %s", zip_path)
 
     try:
+        _validate_download_url(info.download_url)
         _download_with_progress(info.download_url, zip_path, info.asset_size, callback)
         _download_update_signature(info, signature_path)
         verify_update_signature(zip_path, signature_path)
@@ -709,6 +732,24 @@ REM Reiniciar o app
             callback(f"Atualização v{info.version} preparada! Reiniciando...")
 
         return True
+
+    except UpdateSignatureError as e:
+        # Falha de segurança (assinatura inválida ou chave pública ausente): NÃO
+        # é um erro transitório de rede. Loga como incidente e deixa claro ao
+        # usuário, sem nunca aplicar o update (CWE-390/CWE-347).
+        _log_exception("FALHA DE SEGURANÇA: verificação de assinatura do update falhou")
+        if callback:
+            callback(
+                f"Atualização bloqueada por falha de segurança: {e}. "
+                f"Contate o suporte. Log: {_log_path()}"
+            )
+        for _p in (zip_path, signature_path):
+            try:
+                if _p.exists():
+                    _p.unlink()
+            except Exception:
+                pass
+        return False
 
     except Exception as e:
         _log_exception("Falha ao preparar atualização")

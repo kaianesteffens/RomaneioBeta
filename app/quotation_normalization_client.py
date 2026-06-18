@@ -123,14 +123,16 @@ def _get_config_value(key: str) -> str:
 
 
 def _get_quotation_normalization_api_url() -> str:
+    from url_safety import require_https_url
     for env_name in ("FRETIO_QUOTATION_NORMALIZATION_API_URL", "FRETEBOT_QUOTATION_NORMALIZATION_API_URL"):
         url = os.environ.get(env_name, "").strip()
         if url:
-            return url.rstrip("/")
-    return (
+            return require_https_url(url, DEFAULT_QUOTATION_NORMALIZATION_API_URL).rstrip("/")
+    cfg = (
         _get_config_value("quotation_normalization_api_url")
         or DEFAULT_QUOTATION_NORMALIZATION_API_URL
-    ).rstrip("/")
+    )
+    return require_https_url(cfg, DEFAULT_QUOTATION_NORMALIZATION_API_URL).rstrip("/")
 
 
 def _decode_response(raw: bytes) -> Any:

@@ -166,11 +166,12 @@ def _get_config_value(key: str) -> str:
 
 
 def _get_license_config_api_url() -> str:
+    from url_safety import require_https_url
     for env_name in ("FRETIO_LICENSE_CONFIG_API_URL", "FRETEBOT_LICENSE_CONFIG_API_URL"):
         url = os.environ.get(env_name, "").strip()
         if url:
-            return url
-    return _get_config_value("license_config_api_url") or DEFAULT_LICENSE_CONFIG_API_URL
+            return require_https_url(url, DEFAULT_LICENSE_CONFIG_API_URL)
+    return require_https_url(_get_config_value("license_config_api_url") or DEFAULT_LICENSE_CONFIG_API_URL, DEFAULT_LICENSE_CONFIG_API_URL)
 
 
 def _config_api_url_from_validate_api_url(validate_api_url: str) -> str:

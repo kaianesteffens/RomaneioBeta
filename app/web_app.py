@@ -265,20 +265,35 @@ class ConfigMixin:
         return {"ok": self._write_config(mut)}
 
     def config_salvar_credenciais(self, nome: str, campos: dict) -> dict:
+        import secure_credentials
+
         nome = str(nome)
         allowed = {k for k, _, _ in _CARRIER_FIELDS.get(nome, [])}
         senha_keys = {k for k, _, tp in _CARRIER_FIELDS.get(nome, []) if tp == "password"}
 
+        # Senhas vão para o Windows Credential Manager (aplicadas via
+        # overlay_secure_credentials em tempo de cotação) e NUNCA são gravadas em
+        # texto claro no CONFIG.toml (CWE-312). Senha em branco = manter a já salva.
+        for k, v in (campos or {}).items():
+            if k in senha_keys and k in allowed:
+                v = str(v)
+                if v:
+                    secure_credentials.set_credential(self._empresa, nome, k, v)
+
         def mut(cfg):
             t = cfg.setdefault("transportadoras", {}).setdefault(nome, {})
             for k, v in (campos or {}).items():
-                if k not in allowed:
+                if k not in allowed or k in senha_keys:
                     continue
-                v = str(v)
-                # Senha em branco = manter a já salva (a UI nunca recebe a senha).
-                if k in senha_keys and v == "":
-                    continue
-                t[k] = v
+                t[k] = str(v)
+            # Nunca mantém senha em texto claro no TOML: migra qualquer valor legado
+            # em claro para o Credential Manager antes de removê-lo do arquivo.
+            for sk in senha_keys:
+                provided = str((campos or {}).get(sk, "")) if sk in (campos or {}) else ""
+                legacy = str(t.get(sk) or "")
+                if not provided and legacy:
+                    secure_credentials.set_credential(self._empresa, nome, sk, legacy)
+                t.pop(sk, None)
 
         return {"ok": self._write_config(mut)}
 
@@ -297,12 +312,14 @@ class StartupMixin:
             return {"fase": "pedir_chave", "msg": ""}
         status = validate_license(key, machine)
         if status.valid:
+            self._license_ok = True
             try:
                 from usage_reporter import report_license_validated
                 report_license_validated("ok")
             except Exception:
                 pass
             return {"fase": "ok", "msg": ""}
+        self._license_ok = False
         return {"fase": "revogada", "msg": status.message or "Sua licença não é mais válida."}
 
     def startup_ativar_licenca(self, key: str) -> dict:
@@ -313,6 +330,7 @@ class StartupMixin:
         status = validate_license(key, get_machine_id())
         if status.valid:
             save_license(key)
+            self._license_ok = True
             try:
                 from usage_reporter import report_license_validated
                 report_license_validated("ok")
@@ -483,6 +501,9 @@ class RastreioMixin:
         }
 
     def rastreio_iniciar(self, chaves: list | None = None) -> dict:
+        bloqueio_lic = self._require_license()
+        if bloqueio_lic:
+            return bloqueio_lic
         if not self._notas:
             return {"erro": "Nenhuma NF-e carregada para rastrear"}
         bloqueio = self._gate("rastreio")
@@ -626,6 +647,9 @@ class CotacaoMixin:
         self._emit("login_status", {"nome": str(nome or ""), "status": str(status or "")})
 
     def cotacao_iniciar(self, romaneio_texto: str, cnpj_remetente: str = "", cep_origem: str = "") -> dict:
+        bloqueio_lic = self._require_license()
+        if bloqueio_lic:
+            return bloqueio_lic
         texto = str(romaneio_texto or "").strip()
         if not texto:
             return {"erro": "Cole um romaneio antes de cotar"}
@@ -789,6 +813,11 @@ class RomaneioMixin:
 class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin):
     def __init__(self, empresa: str | None = None, config_path: Path | None = None) -> None:
         self._empresa = empresa or ""
+        # Gate de licença do lado Python: a UI roda em WebView2 e o objeto Api é
+        # exposto ao JS (js_api), então a checagem só no JavaScript é burlável pelo
+        # console. Operações privilegiadas exigem self._license_ok (CWE-287), setado
+        # após validação real em startup_licenca_estado/startup_ativar_licenca.
+        self._license_ok = False
         self._config_path = config_path
         self._versao = _carregar_versao()
         self._window: Any = None
@@ -805,6 +834,12 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin)
         self._romaneios: list[dict] = []  # romaneios processados na sessão (dashboard)
         self._last_cotacao: list[Any] = []  # últimos ResultadoCotacao (dashboard)
         self._romaneio_texto = ""  # último romaneio calculado (handoff p/ cotação)
+
+    def _require_license(self) -> dict | None:
+        """Bloqueio fail-closed para operações privilegiadas chamadas via js_api."""
+        if not self._license_ok:
+            return {"erro": "Licença não validada."}
+        return None
 
     def attach_window(self, window: Any) -> None:
         self._window = window
@@ -894,6 +929,9 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin)
 
     # ── NF-e ────────────────────────────────────────────────────────────────
     def nfe_selecionar(self) -> dict:
+        bloqueio_lic = self._require_license()
+        if bloqueio_lic:
+            return bloqueio_lic
         if self._window is None:
             return {"erro": "Janela indisponível"}
         bloqueio = self._gate("nfe")
@@ -998,6 +1036,8 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin)
         }
 
     def abrir_app(self) -> dict:
+        if not self._license_ok:
+            return {"ok": False, "erro": "Licença não validada."}
         # A navegação é feita no JS, DEPOIS de aguardar este retorno (ver
         # app/web/startup.js). Navegar aqui via load_url trocaria a página antes
         # do pywebview resolver o callback de retorno deste método, gerando
@@ -1066,6 +1106,7 @@ def _run_dev(args) -> None:
     """Modo dev: carrega o app direto numa empresa, sem partida/licença."""
     empresa = args.empresa or _resolver_empresa()
     api = Api(empresa, cc._empresa_config_path(empresa))
+    api._license_ok = True  # modo dev pula a partida/licença intencionalmente
     window = webview.create_window(
         title=f"Fretio {api._versao} — {empresa}",
         url=_index_path(), js_api=api,

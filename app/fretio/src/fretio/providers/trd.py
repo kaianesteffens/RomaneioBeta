@@ -201,7 +201,6 @@ class TRDProvider(ProviderBase):
             headless=self.headless,
             args=[
                 '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
                 '--enable-features=NetworkService,NetworkServiceInProcess',
                 '--disable-features=IsolateOrigins,site-per-process,TranslateUI',
             ],
@@ -1297,8 +1296,13 @@ class TRDProvider(ProviderBase):
         extra_data: Optional[dict[str, Any]] = None,
     ) -> dict[str, str]:
         """Salva screenshot + HTML + JSON para diagnosticar falhas na etapa 2."""
+        import os
         paths: dict[str, str] = {}
         if not self._page:
+            return paths
+        # Grava HTML completo + payloads de rede em disco; só em modo debug
+        # explícito (CWE-312). Produção não define FRETIO_PROVIDER_DEBUG.
+        if not os.environ.get("FRETIO_PROVIDER_DEBUG"):
             return paths
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -1340,7 +1344,7 @@ class TRDProvider(ProviderBase):
                         const st = window.getComputedStyle(el);
                         return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none';
                     };
-                    const inputs = Array.from(document.querySelectorAll('input')).filter((el) => isVisible(el));
+                    const inputs = Array.from(document.querySelectorAll('input')).filter((el) => isVisible(el) && el.type !== 'password');
                     return inputs.slice(0, 80).map((el) => {
                         const wrapper = el.closest('div,section,form,tr,td,mat-form-field') || el.parentElement;
                         return {
