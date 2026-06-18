@@ -283,11 +283,17 @@ class ConfigMixin:
         def mut(cfg):
             t = cfg.setdefault("transportadoras", {}).setdefault(nome, {})
             for k, v in (campos or {}).items():
-                if k not in allowed:
-                    continue
-                if k in senha_keys:
+                if k not in allowed or k in senha_keys:
                     continue
                 t[k] = str(v)
+            # Nunca mantém senha em texto claro no TOML: migra qualquer valor legado
+            # em claro para o Credential Manager antes de removê-lo do arquivo.
+            for sk in senha_keys:
+                provided = str((campos or {}).get(sk, "")) if sk in (campos or {}) else ""
+                legacy = str(t.get(sk) or "")
+                if not provided and legacy:
+                    secure_credentials.set_credential(self._empresa, nome, sk, legacy)
+                t.pop(sk, None)
 
         return {"ok": self._write_config(mut)}
 
