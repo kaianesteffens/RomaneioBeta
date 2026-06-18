@@ -30,6 +30,7 @@ import web_app
 def _api():
     api = web_app.Api(empresa="teste", config_path=None)
     api._gate = lambda feature: None  # isola o gating de licença/remote
+    api._license_ok = True  # sessão licenciada: isola dos testes de gate de licença
     return api
 
 

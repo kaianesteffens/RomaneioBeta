@@ -107,22 +107,13 @@ def test_license_service_backend_invalid_response_is_not_cached(monkeypatch):
 
 def test_license_service_backend_offline_uses_existing_validation_cache(monkeypatch, tmp_path):
     appdata = tmp_path / "appdata"
-    cache_path = appdata / "Fretio" / ".license_cache"
-    cache_path.parent.mkdir(parents=True)
-    cache_path.write_text(
-        json.dumps(
-            {
-                "key": "FBOT-CACHE",
-                "valid": True,
-                "owner": "Cliente Cache",
-                "blocked": False,
-                "timestamp": time.time(),
-            }
-        ),
-        encoding="utf-8",
-    )
-
+    (appdata / "Fretio").mkdir(parents=True)
     monkeypatch.setenv("APPDATA", str(appdata))
+    # Grava o cache no formato assinado (HMAC) usando o próprio code path.
+    lic._save_validation_cache(
+        "FBOT-CACHE",
+        lic.LicenseStatus(valid=True, owner="Cliente Cache", blocked=False),
+    )
     monkeypatch.setattr(lic, "_get_license_api_url", lambda: "https://licenses.example.test/validate")
     monkeypatch.setattr(lic, "urlopen", lambda req, timeout, context=None: (_ for _ in ()).throw(URLError("offline")))
 
@@ -151,21 +142,12 @@ def test_license_service_backend_offline_without_cache_returns_friendly_message(
 
 def test_license_service_blocked_cache_never_unlocks_license(monkeypatch, tmp_path):
     appdata = tmp_path / "appdata"
-    cache_path = appdata / "Fretio" / ".license_cache"
-    cache_path.parent.mkdir(parents=True)
-    cache_path.write_text(
-        json.dumps(
-            {
-                "key": "FBOT-BLOCKED",
-                "valid": False,
-                "owner": "Cliente Bloqueado",
-                "blocked": True,
-                "timestamp": time.time(),
-            }
-        ),
-        encoding="utf-8",
-    )
+    (appdata / "Fretio").mkdir(parents=True)
     monkeypatch.setenv("APPDATA", str(appdata))
+    lic._save_validation_cache(
+        "FBOT-BLOCKED",
+        lic.LicenseStatus(valid=False, owner="Cliente Bloqueado", blocked=True),
+    )
     monkeypatch.setattr(lic, "_get_license_api_url", lambda: "https://licenses.example.test/validate")
     monkeypatch.setattr(lic, "urlopen", lambda req, timeout, context=None: (_ for _ in ()).throw(URLError("offline")))
 

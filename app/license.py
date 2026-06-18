@@ -7,6 +7,7 @@ Fallback legado temporário: leitura de licenças via GitHub Gist.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -255,8 +256,14 @@ def _fetch_licenses(gist_url: str) -> dict:
         return json.loads(resp.read())
 
 
+def _cache_hmac(payload_bytes: bytes) -> str:
+    """HMAC-SHA256 do cache com segredo derivado da máquina (machine-specific)."""
+    secret = get_machine_id().encode("utf-8")
+    return hmac.new(secret, payload_bytes, hashlib.sha256).hexdigest()
+
+
 def _save_validation_cache(key: str, status: LicenseStatus) -> None:
-    """Salva cache da última validação bem-sucedida."""
+    """Salva cache da última validação bem-sucedida, assinado por HMAC."""
     data = {
         "key": key,
         "valid": status.valid,
@@ -265,7 +272,9 @@ def _save_validation_cache(key: str, status: LicenseStatus) -> None:
         "expires": status.expires,
         "timestamp": time.time(),
     }
-    _validation_cache_file().write_text(json.dumps(data), encoding="utf-8")
+    payload = json.dumps(data, sort_keys=True).encode("utf-8")
+    signed = {"d": data, "mac": _cache_hmac(payload)}
+    _validation_cache_file().write_text(json.dumps(signed), encoding="utf-8")
 
 
 def _load_validation_cache(key: str) -> Optional[LicenseStatus]:
@@ -277,7 +286,15 @@ def _load_validation_cache(key: str) -> Optional[LicenseStatus]:
     if not f.exists():
         return None
     try:
-        data = json.loads(f.read_text(encoding="utf-8"))
+        signed = json.loads(f.read_text(encoding="utf-8"))
+        # Cache legado (sem "mac") ou adulterado é invalidado, forçando
+        # revalidação online — impede forjar valid=True localmente (CWE-345).
+        if not isinstance(signed, dict) or "mac" not in signed or "d" not in signed:
+            return None
+        data = signed["d"]
+        payload = json.dumps(data, sort_keys=True).encode("utf-8")
+        if not hmac.compare_digest(_cache_hmac(payload), str(signed.get("mac", ""))):
+            return None
         if data.get("key") != key:
             return None
         age_days = (time.time() - data.get("timestamp", 0)) / 86400
