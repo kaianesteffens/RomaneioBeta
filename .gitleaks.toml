@@ -1,0 +1,33 @@
+# gitleaks configuration for RomaneioBeta
+#
+# Extends the default gitleaks ruleset and allowlists a small set of
+# reviewed false positives identified during the pre-public security audit.
+# A real GitHub OAuth token that had been embedded in app/error_reporter.py
+# was purged from the entire git history (git filter-repo) and the token was
+# revoked, so it is intentionally NOT allowlisted here.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Reviewed false positives (pre-public security audit)"
+
+paths = [
+  # Unit tests for the error-report sanitizer use intentionally fake tokens
+  # (e.g. ghp_abcdefghijklmnopqrstuvwxyz123456) to assert redaction works.
+  '''test_error_reporter_sanitization\.py''',
+  # Saved carrier page snapshots; only contain public client-side identifiers.
+  '''app/RODONAVES/.*''',
+  # Third-party Playwright/xterm code bundled inside the shipped update
+  # archives (installer/repository-assets/*.zip!_internal\playwright\...).
+  # These are vendored library files, not application secrets.
+  '''_internal[\\/]playwright[\\/]''',
+]
+
+regexes = [
+  # reCAPTCHA site keys are public, client-side identifiers (not secrets).
+  '''6L[0-9A-Za-z_-]{30,}''',
+  # Documentation placeholder in a workflow comment, not a real credential
+  # (`Authorization: Bearer SEU_TOKEN` in build-release.yml).
+  '''SEU_TOKEN''',
+]

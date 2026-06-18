@@ -66,6 +66,19 @@ REM ── 2. Instalar dependencias ──────────────�
 echo.
 echo [2/5] Instalando dependencias Python...
 "%PY%" -m pip install --upgrade pip==%PINNED_PIP_VERSION% --quiet --disable-pip-version-check 2>nul
+REM Backend de build (PEP 517) para sdists sem wheel — ex.: proxy_tools (dep do
+REM pywebview, sdist-only). O Python embeddable instala so o pip via get-pip; sem
+REM setuptools no env, o ._pth do embeddable faz a build isolation resolver o
+REM backend contra o env principal (vazio) e o build falha com
+REM "Cannot import 'setuptools.build_meta'". Instalamos setuptools/wheel aqui e
+REM usamos --no-build-isolation no install do lock (abaixo) para buildar o sdist
+REM com o setuptools do proprio env.
+"%PY%" -m pip install setuptools==82.0.1 wheel==0.47.0 --quiet --disable-pip-version-check
+if %ERRORLEVEL% neq 0 (
+    echo ERRO: Falha ao instalar setuptools/wheel ^(backend de build PEP 517^).
+    %FB_PAUSE_CMD%
+    exit /b 1
+)
 if not exist "%REQ_LOCK%" (
     echo ERRO: requirements-lock.txt nao encontrado.
     echo      O build reprodutivel exige o lockfile existente.
@@ -74,7 +87,7 @@ if not exist "%REQ_LOCK%" (
     exit /b 1
 )
 echo      Usando lockfile: %REQ_LOCK%
-"%PY%" -m pip install --no-deps -r "%REQ_LOCK%" --quiet --disable-pip-version-check
+"%PY%" -m pip install --no-deps --no-build-isolation -r "%REQ_LOCK%" --quiet --disable-pip-version-check
 if %ERRORLEVEL% neq 0 (
     echo ERRO: Falha ao instalar dependencias pelo lockfile!
     %FB_PAUSE_CMD%
@@ -118,54 +131,13 @@ if %ERRORLEVEL% neq 0 (
     %FB_PAUSE_CMD%
     exit /b 1
 )
-if exist "dist\Fretio\Fretio.exe" (
-    copy /Y "dist\Fretio\Fretio.exe" "dist\Fretio\FreteBot.exe" >nul
-    echo [OK] Alias legado gerado: dist\Fretio\FreteBot.exe
-)
 echo [OK] Executavel gerado em dist\Fretio\
 
-REM ── 5. Garantir arquivos de configuracao no dist ─────────────────
-if not exist "dist\Fretio\_internal\CONFIG.example.toml" (
-    if exist "%~dp0..\app\CONFIG.example.toml" (
-        copy /Y "%~dp0..\app\CONFIG.example.toml" "dist\Fretio\_internal\CONFIG.example.toml" >nul
-        echo [OK] CONFIG.example.toml copiado para dist\_internal
-    ) else (
-        echo [AVISO] app\CONFIG.example.toml nao encontrado.
-    )
-) else (
-    echo [OK] CONFIG.example.toml ja presente em dist\_internal
-)
-
-if not exist "dist\Fretio\_internal\CONFIG.toml" (
-    if exist "%~dp0..\app\CONFIG.toml" (
-        copy /Y "%~dp0..\app\CONFIG.toml" "dist\Fretio\_internal\CONFIG.toml" >nul
-        echo [OK] CONFIG.toml copiado de app para dist\_internal
-    ) else if exist "dist\Fretio\_internal\CONFIG.example.toml" (
-        copy /Y "dist\Fretio\_internal\CONFIG.example.toml" "dist\Fretio\_internal\CONFIG.toml" >nul
-        echo [OK] CONFIG.toml gerado a partir de CONFIG.example.toml
-    ) else (
-        echo [AVISO] Nao foi possivel gerar dist\Fretio\_internal\CONFIG.toml
-    )
-) else (
-    echo [OK] CONFIG.toml ja presente em dist\_internal
-)
-
-echo [OK] Normalizando defaults obrigatorios do CONFIG embutido...
-"%PY%" normalize_embedded_config.py "dist\Fretio\_internal\CONFIG.toml"
-if %ERRORLEVEL% neq 0 (
-    echo ERRO: Falha ao normalizar dist\Fretio\_internal\CONFIG.toml
-    %FB_PAUSE_CMD%
-    exit /b 1
-)
-if exist "dist\Fretio\CONFIG.toml" (
-    "%PY%" normalize_embedded_config.py "dist\Fretio\CONFIG.toml"
-    if %ERRORLEVEL% neq 0 (
-        echo ERRO: Falha ao normalizar dist\Fretio\CONFIG.toml
-        %FB_PAUSE_CMD%
-        exit /b 1
-    )
-)
-echo [OK] CONFIG embutido validado
+REM ── 5. Configuracao embutida ─────────────────────────────────────
+REM Apenas o template CONFIG.example.toml acompanha o build (incluido pelo
+REM Fretio.spec). NUNCA embarcar um CONFIG.toml real: ele iria em texto puro para
+REM a maquina do cliente. O app cria a config por empresa no primeiro uso, com as
+REM URLs padrao definidas em company_config.
 
 REM ── 6. Compilar instalador com Inno Setup ────────────────────
 echo.

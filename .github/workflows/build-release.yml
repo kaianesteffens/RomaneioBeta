@@ -1,5 +1,21 @@
 name: Build and Release Fretio
 
+# Pode ser disparado de duas formas:
+#
+# 1. Pela UI do GitHub (Actions > "Run workflow")
+#
+# 2. Via API REST (curl, script, CI externo, atalho mobile, etc.):
+#
+#    curl -s -X POST \
+#      -H "Accept: application/vnd.github+json" \
+#      -H "Authorization: Bearer SEU_TOKEN" \
+#      https://api.github.com/repos/kaianesteffens/RomaneioBeta/dispatches \
+#      -d '{"event_type":"build-release","client_payload":{"version":"2.35","publish_release":true}}'
+#
+#    Campos do client_payload:
+#      version         (obrigatorio) ex: "2.35" ou "2.35.1"
+#      publish_release (opcional, padrao true) true | false
+
 on:
   workflow_dispatch:
     inputs:
@@ -8,10 +24,13 @@ on:
         required: true
         type: string
       publish_release:
-        description: "Publicar release oficial no repositorio de releases"
+        description: "Publicar release oficial no proprio repositorio"
         required: true
         default: true
         type: boolean
+
+  repository_dispatch:
+    types: [build-release]
 
 permissions:
   contents: write
@@ -21,9 +40,9 @@ jobs:
     runs-on: windows-latest
     env:
       HAS_RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN != '' }}
-      PUBLISH_RELEASE: ${{ inputs.publish_release }}
+      PUBLISH_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || (github.event_name != 'workflow_dispatch' && github.event.client_payload.publish_release != 'false') }}
       HAS_UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_B64 != '' }}
-      RELEASE_REPO: ${{ vars.RELEASE_REPO || 'kaianesteffens/RomaneioBeta-releases' }}
+      RELEASE_REPO: ${{ vars.RELEASE_REPO || github.repository }}
       RELEASE_REPO_ALIASES: ${{ vars.RELEASE_REPO_ALIASES }}
       UPDATE_PUBLIC_KEY_B64: ${{ vars.UPDATE_PUBLIC_KEY_B64 }}
       ALLOW_UNSIGNED_DEV_RELEASE: ${{ vars.ALLOW_UNSIGNED_DEV_RELEASE || 'false' }}
@@ -39,9 +58,10 @@ jobs:
         id: release_inputs
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
+          INPUT_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.event.client_payload.version }}
         run: |
-          $version = "${{ inputs.version }}".Trim()
+          $version = $env:INPUT_VERSION.Trim()
           if ([string]::IsNullOrWhiteSpace($version)) {
             throw "Input version e obrigatorio. Informe uma versao nova, ex: 2.34 ou 2.34.1."
           }
@@ -54,9 +74,11 @@ jobs:
           $hasReleaseToken = $env:HAS_RELEASES_TOKEN -eq "true"
           $hasPrivateKey = $env:HAS_UPDATE_SIGNING_KEY -eq "true"
           $hasPublicKey = -not [string]::IsNullOrWhiteSpace($env:UPDATE_PUBLIC_KEY_B64)
+          $releaseRepo = $env:RELEASE_REPO
+          $isSameRepo = $releaseRepo -eq $env:GITHUB_REPOSITORY
 
-          if ($publishRelease -and -not $hasReleaseToken) {
-            throw "RELEASES_TOKEN e obrigatorio para publish_release=true. Use publish_release=false somente para build interno sem publicacao externa."
+          if ($publishRelease -and -not $isSameRepo -and -not $hasReleaseToken) {
+            throw "Publicar release em outro repositorio ($releaseRepo) exige RELEASES_TOKEN. Para publicar no proprio repositorio ($env:GITHUB_REPOSITORY) o GITHUB_TOKEN automatico ja basta."
           }
           if ($publishRelease -and (-not $hasPrivateKey -or -not $hasPublicKey)) {
             throw "Release oficial exige UPDATE_SIGNING_PRIVATE_KEY_B64 e UPDATE_PUBLIC_KEY_B64. Use publish_release=false e ALLOW_UNSIGNED_DEV_RELEASE=true apenas para build dev interno."
@@ -110,55 +132,26 @@ jobs:
           echo "version=$version" >> $env:GITHUB_OUTPUT
           Write-Host "[OK] app\version.txt definido para $version"
 
-      - name: Inject error reporting credentials
+      - name: Embed update public key
         shell: pwsh
         run: |
-          $gistId    = "${{ secrets.ERROR_GIST_ID }}"
-          $token     = "${{ secrets.ERROR_REPORT_TOKEN }}"
+          # A chave PÚBLICA de verificação de update NÃO é segredo — pode ser embutida
+          # no binário. Nenhuma credencial do desenvolvedor (token de Gist etc.) é
+          # gerada ou embarcada: o servidor identifica o cliente pela licença.
           $updatePublicKey = $env:UPDATE_PUBLIC_KEY_B64
-          $githubRepo = $env:RELEASE_REPO
-          $aliasCandidates = @()
-          if ($env:RELEASE_REPO_ALIASES) {
-            $aliasCandidates += $env:RELEASE_REPO_ALIASES.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          if (-not $updatePublicKey) {
+            Write-Host "[INFO] UPDATE_PUBLIC_KEY_B64 ausente — _EMBEDDED_UPDATE_PUBLIC_KEY_B64 fica vazio"
           }
-          if (-not ($aliasCandidates -contains $githubRepo)) {
-            $aliasCandidates = @($githubRepo) + $aliasCandidates
-          }
-          $aliasItems = foreach ($alias in $aliasCandidates) { '"' + ($alias -replace '"', '\"') + '"' }
-          $aliasesToml = "[" + ($aliasItems -join ", ") + "]"
-          $licenseApiUrl = "https://fretio.api.br/api/licenses/validate"
-          $licenseConfigApiUrl = "https://fretio.api.br/api/licenses/config"
-          $versionApiUrl = "https://fretio.api.br/api/version/latest"
-          $licenseUrl = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
-          $errorApiUrl = "https://fretio.api.br/api/errors"
-          $usageApiUrl = "https://fretio.api.br/api/usage/events"
-          $quotationJobsApiUrl = "https://fretio.api.br/api/quotations/jobs"
-          $content = @(
-            '[fretio]'
-            "github_repo = `"$githubRepo`""
-            "github_repo_aliases = $aliasesToml"
-            "license_api_url = `"$licenseApiUrl`""
-            "license_config_api_url = `"$licenseConfigApiUrl`""
-            "version_api_url = `"$versionApiUrl`""
-            "license_url = `"$licenseUrl`""
-            "error_api_url = `"$errorApiUrl`""
-            "usage_api_url = `"$usageApiUrl`""
-            "quotation_jobs_api_url = `"$quotationJobsApiUrl`""
-            "update_public_key_b64 = `"$updatePublicKey`""
-          ) -join "`r`n"
-          if ($gistId -and $token) {
-            $content += "`r`nerror_gist_id = `"$gistId`""
-            $content += "`r`nerror_report_token = `"$token`""
-          } else {
-            $content += "`r`nerror_gist_id = `"`""
-            $content += "`r`nerror_report_token = `"`""
-          }
-          [System.IO.File]::WriteAllText(
-            (Join-Path $PWD "app\CONFIG.toml"),
-            $content,
-            [System.Text.Encoding]::UTF8
+          $path = Join-Path $PWD "app\update_security.py"
+          $text = [System.IO.File]::ReadAllText($path)
+          $escaped = $updatePublicKey -replace '"', '\"'
+          $text = [System.Text.RegularExpressions.Regex]::Replace(
+            $text,
+            '_EMBEDDED_UPDATE_PUBLIC_KEY_B64 = "[^"]*"',
+            "_EMBEDDED_UPDATE_PUBLIC_KEY_B64 = `"$escaped`""
           )
-          Write-Host "[OK] app\CONFIG.toml gerado para o build"
+          [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
+          Write-Host "[OK] Chave pública de update embutida em app\update_security.py"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -178,6 +171,36 @@ jobs:
           }
           if (-not (Select-String -Path "installer\requirements-lock.txt" -Pattern "^cryptography==48\.0\.0$" -Quiet)) {
             throw "cryptography==48.0.0 nao encontrado no lock"
+          }
+          if (-not (Select-String -Path "installer\requirements-lock.txt" -Pattern "^pywebview==" -Quiet)) {
+            throw "pywebview nao encontrado no lock (a UI roda em WebView2)"
+          }
+          if (Select-String -Path "installer\requirements-lock.txt" -Pattern "^PySide6" -Quiet) {
+            throw "PySide6 ainda presente no lock; a UI Qt foi removida"
+          }
+
+      - name: Download WebView2 Runtime bootstrapper
+        shell: pwsh
+        run: |
+          # A interface roda em WebView2. O instalador (Fretio-installer.iss) embute
+          # este bootstrapper Evergreen (per-user) e so o executa quando o runtime
+          # faltar (Windows 10/imagens sem Edge). No Windows 11 ja vem instalado.
+          $dest = "installer\MicrosoftEdgeWebview2Setup.exe"
+          $url = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+          $ok = $false
+          for ($i = 1; $i -le 3 -and -not $ok; $i++) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -MaximumRedirection 10 -TimeoutSec 60
+              if ((Test-Path $dest) -and ((Get-Item $dest).Length -gt 100000)) { $ok = $true }
+            } catch {
+              Write-Host "Tentativa $i de download falhou: $($_.Exception.Message)"
+              Start-Sleep -Seconds 5
+            }
+          }
+          if ($ok) {
+            Write-Host "WebView2 bootstrapper baixado: $((Get-Item $dest).Length) bytes"
+          } else {
+            throw "Nao foi possivel baixar o WebView2 bootstrapper apos 3 tentativas. A UI roda em WebView2; publicar um instalador sem o bootstrapper deixaria Win10/imagens corporativas sem runtime e sem como iniciar a UI nova. Abortando o release."
           }
 
       - name: Run build.bat (official flow)
@@ -358,7 +381,7 @@ jobs:
         if: env.PUBLISH_RELEASE == 'true'
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           $ver = "${{ steps.meta.outputs.version }}"
           $tag = "v$ver"

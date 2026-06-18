@@ -396,7 +396,8 @@ class CoopexProvider(ProviderBase):
             f"cubagem={cubagem_m3:.4f}m³, {volumes}vol, linhas_cubagem={len(cubagens_validas)}, "
             f"coletar=S, R${valor}"
         )
-        logger.info(f"[{self.nome}] Todos os campos SSW: {form_check}")
+        campos_seguros = re.sub(r"(?<!\d)\d{11,14}(?!\d)", "***", str(form_check))
+        logger.info(f"[{self.nome}] Campos SSW: {campos_seguros}")
 
     async def _submeter_e_extrair(self) -> Optional[Cotacao]:
         """Submete a cotação e extrai o resultado."""
@@ -455,7 +456,8 @@ class CoopexProvider(ProviderBase):
                     continue
                 break
 
-        logger.info(f"[{self.nome}] Todos os campos resultado DOM: {results}")
+        resultado_seguro = re.sub(r"(?<!\d)\d{11,14}(?!\d)", "***", str(results))
+        logger.info(f"[{self.nome}] Campos resultado DOM: {resultado_seguro}")
 
         # Se prazo foi encontrado mas vlr_frete ainda está vazio, tenta mais 10s
         # (SSW às vezes popula os campos em fases distintas)
@@ -506,8 +508,8 @@ class CoopexProvider(ProviderBase):
                 restricao_risco = erro_msg
                 logger.info(f"[{self.nome}] Aviso de risco (nao fatal): {erro_msg}")
             else:
-                self.last_error = f"Rota não atendida pelo SSW: {erro_msg}"
-                logger.info(f"[{self.nome}] {self.last_error}")
+                self.last_error = "Rota não atendida pela transportadora"
+                logger.info(f"[{self.nome}] {self.last_error} (SSW: {erro_msg})")
                 return None
 
         vlr_frete_str = (results.get('vlr_frete', '') or results.get('vlr_total', '') or

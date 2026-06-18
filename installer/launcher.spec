@@ -26,7 +26,7 @@ a = Analysis(
     excludes=[
         "matplotlib", "numpy", "scipy", "pandas",
         "IPython", "jupyter", "pytest", "unittest",
-        "PySide6", "PIL", "playwright", "pdfplumber",
+        "webview", "clr", "PIL", "playwright", "pdfplumber",
         "httpx", "httpcore", "bs4",
     ],
     noarchive=False,

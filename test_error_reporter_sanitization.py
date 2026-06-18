@@ -16,26 +16,21 @@ import error_reporter as er
 @pytest.fixture(autouse=True)
 def _reset_error_reporter_state(monkeypatch):
     er._error_api_url = ""
-    er._gist_id = ""
-    er._token = ""
     er._initialized = False
     er._recent_errors.clear()
-    er._invalid_token_fingerprints.clear()
+    # Estes testes validam justamente o caminho de envio; desligam o guard que
+    # descarta reports originados de testes.
+    er.suppress_test_reports = False
     for env_name in (
         "FRETIO_ERROR_API_URL",
         "FRETEBOT_ERROR_API_URL",
-        "FRETIO_ERROR_GIST_ID",
-        "FRETEBOT_ERROR_GIST_ID",
-        "FRETIO_ERROR_REPORT_TOKEN",
-        "FRETEBOT_ERROR_REPORT_TOKEN",
     ):
         monkeypatch.delenv(env_name, raising=False)
     yield
     er._error_api_url = ""
-    er._gist_id = ""
-    er._token = ""
     er._initialized = False
     er._recent_errors.clear()
+    er.suppress_test_reports = True
 
 
 @pytest.mark.parametrize(
@@ -98,7 +93,7 @@ def test_sanitize_error_payload_preserves_report_structure_and_diagnostics():
     assert "abc123\n" not in sanitized
 
 
-def test_report_error_message_sanitizes_body_before_send(monkeypatch):
+def test_report_error_message_sanitizes_payload_before_send(monkeypatch):
     sent = {}
 
     class _ImmediateThread:
@@ -112,13 +107,12 @@ def test_report_error_message_sanitizes_body_before_send(monkeypatch):
         def join(self, timeout=None):
             return None
 
-    er._gist_id = "gist"
-    er._token = "token"
+    er._error_api_url = "https://errors.example.test/api/errors"
     er._initialized = True
     er._recent_errors.clear()
     monkeypatch.setattr(er.threading, "Thread", _ImmediateThread)
     monkeypatch.setattr(er, "_read_recent_diag_log", lambda: "cliente@example.com token=tok_123")
-    monkeypatch.setattr(er, "_send_to_gist", lambda body, label="": sent.setdefault("body", body) or True)
+    monkeypatch.setattr(er, "_send_to_error_api", lambda payload, label="": sent.setdefault("payload", payload) is None or True)
 
     er.report_error_message(
         "Falha cliente 12.345.678/0001-90 email cliente@example.com senha=segredo",
@@ -126,17 +120,17 @@ def test_report_error_message_sanitizes_body_before_send(monkeypatch):
         wait=True,
     )
 
-    body = sent["body"]
-    assert "### Stack de Chamada" in body
-    assert "| Contexto | `cotacao_TRD` |" in body
-    assert "[CNPJ_REDACTED]" in body
-    assert "[EMAIL_REDACTED]" in body
-    assert "senha=[TOKEN_REDACTED]" in body
-    assert "token=[TOKEN_REDACTED]" in body
-    assert "12.345.678/0001-90" not in body
-    assert "cliente@example.com" not in body
-    assert "segredo" not in body
-    assert "tok_123" not in body
+    payload = sent["payload"]
+    assert payload["module"] == "cotacao_TRD"
+    assert "[CNPJ_REDACTED]" in payload["message"]
+    assert "[EMAIL_REDACTED]" in payload["message"]
+    assert "senha=[TOKEN_REDACTED]" in payload["message"]
+    assert "token=[TOKEN_REDACTED]" in payload["recent_diag"]
+    serialized = json.dumps(payload)
+    assert "12.345.678/0001-90" not in serialized
+    assert "cliente@example.com" not in serialized
+    assert "segredo" not in serialized
+    assert "tok_123" not in serialized
 
 
 def test_report_error_sanitizes_traceback_before_send(monkeypatch):
@@ -153,14 +147,13 @@ def test_report_error_sanitizes_traceback_before_send(monkeypatch):
         def join(self, timeout=None):
             return None
 
-    er._gist_id = "gist"
-    er._token = "token"
+    er._error_api_url = "https://errors.example.test/api/errors"
     er._initialized = True
     er._recent_errors.clear()
     monkeypatch.setattr(er.threading, "Thread", _ImmediateThread)
-    monkeypatch.setattr(er, "_get_license_key", lambda: "FBOT-ABCD-1234-EFGH-5678")
+    monkeypatch.setattr(er, "_get_saved_license_key", lambda: "FBOT-ABCD-1234-EFGH-5678")
     monkeypatch.setattr(er, "_read_recent_diag_log", lambda: "Bearer ghp_abcdefghijklmnopqrstuvwxyz123456")
-    monkeypatch.setattr(er, "_send_to_gist", lambda body, label="": sent.setdefault("body", body) or True)
+    monkeypatch.setattr(er, "_send_to_error_api", lambda payload, label="": sent.setdefault("payload", payload) is None or True)
 
     try:
         raise RuntimeError(
@@ -169,19 +162,17 @@ def test_report_error_sanitizes_traceback_before_send(monkeypatch):
     except RuntimeError:
         er.report_error(context="licenca_cliente", wait=True)
 
-    body = sent["body"]
-    assert "### Traceback" in body
-    assert "| Contexto | `licenca_cliente` |" in body
-    assert "| Fingerprint | `" in body
-    assert "[CPF_REDACTED]" in body
-    assert "[CEP_REDACTED]" in body
-    assert "[TOKEN_REDACTED]" in body
-    assert "[LICENSE_REDACTED]" in body
-    assert "123.456.789-01" not in body
-    assert "90010-123" not in body
-    assert "github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890" not in body
-    assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in body
-    assert "FBOT-ABCD-1234-EFGH-5678" not in body
+    payload = sent["payload"]
+    assert payload["module"] == "licenca_cliente"
+    assert "Traceback (most recent call last)" in payload["traceback"]
+    assert "[TOKEN_REDACTED]" in payload["recent_diag"]
+    serialized = json.dumps(payload)
+    assert "[CPF_REDACTED]" in serialized
+    assert "[CEP_REDACTED]" in serialized
+    assert "123.456.789-01" not in serialized
+    assert "90010-123" not in serialized
+    assert "github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890" not in serialized
+    assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in serialized
 
 
 def test_report_error_posts_to_error_api_when_configured(monkeypatch):
@@ -246,8 +237,9 @@ def test_report_error_posts_to_error_api_when_configured(monkeypatch):
     assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in serialized
 
 
-def test_report_error_falls_back_to_gist_without_error_api_url(monkeypatch):
-    sent = {}
+def test_report_error_drops_when_no_error_api_url(monkeypatch):
+    # Sem endpoint configurado não há nenhum fallback (o caminho Gist foi removido).
+    calls = []
 
     class _ImmediateThread:
         def __init__(self, target, args=(), daemon=None):
@@ -260,20 +252,15 @@ def test_report_error_falls_back_to_gist_without_error_api_url(monkeypatch):
         def join(self, timeout=None):
             return None
 
-    er._gist_id = "gist"
-    er._token = "token"
-    er._initialized = True
+    er._error_api_url = ""
+    er._initialized = True  # evita _load_config preencher o default embutido
     monkeypatch.setattr(er.threading, "Thread", _ImmediateThread)
-    monkeypatch.setattr(
-        er,
-        "_send_to_error_api",
-        lambda payload, label="": (_ for _ in ()).throw(AssertionError("API não deve ser usada")),
-    )
-    monkeypatch.setattr(er, "_send_to_gist", lambda body, label="": sent.setdefault("label", label) or True)
+    monkeypatch.setattr(er, "_send_to_error_api", lambda payload, label="": calls.append(label) or True)
 
     er.report_error_message("falha operacional", context="cotacao_RODONAVES", wait=True)
 
-    assert sent["label"] == "msg/cotacao_RODONAVES"
+    assert calls == []
+    assert not hasattr(er, "_send_to_gist")
 
 
 def test_report_error_api_failure_does_not_raise(monkeypatch):
@@ -317,3 +304,53 @@ def test_error_reporter_loads_error_api_url_from_config(monkeypatch, tmp_path):
     er._load_config()
 
     assert er._error_api_url == "https://errors.example.test/api/errors"
+
+
+def test_traceback_is_test_originated_detects_test_frames():
+    assert er._traceback_is_test_originated(
+        '  File "test_cotacao_transportadoras.py", line 218, in create'
+    )
+    assert er._traceback_is_test_originated(
+        '  File "C:\\\\Users\\\\dev\\\\RomaneioBeta\\\\test_x.py", line 1, in f'
+    )
+    assert er._traceback_is_test_originated(
+        '  File "/home/u/work/RomaneioBeta/tests/test_provider_regressions.py", line 5, in g'
+    )
+    assert er._traceback_is_test_originated('  File "conftest.py", line 1, in h')
+    # Caminhos de produção não devem ser detectados como teste.
+    assert not er._traceback_is_test_originated(
+        '  File "app/cotacao/orchestrator.py", line 1101, in _executar_cotacoes_com_dados'
+    )
+    assert not er._traceback_is_test_originated("")
+
+
+def test_report_error_payload_skips_test_originated(monkeypatch):
+    """Dublê de teste (falha fake) não deve gerar issue no servidor."""
+    calls = []
+
+    er._error_api_url = "https://errors.example.test/api/errors"
+    er._initialized = True
+    er._recent_errors.clear()
+    # Comportamento real do app (guard ligado).
+    monkeypatch.setattr(er, "suppress_test_reports", True)
+    monkeypatch.setattr(er, "_send_to_error_api", lambda payload, label="": calls.append(label) or True)
+
+    fake_tb = (
+        "Traceback (most recent call last):\n"
+        '  File "app/cotacao/orchestrator.py", line 1101, in _executar_cotacoes_com_dados\n'
+        '  File "test_cotacao_transportadoras.py", line 218, in create\n'
+        '    raise RuntimeError("falha fake rodonaves")\n'
+        "RuntimeError: falha fake rodonaves\n"
+    )
+    er.report_error_payload(
+        {
+            "module": "cotacao",
+            "provider": "rodonaves",
+            "stage": "abrir_cotacao",
+            "message": "Erro ao preparar RODONAVES: falha fake rodonaves",
+            "traceback": fake_tb,
+        },
+        wait=True,
+    )
+
+    assert calls == []

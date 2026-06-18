@@ -3,18 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable
-import asyncio
+from typing import Any
 from datetime import datetime
-import inspect
 import logging
 import os
-import time
-import re
 import sys
-import threading
 
 # Adiciona a pasta 'src' ao sys.path para encontrar os módulos do Fretio
 def _add_fretio_src_to_path() -> None:
@@ -52,11 +46,6 @@ except Exception:
     def update_quotation_job_result(*a, **kw): return {"updated": False}
 
 try:
-    from quotation_normalization_shadow import run_shadow_normalization
-except Exception:
-    def run_shadow_normalization(*a, **kw): return None
-
-try:
     from remote_config import apply_safe_runtime_overrides
 except Exception:
     def apply_safe_runtime_overrides(config):
@@ -73,7 +62,6 @@ except Exception:
     CARRIER_DISABLED_MESSAGE = "Esta transportadora foi desabilitada pela configuração da licença."
     KNOWN_CARRIERS = (
         "braspress",
-        "bauer",
         "trd",
         "agex",
         "eucatur",
@@ -111,6 +99,8 @@ from fretio.quotation_contract import (
     quote_response_to_resultado_cotacao,
 )
 
+from . import deps
+
 
 CEP_ORIGEM_PADRAO = "99740000"
 MODO_FOCO_TRANSPORTADORA = ""  # Vazio = sem foco; cota todas as transportadoras habilitadas.
@@ -127,16 +117,6 @@ habilitado = true
 cnpj = ""
 senha = ""
 ufs_atendidas = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
-
-[transportadoras.bauer]
-habilitado = true
-cotacao_url = ""
-cnpj_pagador = ""
-cnpj_remetente = ""
-cnpj_destinatario = ""
-headless = true
-quantidade = 1
-ufs_atendidas = ["PR", "RS", "SC"]
 
 [transportadoras.trd]
 habilitado = true
@@ -437,7 +417,7 @@ def _remote_disabled_results_for_config(config: dict[str, Any], *, contexto: str
     skipped: list[ResultadoCotacao] = []
     for carrier in KNOWN_CARRIERS:
         canonical = normalize_carrier_name(carrier)
-        allowed, message = carrier_enabled_or_message(canonical)
+        allowed, message = deps.carrier_enabled_or_message(canonical)
         if allowed:
             continue
         section = transportadoras_cfg.get(canonical)
@@ -462,4 +442,46 @@ def _remote_disabled_results_for_config(config: dict[str, Any], *, contexto: str
 
 
 
-__all__ = [name for name in globals() if not name.startswith("__")]
+# API pública explícita do módulo comum (não reexporta stdlib).
+__all__ = [
+    "CARRIER_DISABLED_MESSAGE",
+    "CEP_ORIGEM_PADRAO",
+    "ConfigManager",
+    "KNOWN_CARRIERS",
+    "MODO_FOCO_TRANSPORTADORA",
+    "PROVIDER_PROGRESS_MESSAGES",
+    "PROVIDER_PROGRESS_STAGE_LABELS",
+    "PROVIDER_PROGRESS_STATUSES",
+    "ProviderCotacaoStatus",
+    "ProviderFactory",
+    "QuoteResponse",
+    "ResultadoCotacao",
+    "_CONFIG_FALLBACK",
+    "_add_fretio_src_to_path",
+    "_base_dir",
+    "_diag_log_enabled",
+    "_log_diag",
+    "_log_path",
+    "_logger",
+    "_remote_disabled_results_for_config",
+    "_trd_headless_config_value",
+    "apply_safe_runtime_overrides",
+    "carrier_enabled_or_message",
+    "carrier_login_indicator_from_progress_payload",
+    "create_quotation_job",
+    "get_logger",
+    "normalize_carrier_name",
+    "normalize_provider_progress_message",
+    "normalize_provider_progress_status",
+    "provider_progress_from_resultado",
+    "quote_request_from_legacy_kwargs",
+    "quote_response_to_resultado_cotacao",
+    "report_carrier_quotation_result",
+    "report_error",
+    "report_error_message",
+    "report_error_payload",
+    "report_quotation_finished",
+    "report_quotation_started",
+    "setup_logging",
+    "update_quotation_job_result",
+]

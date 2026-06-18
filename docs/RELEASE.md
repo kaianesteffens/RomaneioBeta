@@ -49,11 +49,14 @@ Configuração obrigatória para release oficial de cliente:
 
 - Secret `UPDATE_SIGNING_PRIVATE_KEY_B64`
 - Variable `UPDATE_PUBLIC_KEY_B64`
-- Secret `RELEASES_TOKEN` com acesso ao repositório `kaianesteffens/RomaneioBeta-releases`
-- Variable `RELEASE_REPO=kaianesteffens/RomaneioBeta-releases`
 - Variable `ALLOW_UNSIGNED_DEV_RELEASE=false`
 
-Com `publish_release=true`, o workflow valida que `version` é maior que a maior tag já publicada no repositório de releases, atualiza `app/version.txt` antes do build, assina os ZIPs de update, publica a GitHub Release `v<version>` e falha se faltar token, chave de assinatura ou qualquer artefato obrigatório.
+As releases são publicadas no próprio repositório `kaianesteffens/RomaneioBeta`
+(que é público), então o `GITHUB_TOKEN` automático do workflow já basta — **não é
+mais necessário um `RELEASES_TOKEN`**. Só defina `RELEASE_REPO` (e um `RELEASES_TOKEN`
+com acesso a ele) se quiser publicar em um repositório diferente do atual.
+
+Com `publish_release=true`, o workflow valida que `version` é maior que a maior tag já publicada no repositório, atualiza `app/version.txt` antes do build, assina os ZIPs de update, publica a GitHub Release `v<version>` e falha se faltar chave de assinatura ou qualquer artefato obrigatório.
 
 Para build interno sem publicação externa, rode manualmente com `publish_release=false`. Se as chaves de assinatura estiverem ausentes, esse modo só deve ser usado com `ALLOW_UNSIGNED_DEV_RELEASE=true`; ele gera apenas artefatos internos do workflow e não publica ZIP sem `.sig` no repositório de releases.
 
@@ -68,9 +71,9 @@ O workflow deve gerar, para a versão informada:
 
 ## Publicação
 
-- Conferir que a GitHub Release `v2.32` existe em `kaianesteffens/RomaneioBeta-releases`.
+- Conferir que a GitHub Release `v2.32` existe em `kaianesteffens/RomaneioBeta`.
 - Conferir anexos: instalador, ZIP de update, assinatura do ZIP, launcher e aliases `latest`.
-- Conferir que `latest.json`, se versionado/gerado, aponta para `2.32` e para `kaianesteffens/RomaneioBeta-releases`.
+- Conferir que `latest.json`, se versionado/gerado, aponta para `2.32` e para `kaianesteffens/RomaneioBeta`.
 - No server, cadastrar ou ativar `/api/admin/versions` com:
   - `version`: `2.32`
   - `download_url`: URL do asset `Fretio-Update-2.32.zip` ou `Fretio-Update-latest.zip`

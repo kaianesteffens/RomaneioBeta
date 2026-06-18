@@ -29,6 +29,11 @@ except Exception:
         return None
 
 
+# Re-exportado de error_classifiers (fonte única dos classificadores). Mantido em
+# __all__ p/ quem importa `from cotacao.error_context import is_expected_prelogin_failure`.
+from .error_classifiers import is_expected_prelogin_failure
+
+
 MODULE = "cotacao"
 DEFAULT_SOURCE = "cotacao_provider"
 ALLOWED_STAGES = {
@@ -411,6 +416,7 @@ def _normalize_json_key(value: Any) -> str:
 __all__ = [
     "ALLOWED_STAGES",
     "build_quotation_error_diagnostic",
+    "is_expected_prelogin_failure",
     "report_provider_error",
     "sanitize_context",
 ]

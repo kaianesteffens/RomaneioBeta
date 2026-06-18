@@ -73,7 +73,7 @@ Não adicionar comentários que apenas descrevem o que o código já faz.
 
 - `RomaneioBeta`: aplicativo desktop, UI, automacoes locais, providers, updater e build Windows.
 - `RomaneioBeta-server`: API FastAPI, licencas, configuracao remota, versoes, logs, eventos, jobs e painel admin.
-- `RomaneioBeta-releases`: repositorio publico usado apenas para distribuicao/metadata de releases quando aplicavel.
+- `RomaneioBeta-releases`: repositorio legado de releases; fallback de leitura do updater para builds antigos. Novas releases vao para o proprio `RomaneioBeta`.
 
 ## Verificacao
 

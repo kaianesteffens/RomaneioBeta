@@ -6,14 +6,23 @@ from pathlib import Path
 from typing import Any, Callable
 import asyncio
 import os
-import subprocess
+import sys
 import time
 
-from .common import *
+from fretio.providers.factory import slowness_priority_for_provider
+
+from . import deps
+from .common import (
+    KNOWN_CARRIERS,
+    MODO_FOCO_TRANSPORTADORA,
+    _log_diag,
+    _logger,
+    _remote_disabled_results_for_config,
+    _trd_headless_config_value,
+)
 from .config import _carregar_config
 from .validation import _uf_atendida
-from .telemetry import _remote_disabled_results_for_config
-from .error_context import report_provider_error
+from .error_context import is_expected_prelogin_failure, report_provider_error
 from .circuit_breaker import ProviderCircuitBreaker
 
 CHROME_DOWNLOAD_URL = "https://www.google.com/chrome/"
@@ -110,15 +119,9 @@ def _kill_orphan_Fretio_chromes() -> None:
 
 # Prioridade de lentidão: maior = mais lento (baseado em testes reais).
 # Usado para iniciar os mais lentos primeiro e para ordenar resultados.
+# Derivado do registro único (ProviderSpec.slowness_priority em factory.py).
 _PRIORIDADE_LENTIDAO: dict[str, int] = {
-    "TRD": 700,
-    "ALFA": 600,
-    "BRASPRESS": 500,
-    "TRANSLOVATO": 450,
-    "EUCATUR": 400,
-    "COOPEX": 350,
-    "RODONAVES": 300,
-    "AGEX": 100,
+    nome.upper(): slowness_priority_for_provider(nome) for nome in KNOWN_CARRIERS
 }
 
 # Timeouts por provider (fluxos reais medidos):
@@ -243,7 +246,7 @@ class TransportadoraSession:
 
     def __init__(self, config_path: Path | None = None):
         self.config = _carregar_config(config_path=config_path)
-        self.provider_factory = ProviderFactory(config=self.config)
+        self.provider_factory = deps.ProviderFactory(config=self.config)
         self._provider_sessions = _ProviderSessionRegistry()
         self._circuit_breaker = ProviderCircuitBreaker()
         self._inicializado = False
@@ -448,7 +451,7 @@ class TransportadoraSession:
                     transportadoras_cfg = {}
                 transportadoras_cfg = dict(transportadoras_cfg)
                 foco = str(MODO_FOCO_TRANSPORTADORA).strip().lower()
-                for nome_cfg in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex", "translovato"):
+                for nome_cfg in ("braspress", "trd", "agex", "eucatur", "rodonaves", "alfa", "coopex", "translovato"):
                     sec = transportadoras_cfg.get(nome_cfg)
                     if not isinstance(sec, dict):
                         sec = {}
@@ -462,7 +465,7 @@ class TransportadoraSession:
                 effective_config,
                 contexto="pre-login",
             )
-            provider_factory = ProviderFactory(config=effective_config)
+            provider_factory = deps.ProviderFactory(config=effective_config)
 
             bcfg = provider_factory.get_provider_config("braspress")
             if bcfg.get("habilitado", True):
@@ -471,15 +474,6 @@ class TransportadoraSession:
                 if provider is not None:
                     await self.registrar_provider("braspress", provider)
                     _log_diag(f"BRASPRESS sessão criada com headless={headless_braspress}")
-
-            baucfg = provider_factory.get_provider_config("bauer")
-            if baucfg.get("habilitado", True):
-                if not provider_factory.is_available("bauer"):
-                    _log_diag("BAUER ignorada: provider bauer_auto não está disponível neste build")
-                else:
-                    provider = provider_factory.create("bauer")
-                    if provider is not None:
-                        await self.registrar_provider("bauer", provider)
 
             tcfg = provider_factory.get_provider_config("trd")
             if tcfg.get("habilitado", True):
@@ -557,6 +551,14 @@ class TransportadoraSession:
 
             _pre_login_semaforo = asyncio.Semaphore(2)
             providers_snapshot = await self.listar_providers()
+            # Pré-aquece o login das mais lentas primeiro (mesma prioridade da
+            # cotação): elas adquirem o semáforo antes e ganham mais tempo de
+            # background, encurtando o caminho crítico total.
+            providers_snapshot = sorted(
+                providers_snapshot,
+                key=lambda item: _PRIORIDADE_LENTIDAO.get(str(item[0]).upper(), 0),
+                reverse=True,
+            )
             total_providers = len(providers_snapshot)
             _log_diag(f"Iniciando pre-login em {total_providers} transportadoras (máx 2 simultâneos)...")
             if callback:
@@ -605,7 +607,13 @@ class TransportadoraSession:
                             _log_diag(f"Pre-login {nome} falhou: {e}")
                             # Chrome ausente já foi reportado globalmente com module="chrome_missing"
                             _e_str = str(e)
-                            if "Google Chrome" not in _e_str and "chrome" not in _e_str.lower():
+                            # Falhas operacionais de pré-login (credenciais do cliente,
+                            # portal não liberou acesso, rede/portal lentos) não viram
+                            # issue: a cotação do usuário ainda exercita o login e
+                            # reporta caso seja uma quebra real de código.
+                            if is_expected_prelogin_failure(_e_str):
+                                _log_diag(f"Pre-login {nome} falha controlada (sem report): {_e_str}")
+                            elif "Google Chrome" not in _e_str and "chrome" not in _e_str.lower():
                                 report_provider_error(
                                     nome,
                                     "pre_login",

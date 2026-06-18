@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
+from dataclasses import dataclass
 import asyncio
 import re
 import time
 import traceback
 
+from . import deps
 from .common import (
     ResultadoCotacao,
     ProviderCotacaoStatus,
@@ -20,7 +22,6 @@ from .common import (
     provider_progress_from_resultado,
     normalize_provider_progress_status,
     normalize_provider_progress_message,
-    ProviderFactory,
     QuoteResponse,
     quote_request_from_legacy_kwargs,
     quote_response_to_resultado_cotacao,
@@ -43,87 +44,33 @@ from .session_manager import (
     _is_chrome_missing_error,
 )
 from .error_context import build_quotation_error_diagnostic, report_provider_error
-
-
-# ---------------------------------------------------------------------------
-# Helpers para classificação de erros — definidos em escopo de módulo para
-# evitar redefinição a cada chamada da função assíncrona principal.
-# ---------------------------------------------------------------------------
-
-def _is_business_error(detail: str) -> bool:
-    """Detecta erros de negócio (destino não atendido, rota fora de cobertura).
-
-    Esses erros são normais e não devem ser reportados nem gerar retry."""
-    if not detail:
-        return False
-    d = str(detail).lower()
-    patterns = (
-        "destino fora da cobertura",
-        "cepdestino não atendido",
-        "cep destino não atendido",
-        "não atendemos esse cep",
-        "destino possivelmente não atendido",
-        "destino possìvelmente não atendido",
-        "rota não atendida",
-        "cidade de destino",
-        "transportadora não atende",
-        "transportadora n o atende",
-        "cidade de destino n o",
-        "n o atendida",
-        "não atendido",
-        "nao atendido",
-        "fora de cobertura",
-        "fora da cobertura",
-        "não atendemos",
-        "cepnão atendemos",
-        "sem precificação automática no ssw",
-        "sem precificacao automatica no ssw",
-        "não cadastrada",
-        "nao cadastrada",
-        "rota:",
-    )
-    return any(p in d for p in patterns)
-
-
-_TRANSIENT_PATTERNS = (
-    "target page, context or browser has been closed",
-    "target closed",
-    "frame was detached",
-    "net::err_aborted",
-    "net::err_connection",
-    "net::err_name",
-    "net::err_timed_out",
-    "net::err_internet",
-    "net::err_network",
-    "formulário de cotação não carregou",
-    "formulario de cotacao nao carregou",
-    "page.goto",
-    "valor de frete nao encontrado",
-    "valor de frete não encontrado",
-    "timeout aguardando resultado",
+from .error_classifiers import (
+    _is_business_error,
+    _is_expected_transient_failure,
+    _is_expected_transient_failure_str,
 )
 
 
-def _is_expected_transient_failure(erro: BaseException) -> bool:
-    """Detecta falhas transitórias esperadas de provider que NÃO devem ir para report_error.
+@dataclass(frozen=True)
+class CotacaoOutcome:
+    """Resultado bruto de uma execução de provider em ``_run_cotacao``.
 
-    Timeouts do provider e erros de rede/browser são falhas controladas — não bugs no código."""
-    if isinstance(erro, TimeoutError):
-        return True
-    err_str = str(erro).lower()
-    return any(p in err_str for p in _TRANSIENT_PATTERNS)
+    Substitui a 7-tupla posicional que era desempacotada em
+    ``_processar_resultado``. ``cotacao`` é o retorno do provider
+    (``QuoteResponse``, objeto legado ou ``None``); ``erro`` é a exceção
+    capturada (ou ``None`` em sucesso)."""
+
+    i: int
+    nome: str
+    provider: Any
+    kwargs: dict[str, Any]
+    cotacao: Any = None
+    erro: BaseException | None = None
+    duration_ms: int = 0
 
 
-def _is_expected_transient_failure_str(detail: str) -> bool:
-    """Mesmos critérios de _is_expected_transient_failure, mas para strings de last_error.
-
-    Usado quando o provider capturou a exceção internamente e retornou None."""
-    if not detail:
-        return False
-    d = detail.lower()
-    if "timeout" in d or "timed out" in d:
-        return True
-    return any(p in d for p in _TRANSIENT_PATTERNS)
+# Classificadores de erro (_is_business_error / _is_expected_transient_failure*)
+# foram unificados em error_classifiers.py e importados acima.
 
 
 # ---------------------------------------------------------------------------
@@ -170,74 +117,6 @@ def _build_braspress_kwargs(
     if cnpj_remetente:
         kwargs["cnpj_remetente"] = cnpj_remetente
         kwargs["tipo_frete"] = tipo_frete or "2"
-    return kwargs
-
-
-def _build_bauer_kwargs(
-    *,
-    cfg: dict[str, Any],
-    origem: str,
-    destino: str,
-    peso: float,
-    valor: float,
-    cnpj_destinatario: str,
-    cubagens_validas: list[dict[str, Any]],
-    cnpj_remetente: str,
-    effective_config: dict[str, Any],
-    provider: Any,
-) -> dict[str, Any] | None:
-    """Retorna kwargs para BAUER ou None se não configurada. Também atualiza atributos do provider."""
-    cotacao_url = str(cfg.get("cotacao_url", "")).strip()
-    bau_cnpj_pag = str(cfg.get("cnpj_pagador", "")).strip()
-    bau_cnpj_rem = str(cfg.get("cnpj_remetente", "")).strip()
-    cnpj_dest = cnpj_destinatario
-    if not (cotacao_url and bau_cnpj_pag and bau_cnpj_rem and cnpj_dest):
-        _log_diag("BAUER não configurada (parâmetros ausentes)")
-        return None
-    cubagens_bauer = []
-    for cub in cubagens_validas:
-        qtd = int(cub["quantidade"])
-        if qtd <= 0:
-            continue
-        cubagens_bauer.append(
-            {
-                "quantidade": qtd,
-                "altura_m": int(cub["altura_cm"]) / 100.0,
-                "largura_m": int(cub["largura_cm"]) / 100.0,
-                "profundidade_m": int(cub["comprimento_cm"]) / 100.0,
-            }
-        )
-    if not cubagens_bauer:
-        # Caller will handle the error result
-        return "sem_cubagens"  # type: ignore[return-value]
-    vol = sum(int(c["quantidade"]) for c in cubagens_bauer)
-    primeira = cubagens_bauer[0]
-    alt_m = float(primeira["altura_m"])
-    larg_m = float(primeira["largura_m"])
-    prof_m = float(primeira["profundidade_m"])
-    provider.quantidade = vol
-    provider.altura_m = alt_m
-    provider.largura_m = larg_m
-    provider.profundidade_m = prof_m
-    if hasattr(provider, "cubagens"):
-        provider.cubagens = cubagens_bauer
-    if hasattr(provider, "cnpj_destinatario"):
-        provider.cnpj_destinatario = re.sub(r"\D", "", cnpj_dest or "")
-    _log_diag(
-        f"BAUER preparada: linhas_cubagem={len(cubagens_bauer)}, volumes={vol}"
-    )
-    kwargs: dict[str, Any] = dict(
-        origem=origem,
-        destino=destino,
-        peso=peso,
-        valor=valor,
-        cubagens=cubagens_bauer,
-    )
-    if cnpj_remetente:
-        provider.cnpj_remetente = re.sub(r"\D", "", cnpj_remetente)
-        provider.cnpj_destinatario = re.sub(r"\D", "", bau_cnpj_pag)
-        kwargs["destino"] = _resolver_cep_origem(effective_config, "")
-        kwargs["tipo_frete"] = "fob"
     return kwargs
 
 
@@ -552,7 +431,7 @@ async def _executar_cotacoes_com_dados(
             transportadoras_cfg = {}
         transportadoras_cfg = dict(transportadoras_cfg)
         foco = str(MODO_FOCO_TRANSPORTADORA).strip().lower()
-        for nome_cfg in ("braspress", "bauer", "trd", "agex", "eucatur", "rodonaves", "coopex", "translovato"):
+        for nome_cfg in ("braspress", "trd", "agex", "eucatur", "rodonaves", "coopex", "translovato"):
             sec = transportadoras_cfg.get(nome_cfg)
             if not isinstance(sec, dict):
                 sec = {}
@@ -571,7 +450,7 @@ async def _executar_cotacoes_com_dados(
         effective_config,
         contexto="cotacao",
     )
-    provider_factory = ProviderFactory(config=effective_config)
+    provider_factory = deps.ProviderFactory(config=effective_config)
     transportadoras_cfg = effective_config.get("transportadoras", {}) if isinstance(effective_config, dict) else {}
     if not isinstance(transportadoras_cfg, dict):
         transportadoras_cfg = {}
@@ -932,88 +811,6 @@ async def _executar_cotacoes_com_dados(
             return _resultado_chrome_ausente(e)
         erros_setup.append(ResultadoCotacao(transportadora="BRASPRESS", status="erro", detalhes=str(e)))
 
-    # BAUER
-    try:
-        baucfg = provider_factory.get_provider_config("bauer")
-        if baucfg.get("habilitado", True):
-            incompleta = _bloquear_config_incompleta("bauer")
-            if incompleta is not None:
-                erros_setup.append(incompleta)
-            elif not provider_factory.is_available("bauer"):
-                _log_diag("BAUER ignorada: provider bauer_auto não está disponível neste build")
-            elif not _uf_atendida(baucfg.get("ufs_atendidas"), uf_destino):
-                erros_setup.append(_resultado_nao_atendido("BAUER", uf_destino))
-            else:
-                cotacao_url = str(baucfg.get("cotacao_url", "")).strip()
-                bau_cnpj_pag = str(baucfg.get("cnpj_pagador", "")).strip()
-                bau_cnpj_rem = str(baucfg.get("cnpj_remetente", "")).strip()
-                cnpj_dest = cnpj_destinatario
-                if cotacao_url and bau_cnpj_pag and bau_cnpj_rem and cnpj_dest:
-                    # Pre-compute cubagens_bauer to size the provider creation
-                    cubagens_bauer_pre = []
-                    for cub in cubagens_validas:
-                        qtd = int(cub["quantidade"])
-                        if qtd <= 0:
-                            continue
-                        cubagens_bauer_pre.append(
-                            {
-                                "quantidade": qtd,
-                                "altura_m": int(cub["altura_cm"]) / 100.0,
-                                "largura_m": int(cub["largura_cm"]) / 100.0,
-                                "profundidade_m": int(cub["comprimento_cm"]) / 100.0,
-                            }
-                        )
-                    if not cubagens_bauer_pre:
-                        msg = "BAUER bloqueada: romaneio sem cubagens válidas."
-                        _log_diag(msg)
-                        erros_setup.append(
-                            ResultadoCotacao(transportadora="BAUER", status="erro", detalhes=msg)
-                        )
-                    else:
-                        vol = sum(int(c["quantidade"]) for c in cubagens_bauer_pre)
-                        primeira = cubagens_bauer_pre[0]
-                        alt_m = float(primeira["altura_m"])
-                        larg_m = float(primeira["largura_m"])
-                        prof_m = float(primeira["profundidade_m"])
-                        provider = await _obter_provider_sessao(
-                            "bauer",
-                            create_kwargs={
-                                "cotacao_url": cotacao_url,
-                                "cnpj_pagador": bau_cnpj_pag,
-                                "cnpj_remetente": bau_cnpj_rem,
-                                "cnpj_destinatario": cnpj_dest,
-                                "headless": bool(baucfg.get("headless", True)),
-                                "quantidade": vol,
-                                "altura_m": alt_m,
-                                "largura_m": larg_m,
-                                "profundidade_m": prof_m,
-                                "cubagens": cubagens_bauer_pre,
-                            },
-                            log_label="BAUER",
-                        )
-                        _bauer_kwargs = _build_bauer_kwargs(
-                            cfg=baucfg,
-                            origem=origem,
-                            destino=destino,
-                            peso=peso,
-                            valor=valor,
-                            cnpj_destinatario=cnpj_destinatario,
-                            cubagens_validas=cubagens_validas,
-                            cnpj_remetente=cnpj_remetente,
-                            effective_config=effective_config,
-                            provider=provider,
-                        )
-                        if isinstance(_bauer_kwargs, dict):
-                            tasks.append(("BAUER", provider, _bauer_kwargs))
-                else:
-                    _log_diag("BAUER não configurada (parâmetros ausentes)")
-    except Exception as e:
-        _log_diag(f"Erro ao preparar BAUER: {e}")
-        _reportar_erro_preparacao("BAUER", e)
-        if chrome_missing_reported:
-            return _resultado_chrome_ausente(e)
-        erros_setup.append(ResultadoCotacao(transportadora="BAUER", status="erro", detalhes=str(e)))
-
     # TRD
     try:
         tcfg = provider_factory.get_provider_config("trd")
@@ -1076,7 +873,7 @@ async def _executar_cotacoes_com_dados(
                     cnpj_dest = cnpj_destinatario
                     descricao_mercadoria = str(acfg.get("descricao_mercadoria", "Mercadoria"))
                     tipo_produto = str(acfg.get("tipo_produto", "Artigos Esportivos"))
-                    # Resolve email with legacy fallback (same logic as _build_agex_kwargs)
+                    # E-mail com fallback: instalações antigas guardavam o login (e-mail) no campo cnpj.
                     email_agex = str(acfg.get("email", "")).strip()
                     if not email_agex:
                         legacy_login = str(acfg.get("cnpj", "")).strip()
@@ -1228,8 +1025,12 @@ async def _executar_cotacoes_com_dados(
                     elif not _uf_atendida(rcfg.get("ufs_atendidas"), uf_destino):
                         erros_setup.append(_resultado_nao_atendido("RODONAVES", uf_destino))
                     else:
-                        foco_rodonaves = str(MODO_FOCO_TRANSPORTADORA).strip().lower() == "rodonaves"
-                        headless_rodonaves = False if foco_rodonaves else bool(rcfg.get("headless", False))
+                        # RODONAVES exige janela visível para resolver o reCAPTCHA, então o
+                        # provider sempre roda com headless=False (ver factory._build_rodonaves).
+                        # Mantemos o mesmo valor aqui para que desired_headless coincida com o
+                        # provider já criado no pré-login; caso contrário config legada com
+                        # headless=True dispararia um restart inútil da sessão a cada cotação.
+                        headless_rodonaves = False
                         _rodo_kwargs = _build_rodonaves_kwargs(
                             cfg=rcfg,
                             origem=origem,
@@ -1480,19 +1281,31 @@ async def _executar_cotacoes_com_dados(
                     provider.coteir(**kwargs),
                     timeout=effective_timeout,
                 )
-            return i, nome, provider, kwargs, retorno_provider, None, _duration_ms()
+            return CotacaoOutcome(
+                i=i, nome=nome, provider=provider, kwargs=kwargs,
+                cotacao=retorno_provider, duration_ms=_duration_ms(),
+            )
         except asyncio.TimeoutError:
             last_step = getattr(provider, '_passo_atual', 'desconhecido')
-            return i, nome, provider, kwargs, None, TimeoutError(
-                f"Timeout de {effective_timeout}s na cotação {nome} (passo: {last_step})"
-            ), _duration_ms()
+            return CotacaoOutcome(
+                i=i, nome=nome, provider=provider, kwargs=kwargs,
+                erro=TimeoutError(
+                    f"Timeout de {effective_timeout}s na cotação {nome} (passo: {last_step})"
+                ),
+                duration_ms=_duration_ms(),
+            )
         except asyncio.CancelledError as exc:
             detalhe = str(exc).strip() or "sem detalhe"
-            return i, nome, provider, kwargs, None, RuntimeError(
-                f"Cotação {nome} cancelada: {detalhe}"
-            ), _duration_ms()
+            return CotacaoOutcome(
+                i=i, nome=nome, provider=provider, kwargs=kwargs,
+                erro=RuntimeError(f"Cotação {nome} cancelada: {detalhe}"),
+                duration_ms=_duration_ms(),
+            )
         except Exception as exc:
-            return i, nome, provider, kwargs, None, exc, _duration_ms()
+            return CotacaoOutcome(
+                i=i, nome=nome, provider=provider, kwargs=kwargs,
+                erro=exc, duration_ms=_duration_ms(),
+            )
 
     async def _exec(i: int, nome: str, provider: Any, kwargs: dict[str, Any]):
         is_alfa = nome.upper() == "ALFA"
@@ -1507,13 +1320,10 @@ async def _executar_cotacoes_com_dados(
             return await _run_cotacao(i, nome, provider, kwargs, is_alfa)
 
     def _processar_resultado(res, resultados, falhas_para_retry):
-        """Processa resultado de _exec, retorna (ResultadoCotacao|None, ok: bool)."""
-        nonlocal concluidas
+        """Despacha um CotacaoOutcome para o handler da sua forma de resultado."""
 
-        if not isinstance(res, tuple) or len(res) != 7:
-            msg = f"Executor retornou formato inesperado de resultado: {type(res).__name__}"
-            _log_diag(msg)
-            r = ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=msg)
+        def _finalizar(r):
+            nonlocal concluidas
             concluidas += 1
             resultados.append(r)
             _emitir_progresso(
@@ -1522,11 +1332,22 @@ async def _executar_cotacoes_com_dados(
                 resultado=r,
                 provider_status=provider_progress_from_resultado(r, stage="resultado"),
             )
+
+        if not isinstance(res, CotacaoOutcome):
+            msg = f"Executor retornou formato inesperado de resultado: {type(res).__name__}"
+            _log_diag(msg)
+            r = ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=msg)
+            _finalizar(r)
             return
 
-        _i, nome_task, provider_task, kwargs_task, cotacao, erro, duration_ms = res
+        nome_task = res.nome
+        provider_task = res.provider
+        kwargs_task = res.kwargs
+        cotacao = res.cotacao
+        erro = res.erro
+        duration_ms = res.duration_ms
 
-        if isinstance(erro, BaseException):
+        def _handle_exception():
             erro_str = str(erro)
             # Erros de negócio não devem ser reportados nem gerar retry
             if _is_business_error(erro_str):
@@ -1535,14 +1356,7 @@ async def _executar_cotacoes_com_dados(
                     transportadora=nome_task, status="nao_atendido", detalhes=erro_str,
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
                 return
             tb = ''.join(traceback.format_exception(type(erro), erro, erro.__traceback__))
             _log_diag(f"Erro em cotação {nome_task}: {type(erro).__name__}: {erro}\n{tb}")
@@ -1584,17 +1398,10 @@ async def _executar_cotacoes_com_dados(
                     detalhes=f"{type(erro).__name__}: {erro}",
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
             return
 
-        if erro is not None:
+        def _handle_erro_simples():
             erro_str = str(erro)
             # Erros de negócio não devem ser reportados nem gerar retry
             if _is_business_error(erro_str):
@@ -1603,14 +1410,7 @@ async def _executar_cotacoes_com_dados(
                     transportadora=nome_task, status="nao_atendido", detalhes=erro_str,
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
                 return
             _log_diag(f"Erro em cotação {nome_task}: {erro}")
             if falhas_para_retry is not None:
@@ -1621,17 +1421,11 @@ async def _executar_cotacoes_com_dados(
                     transportadora=nome_task, status="erro", detalhes=str(erro),
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
             return
 
-        if isinstance(cotacao, QuoteResponse):
+        def _handle_quote_response():
+            nonlocal concluidas
             quote_response = cotacao
             if quote_response.duration_ms is None:
                 quote_response.duration_ms = duration_ms
@@ -1710,7 +1504,8 @@ async def _executar_cotacoes_com_dados(
             )
             return
 
-        if cotacao is not None:
+        def _handle_legacy():
+            nonlocal concluidas
             try:
                 transportadora = str(getattr(cotacao, "transportadora", nome_task))
                 valor_frete = float(getattr(cotacao, "valor_frete", 0.0))
@@ -1723,14 +1518,7 @@ async def _executar_cotacoes_com_dados(
                     detalhes=f"Resultado inválido: {parse_exc}",
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
                 return
 
             r = ResultadoCotacao(
@@ -1749,7 +1537,8 @@ async def _executar_cotacoes_com_dados(
                 resultado=r,
                 provider_status=provider_progress_from_resultado(r, stage="resultado"),
             )
-        else:
+
+        def _handle_none():
             detalhe = None
             if provider_task is not None:
                 detalhe = getattr(provider_task, "last_error", None)
@@ -1766,14 +1555,7 @@ async def _executar_cotacoes_com_dados(
                     transportadora=nome_task, status="nao_atendido", detalhes=str(detalhe),
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
                 return
 
             # Falhas transitórias de rede/browser capturadas internamente pelo provider
@@ -1789,14 +1571,7 @@ async def _executar_cotacoes_com_dados(
                         transportadora=nome_task, status="erro", detalhes=str(detalhe),
                         duration_ms=duration_ms,
                     )
-                    concluidas += 1
-                    resultados.append(r)
-                    _emitir_progresso(
-                        concluidas=concluidas,
-                        total=total_cotacoes,
-                        resultado=r,
-                        provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                    )
+                    _finalizar(r)
                 return
 
             # Normaliza a mensagem removendo partes variáveis (ex: paths de diagnóstico TRD)
@@ -1837,14 +1612,24 @@ async def _executar_cotacoes_com_dados(
                     transportadora=nome_task, status="erro", detalhes=str(detalhe),
                     duration_ms=duration_ms,
                 )
-                concluidas += 1
-                resultados.append(r)
-                _emitir_progresso(
-                    concluidas=concluidas,
-                    total=total_cotacoes,
-                    resultado=r,
-                    provider_status=provider_progress_from_resultado(r, stage="resultado"),
-                )
+                _finalizar(r)
+
+        # Dispatch por forma do resultado. _handle_erro_simples cobre o caminho
+        # defensivo de `erro` truthy não-exceção (nenhum producer de _run_cotacao
+        # gera isso hoje, mas é preservado).
+        if isinstance(erro, BaseException):
+            _handle_exception()
+            return
+        if erro is not None:
+            _handle_erro_simples()
+            return
+        if isinstance(cotacao, QuoteResponse):
+            _handle_quote_response()
+            return
+        if cotacao is not None:
+            _handle_legacy()
+        else:
+            _handle_none()
 
     # ── Rodada 1: executa todas as cotações ──
     falhas_para_retry: list[tuple[str, Any, dict[str, Any]]] = []

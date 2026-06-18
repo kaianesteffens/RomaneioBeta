@@ -27,10 +27,20 @@ ProviderBuilder = Callable[[dict[str, Any]], dict[str, Any] | None]
 
 @dataclass(frozen=True)
 class ProviderSpec:
+    """Registro único por transportadora.
+
+    Fonte de verdade para o que estava espalhado: classe do provider, campos
+    obrigatórios, campos de credencial da UI (chave/rótulo/tipo) e prioridade
+    de lentidão. Consumidores (orchestrator, web_app, session_manager) derivam
+    daqui em vez de manter cópias próprias."""
+
     key: str
     module_path: str
     class_name: str
     builder: ProviderBuilder
+    required_fields: tuple[str, ...] = ()
+    credential_fields: tuple[tuple[str, str, str], ...] = ()
+    slowness_priority: int = 0
 
 
 @dataclass(frozen=True)
@@ -54,18 +64,10 @@ class ProviderConfigValidation:
         return f"Configuração incompleta. Preencha: {labels}."
 
 
-_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
-    "braspress": ("cnpj", "senha"),
-    "bauer": ("cotacao_url", "cnpj_pagador", "cnpj_remetente", "cnpj_destinatario"),
-    "trd": ("email", "senha"),
-    "agex": ("email", "senha"),
-    "eucatur": ("dominio", "usuario", "senha"),
-    "rodonaves": ("dominio", "usuario", "senha", "cnpj_pagador"),
-    "alfa": ("login", "senha"),
-    "coopex": ("dominio", "usuario", "senha"),
-    "translovato": ("cnpj", "usuario", "senha"),
-}
-
+# _REQUIRED_FIELDS é derivado de _PROVIDER_SPECS (logo após a definição do
+# registro). _REQUIRED_FIELD_LABELS são os rótulos usados na mensagem de
+# "configuração incompleta" (minúsculos, meio de frase) — distintos dos rótulos
+# de UI em ProviderSpec.credential_fields.
 _REQUIRED_FIELD_LABELS: dict[str, str] = {
     "cnpj": "CNPJ",
     "senha": "senha",
@@ -122,33 +124,6 @@ def _build_braspress(config: dict[str, Any]) -> dict[str, Any] | None:
         "senha": senha,
         "headless": bool(config.get("headless", True)),
     }
-
-
-def _build_bauer(config: dict[str, Any]) -> dict[str, Any] | None:
-    cotacao_url = _text(config.get("cotacao_url"))
-    cnpj_pagador = _text(config.get("cnpj_pagador"))
-    cnpj_remetente = _text(config.get("cnpj_remetente"))
-    cnpj_destinatario = _text(config.get("cnpj_destinatario"))
-    if not cotacao_url or not cnpj_pagador or not cnpj_remetente or not cnpj_destinatario:
-        return None
-    kwargs: dict[str, Any] = {
-        "cotacao_url": cotacao_url,
-        "cnpj_pagador": cnpj_pagador,
-        "cnpj_remetente": cnpj_remetente,
-        "cnpj_destinatario": cnpj_destinatario,
-        "headless": bool(config.get("headless", True)),
-    }
-    if "quantidade" in config:
-        kwargs["quantidade"] = int(config.get("quantidade", 1) or 1)
-    if "altura_m" in config:
-        kwargs["altura_m"] = float(config.get("altura_m", 0.0) or 0.0)
-    if "largura_m" in config:
-        kwargs["largura_m"] = float(config.get("largura_m", 0.0) or 0.0)
-    if "profundidade_m" in config:
-        kwargs["profundidade_m"] = float(config.get("profundidade_m", 0.0) or 0.0)
-    if "cubagens" in config:
-        kwargs["cubagens"] = config.get("cubagens")
-    return kwargs
 
 
 def _build_trd(config: dict[str, Any]) -> dict[str, Any] | None:
@@ -275,21 +250,91 @@ def _build_translovato(config: dict[str, Any]) -> dict[str, Any] | None:
 
 
 _PROVIDER_SPECS: dict[str, ProviderSpec] = {
-    "braspress": ProviderSpec("braspress", "fretio.providers.braspress_playwright", "BraspressPlaywrightProvider", _build_braspress),
-    "bauer": ProviderSpec("bauer", "fretio.providers.bauer_auto", "BauerAutoProvider", _build_bauer),
-    "trd": ProviderSpec("trd", "fretio.providers.trd", "TRDProvider", _build_trd),
-    "agex": ProviderSpec("agex", "fretio.providers.agex", "AGEXProvider", _build_agex),
-    "eucatur": ProviderSpec("eucatur", "fretio.providers.eucatur", "EucaturProvider", _build_eucatur),
-    "rodonaves": ProviderSpec("rodonaves", "fretio.providers.rodonaves", "RodonavesProvider", _build_rodonaves),
-    "alfa": ProviderSpec("alfa", "fretio.providers.alfa", "AlfaProvider", _build_alfa),
-    "coopex": ProviderSpec("coopex", "fretio.providers.coopex", "CoopexProvider", _build_coopex),
+    "braspress": ProviderSpec(
+        "braspress", "fretio.providers.braspress_playwright", "BraspressPlaywrightProvider", _build_braspress,
+        required_fields=("cnpj", "senha"),
+        credential_fields=(("cnpj", "CNPJ", "text"), ("senha", "Senha", "password")),
+        slowness_priority=500,
+    ),
+    "trd": ProviderSpec(
+        "trd", "fretio.providers.trd", "TRDProvider", _build_trd,
+        required_fields=("email", "senha"),
+        credential_fields=(("email", "E-mail", "text"), ("senha", "Senha", "password")),
+        slowness_priority=700,
+    ),
+    "agex": ProviderSpec(
+        "agex", "fretio.providers.agex", "AGEXProvider", _build_agex,
+        required_fields=("email", "senha"),
+        credential_fields=(
+            ("email", "E-mail", "text"), ("senha", "Senha", "password"),
+            ("cnpj_remetente", "CNPJ remetente", "text"),
+        ),
+        slowness_priority=100,
+    ),
+    "eucatur": ProviderSpec(
+        "eucatur", "fretio.providers.eucatur", "EucaturProvider", _build_eucatur,
+        required_fields=("dominio", "usuario", "senha"),
+        credential_fields=(
+            ("dominio", "Domínio", "text"), ("usuario", "Usuário", "text"),
+            ("senha", "Senha", "password"), ("cnpj_pagador", "CNPJ pagador", "text"),
+        ),
+        slowness_priority=400,
+    ),
+    "rodonaves": ProviderSpec(
+        "rodonaves", "fretio.providers.rodonaves", "RodonavesProvider", _build_rodonaves,
+        required_fields=("dominio", "usuario", "senha", "cnpj_pagador"),
+        credential_fields=(
+            ("dominio", "Domínio", "text"), ("usuario", "Usuário", "text"),
+            ("senha", "Senha", "password"), ("cnpj_pagador", "CNPJ pagador", "text"),
+        ),
+        slowness_priority=300,
+    ),
+    "alfa": ProviderSpec(
+        "alfa", "fretio.providers.alfa", "AlfaProvider", _build_alfa,
+        required_fields=("login", "senha"),
+        credential_fields=(
+            ("login", "Login", "text"), ("senha", "Senha", "password"),
+            ("cnpj_remetente", "CNPJ remetente", "text"),
+        ),
+        slowness_priority=600,
+    ),
+    "coopex": ProviderSpec(
+        "coopex", "fretio.providers.coopex", "CoopexProvider", _build_coopex,
+        required_fields=("dominio", "usuario", "senha"),
+        credential_fields=(
+            ("dominio", "Domínio", "text"), ("usuario", "Usuário", "text"),
+            ("senha", "Senha", "password"), ("cnpj_pagador", "CNPJ pagador", "text"),
+        ),
+        slowness_priority=350,
+    ),
     "translovato": ProviderSpec(
-        "translovato",
-        "fretio.providers.translovato",
-        "TranslovatoProvider",
-        _build_translovato,
+        "translovato", "fretio.providers.translovato", "TranslovatoProvider", _build_translovato,
+        required_fields=("cnpj", "usuario", "senha"),
+        credential_fields=(
+            ("cnpj", "CNPJ", "text"), ("usuario", "Usuário", "text"),
+            ("senha", "Senha", "password"), ("cnpj_remetente", "CNPJ remetente", "text"),
+        ),
+        slowness_priority=450,
     ),
 }
+
+
+# Derivados do registro único acima — consumidores devem usar estes acessores.
+_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    key: spec.required_fields for key, spec in _PROVIDER_SPECS.items()
+}
+
+
+def credential_fields_for_provider(name: str) -> tuple[tuple[str, str, str], ...]:
+    """Campos de credencial (chave, rótulo, tipo) para a UI."""
+    spec = _PROVIDER_SPECS.get(str(name or "").strip().lower())
+    return spec.credential_fields if spec is not None else ()
+
+
+def slowness_priority_for_provider(name: str) -> int:
+    """Prioridade de lentidão (maior = mais lento); usada para ordenar cotações."""
+    spec = _PROVIDER_SPECS.get(str(name or "").strip().lower())
+    return spec.slowness_priority if spec is not None else 0
 
 
 class ProviderFactory:
@@ -349,6 +394,25 @@ class ProviderFactory:
             try:
                 module = importlib.import_module(spec.module_path)
                 provider_class = getattr(module, spec.class_name)
+            except ModuleNotFoundError as exc:
+                missing = exc.name or ""
+                if missing == spec.module_path or spec.module_path.startswith(missing + "."):
+                    # Provider opcional não incluído neste build — condição esperada,
+                    # tratada pelo orchestrator. Não é um erro, então não alarmamos com WARNING.
+                    bind_logger(logger, provider=provider_name, operation="resolve_provider_class").info(
+                        "Provider %s não incluído neste build (%s)",
+                        provider_name,
+                        spec.module_path,
+                    )
+                else:
+                    # Dependência ausente de um provider que deveria existir: isto é um erro real.
+                    bind_logger(logger, provider=provider_name, operation="resolve_provider_class").warning(
+                        "Provider class unavailable (%s.%s): %s",
+                        spec.module_path,
+                        spec.class_name,
+                        exc,
+                    )
+                provider_class = None
             except (ImportError, AttributeError) as exc:
                 bind_logger(logger, provider=provider_name, operation="resolve_provider_class").warning(
                     "Provider class unavailable (%s.%s): %s",

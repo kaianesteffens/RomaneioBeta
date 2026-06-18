@@ -1,5 +1,7 @@
 import asyncio
 import sys
+import threading
+import time
 from pathlib import Path
 from urllib.error import URLError
 
@@ -9,6 +11,8 @@ sys.path.insert(0, str(ROOT / "app"))
 sys.path.insert(0, str(ROOT / "app" / "fretio" / "src"))
 
 import cotacao_transportadoras as ct
+from cotacao import jobs_client as _jobs_client_mod
+from cotacao import deps
 
 
 def _valid_romaneio() -> str:
@@ -120,20 +124,16 @@ def test_cotacao_continues_when_create_quotation_job_fails(monkeypatch):
         "transportadoras": {"braspress": {"habilitado": True}},
     }
     monkeypatch.setattr(ct, "_carregar_config", lambda config_path=None: config)
-    monkeypatch.setattr(
-        ct,
-        "create_quotation_job",
+    monkeypatch.setattr(deps, "create_quotation_job",
         lambda *args, **kwargs: (_ for _ in ()).throw(URLError("offline")),
     )
     updates = []
-    monkeypatch.setattr(ct, "update_quotation_job_result", lambda *args, **kwargs: updates.append(args) or {"queued": True})
-    monkeypatch.setattr(ct, "report_quotation_started", lambda *args, **kwargs: {"sent": False})
-    monkeypatch.setattr(ct, "report_quotation_finished", lambda *args, **kwargs: {"sent": False})
-    monkeypatch.setattr(ct, "report_carrier_quotation_result", lambda *args, **kwargs: {"sent": False})
+    monkeypatch.setattr(deps, "update_quotation_job_result", lambda *args, **kwargs: updates.append(args) or {"queued": True})
+    monkeypatch.setattr(deps, "report_quotation_started", lambda *args, **kwargs: {"sent": False})
+    monkeypatch.setattr(deps, "report_quotation_finished", lambda *args, **kwargs: {"sent": False})
+    monkeypatch.setattr(deps, "report_carrier_quotation_result", lambda *args, **kwargs: {"sent": False})
     shadow_calls = []
-    monkeypatch.setattr(
-        ct,
-        "normalize_quotation_remote_shadow",
+    monkeypatch.setattr(deps, "normalize_quotation_remote_shadow",
         lambda *args, **kwargs: shadow_calls.append((args, kwargs)) or {"queued": True},
     )
 
@@ -171,17 +171,15 @@ def test_cotacao_updates_job_running_and_finished(monkeypatch):
         "transportadoras": {"braspress": {"habilitado": True}},
     }
     monkeypatch.setattr(ct, "_carregar_config", lambda config_path=None: config)
-    monkeypatch.setattr(ct, "create_quotation_job", lambda *args, **kwargs: {"job_id": 123})
+    monkeypatch.setattr(deps, "create_quotation_job", lambda *args, **kwargs: {"job_id": 123})
     updates = []
-    monkeypatch.setattr(
-        ct,
-        "update_quotation_job_result",
+    monkeypatch.setattr(deps, "update_quotation_job_result",
         lambda *args, **kwargs: updates.append((args, kwargs)) or {"queued": True},
     )
-    monkeypatch.setattr(ct, "report_quotation_started", lambda *args, **kwargs: {"sent": False})
-    monkeypatch.setattr(ct, "report_quotation_finished", lambda *args, **kwargs: {"sent": False})
-    monkeypatch.setattr(ct, "report_carrier_quotation_result", lambda *args, **kwargs: {"sent": False})
-    monkeypatch.setattr(ct, "normalize_quotation_remote_shadow", lambda *args, **kwargs: {"queued": True})
+    monkeypatch.setattr(deps, "report_quotation_started", lambda *args, **kwargs: {"sent": False})
+    monkeypatch.setattr(deps, "report_quotation_finished", lambda *args, **kwargs: {"sent": False})
+    monkeypatch.setattr(deps, "report_carrier_quotation_result", lambda *args, **kwargs: {"sent": False})
+    monkeypatch.setattr(deps, "normalize_quotation_remote_shadow", lambda *args, **kwargs: {"queued": True})
 
     async def fake_execute(**kwargs):
         return [
@@ -207,3 +205,43 @@ def test_cotacao_updates_job_running_and_finished(monkeypatch):
     final_payload = updates[-1][1]["result"]
     assert final_payload["success_count"] == 1
     assert final_payload["transportadoras"][0]["provider"] == "braspress"
+
+
+def test_create_quotation_job_best_effort_does_not_block_when_slow(monkeypatch):
+    """Uma criação de job lenta (rede travada) não deve atrasar o início da cotação.
+
+    A espera é limitada por ``_JOB_CREATE_WAIT_S``; ao estourar retornamos sem
+    job_id e a cotação segue, enquanto a chamada HTTP termina em background.
+    """
+    jobs = _jobs_client_mod
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_create(*args, **kwargs):
+        started.set()
+        # Simula uma chamada HTTP travada (DNS/servidor lento).
+        release.wait(timeout=5)
+        return {"job_id": 999}
+
+    monkeypatch.setattr(deps, "create_quotation_job", slow_create)
+    monkeypatch.setattr(jobs, "_JOB_CREATE_WAIT_S", 0.2)
+
+    inicio = time.monotonic()
+    job_id = jobs._create_quotation_job_best_effort("manual", {"modo": "romaneio_colado"})
+    elapsed = time.monotonic() - inicio
+
+    assert job_id is None
+    assert started.is_set()
+    # Não pode aguardar a chamada completa: deve respeitar o limite curto.
+    assert elapsed < 2.0
+    release.set()
+
+
+def test_create_quotation_job_best_effort_returns_job_id_when_fast(monkeypatch):
+    jobs = _jobs_client_mod
+    monkeypatch.setattr(deps, "create_quotation_job", lambda *a, **k: {"job_id": 321})
+    monkeypatch.setattr(jobs, "_JOB_CREATE_WAIT_S", 2.0)
+
+    job_id = jobs._create_quotation_job_best_effort("manual", {"modo": "romaneio_colado"})
+
+    assert job_id == 321

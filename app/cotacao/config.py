@@ -5,10 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 import os
-import sys
+import re
 
-from .common import *
-from .validation import _cep, _resolver_cep_origem_cached
+from .common import (
+    CEP_ORIGEM_PADRAO,
+    ConfigManager,
+    _CONFIG_FALLBACK,
+    _base_dir,
+    _log_diag,
+    apply_safe_runtime_overrides,
+    tomllib,
+)
+from .validation import _cep, _digits, _resolver_cep_origem_cached
 
 def _config_template_path() -> Path | None:
     base = _base_dir()
@@ -159,7 +167,7 @@ def _resolver_cep_origem(config: dict[str, Any], cep_origem_informado: str) -> s
     transportadoras_cfg = config.get("transportadoras", {}) if isinstance(config, dict) else {}
     transportadora_ceps: list[str] = []
     if isinstance(transportadoras_cfg, dict):
-        for nome in ("braspress", "bauer", "trd"):
+        for nome in ("braspress", "trd"):
             sec = transportadoras_cfg.get(nome, {})
             if isinstance(sec, dict):
                 cep_sec = _cep(str(sec.get("cep_origem", "") or ""))
@@ -175,7 +183,7 @@ def _resolver_cep_origem(config: dict[str, Any], cep_origem_informado: str) -> s
     if cep_romaneio and resolved == cep_romaneio:
         _log_diag(f"Usando CEP origem do romaneio: {cep_romaneio}")
         return resolved
-    for nome, cep_sec in zip(("braspress", "bauer", "trd"), transportadora_ceps):
+    for nome, cep_sec in zip(("braspress", "trd"), transportadora_ceps):
         if cep_sec and resolved == cep_sec:
             _log_diag(f"Usando CEP origem de transportadoras.{nome}: {cep_sec}")
             return resolved
@@ -200,7 +208,9 @@ def _dados_envio(extrator, pedidos: list[Any]) -> dict[str, Any]:
         uf_destino = ""
     try:
         if hasattr(extrator, "_extrair_componentes_local"):
-            _rua, _cep, cidade_uf = extrator._extrair_componentes_local(local_entrega)
+            # NÃO desempacotar em "_cep": sombreia a função _cep importada e quebra
+            # o return (destino_cep = _cep(...)). Só cidade_uf é usado aqui.
+            _rua, _cep_comp, cidade_uf = extrator._extrair_componentes_local(local_entrega)
             match = re.search(r"(.+?)\s*/\s*([A-Za-z]{2})$", str(cidade_uf or "").strip())
             if match:
                 cidade_destino = re.sub(r"\s+", " ", str(match.group(1) or "").strip())

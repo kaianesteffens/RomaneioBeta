@@ -10,7 +10,6 @@ from remote_config import get_effective_remote_config, is_carrier_enabled, is_fe
 
 KNOWN_CARRIERS = (
     "braspress",
-    "bauer",
     "trd",
     "agex",
     "eucatur",
@@ -46,7 +45,6 @@ def normalize_carrier_name(name: Any) -> str:
     aliases = {
         "brasp": "braspress",
         "braspress": "braspress",
-        "bauer": "bauer",
         "trd": "trd",
         "agex": "agex",
         "eucatur": "eucatur",
@@ -98,15 +96,8 @@ def ensure_feature_allowed(feature: str, parent=None) -> bool:
     if feature_allowed_or_default(feature_name):
         return True
 
-    message = feature_message(feature_name)
     _LOGGER.info("Feature bloqueada por configuracao remota: %s", feature_name)
-    if parent is not None:
-        try:
-            from PySide6.QtWidgets import QMessageBox
-
-            QMessageBox.warning(parent, "Recurso desabilitado", message)
-        except Exception as exc:
-            _LOGGER.warning("Falha ao mostrar aviso de feature bloqueada: %s", exc)
+    # A UI (web) exibe a mensagem de feature_message(); este helper apenas decide.
     return False
 
 

@@ -4,9 +4,30 @@ from __future__ import annotations
 
 from typing import Any
 import re
+import threading
 
-from .common import *
+from . import deps
+from .common import (
+    KNOWN_CARRIERS,
+    MODO_FOCO_TRANSPORTADORA,
+    ResultadoCotacao,
+    _log_diag,
+    normalize_carrier_name,
+    provider_progress_from_resultado,
+)
+from .error_context import sanitize_context
+from .romaneio_parser import _normalizar_romaneio_colado
 from .telemetry import _usage_status_from_result, _value_cents_from_frete, _carrier_usage_defaults
+
+def _safe_outbound_message(value: Any) -> str:
+    # Mensagem por transportadora vai para /api/quotations/jobs. Remove tags
+    # inline e passa pelo sanitizador forte para não carregar HTML/DOM cru do
+    # portal, e-mail, CNPJ/CPF ou chave de NF-e (o sanitizador de contexto só
+    # derruba blocos HTML completos, não tags soltas).
+    sem_tags = re.sub(r"(?is)<[^>]+>", " ", str(value or ""))
+    cleaned = sanitize_context(sem_tags)
+    return cleaned if isinstance(cleaned, str) else ""
+
 
 def _coerce_enabled_flag(value: Any, default: bool = True) -> bool:
     if value is None:
@@ -39,7 +60,7 @@ def _quotation_job_carrier_lists(config: dict[str, Any]) -> tuple[list[str], lis
         if foco:
             configured = canonical == foco
         try:
-            remote_allowed, _message = carrier_enabled_or_message(canonical)
+            remote_allowed, _message = deps.carrier_enabled_or_message(canonical)
         except Exception:
             remote_allowed = True
         if configured and remote_allowed:
@@ -77,20 +98,47 @@ def _quotation_job_start_payload(
     return payload
 
 
+# Tempo máximo (s) que o início da cotação espera pela criação remota do job.
+# A chamada HTTP é best-effort, mas é síncrona e o timeout de socket não cobre
+# resolução de DNS — em redes lentas/instáveis ela pode travar por minutos e
+# atrasar o início das cotações. Limitamos a espera e seguimos sem job_id quando
+# estourar (a criação continua em background, apenas sem rastreamento de status).
+_JOB_CREATE_WAIT_S = 4.0
+
+
 def _create_quotation_job_best_effort(source_type: str, payload: dict[str, Any]) -> Any:
-    try:
-        result = create_quotation_job(source_type, payload=payload, wait=True)
-        job_id = result.get("job_id") if isinstance(result, dict) else None
-        if not job_id:
-            status_code = result.get("status_code") if isinstance(result, dict) else None
-            if status_code:
-                _log_diag(f"Job de cotação não criado (HTTP {status_code})")
-            else:
-                _log_diag("Job de cotação não criado; cotação local continuará")
-        return job_id
-    except Exception as exc:
-        _log_diag(f"Falha ao criar job de cotação; cotação local continuará: {exc}")
+    holder: dict[str, Any] = {}
+
+    def _criar() -> None:
+        try:
+            holder["result"] = deps.create_quotation_job(source_type, payload=payload, wait=True)
+        except Exception as exc:  # noqa: BLE001 - best-effort, nunca propaga
+            holder["error"] = exc
+
+    thread = threading.Thread(target=_criar, name="FretioQuotationJobCreate", daemon=True)
+    thread.start()
+    thread.join(_JOB_CREATE_WAIT_S)
+
+    if thread.is_alive():
+        _log_diag(
+            f"Criação do job de cotação excedeu {_JOB_CREATE_WAIT_S:.0f}s; "
+            "iniciando cotação sem aguardar (job seguirá em background)"
+        )
         return None
+
+    if "error" in holder:
+        _log_diag(f"Falha ao criar job de cotação; cotação local continuará: {holder['error']}")
+        return None
+
+    result = holder.get("result")
+    job_id = result.get("job_id") if isinstance(result, dict) else None
+    if not job_id:
+        status_code = result.get("status_code") if isinstance(result, dict) else None
+        if status_code:
+            _log_diag(f"Job de cotação não criado (HTTP {status_code})")
+        else:
+            _log_diag("Job de cotação não criado; cotação local continuará")
+    return job_id
 
 
 def _quotation_job_provider_status(status: Any) -> str:
@@ -120,7 +168,7 @@ def _quotation_job_result_payload(
             "value_cents": _value_cents_from_frete(getattr(result, "valor_frete", None)),
             "progress_status": progress.status,
             "stage": progress.stage,
-            "message": progress.mensagem,
+            "message": _safe_outbound_message(progress.mensagem),
             "error_code": getattr(result, "error_code", None),
         }
         try:
@@ -231,7 +279,7 @@ def _quotation_job_error_message(resultados: list[ResultadoCotacao] | None) -> s
             continue
         detalhe = str(getattr(result, "detalhes", "") or "").strip()
         if detalhe:
-            return re.sub(r"\s+", " ", detalhe)[:240]
+            return _safe_outbound_message(re.sub(r"\s+", " ", detalhe))[:240]
     return ""
 
 
@@ -245,7 +293,7 @@ def _finish_quotation_job_best_effort(
     if not job_id:
         return
     try:
-        update_result = update_quotation_job_result(
+        update_result = deps.update_quotation_job_result(
             job_id,
             status,
             result=result,

@@ -27,7 +27,6 @@ Status permitidos:
 ## Providers registrados
 
 - `braspress` -> `braspress_playwright.py`
-- `bauer` -> `bauer_auto.py` quando existir no build atual
 - `trd` -> `trd.py`
 - `agex` -> `agex.py`
 - `eucatur` -> `eucatur.py`

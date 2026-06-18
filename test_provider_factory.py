@@ -176,13 +176,6 @@ def test_create_respects_disabled_flag_and_merges_runtime_overrides():
 def test_validate_provider_minimum_config_uses_provider_required_fields():
     valid_configs = {
         "braspress": {"habilitado": True, "cnpj": "123", "senha": "s"},
-        "bauer": {
-            "habilitado": True,
-            "cotacao_url": "https://bauer.example/cotar",
-            "cnpj_pagador": "1",
-            "cnpj_remetente": "2",
-            "cnpj_destinatario": "3",
-        },
         "trd": {"habilitado": True, "email": "cliente@example.com", "senha": "s"},
         "agex": {"habilitado": True, "email": "cliente@example.com", "senha": "s"},
         "eucatur": {"habilitado": True, "dominio": "EUC", "usuario": "u", "senha": "s"},
@@ -198,21 +191,20 @@ def test_validate_provider_minimum_config_uses_provider_required_fields():
 
 def test_validate_provider_minimum_config_reports_missing_fields_for_enabled_provider():
     result = validate_provider_minimum_config(
-        "bauer",
+        "rodonaves",
         {
             "habilitado": True,
-            "cotacao_url": "https://bauer.example/cotar",
+            "dominio": "RTE",
+            "usuario": "",
+            "senha": "s",
             "cnpj_pagador": "",
-            "cnpj_remetente": "2",
-            "cnpj_destinatario": "",
         },
     )
 
     assert result.valid is False
     assert result.status == "Configuração incompleta"
-    assert result.missing_fields == ("cnpj_pagador", "cnpj_destinatario")
+    assert result.missing_fields == ("usuario", "cnpj_pagador")
     assert "CNPJ pagador" in result.user_message
-    assert "CNPJ destinatário" in result.user_message
 
 
 def test_validate_provider_minimum_config_does_not_require_disabled_provider():

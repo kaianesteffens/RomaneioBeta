@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="escuro">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fretio</title>
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <div id="app" class="app">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>
+        </span>
+        <span class="brand-name">fretio</span>
+      </div>
+
+      <button class="empresa-chip" type="button" id="empresaChip" title="Trocar empresa">
+        <span class="empresa-avatar" id="empresaAvatar">·</span>
+        <span class="empresa-name" id="empresaName">—</span>
+      </button>
+
+      <nav class="nav" id="nav" aria-label="Navegação principal">
+        <button class="nav-item is-active" data-page="dashboard" type="button">
+          <span class="nav-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg></span>
+          Dashboard
+        </button>
+        <button class="nav-item" data-page="romaneio" type="button">
+          <span class="nav-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2Z"/><path d="M9 9h1M9 13h6M9 17h6"/></svg></span>
+          Romaneio
+        </button>
+        <button class="nav-item" data-page="cotacao" type="button">
+          <span class="nav-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M14.8 9a2.5 2.5 0 0 0-2.3-1.5h-.7a2.3 2.3 0 0 0-.5 4.5l2.4.6a2.3 2.3 0 0 1-.5 4.5h-.7A2.5 2.5 0 0 1 9.2 15M12 6v1.5M12 16.5V18"/></svg></span>
+          Cotação
+        </button>
+        <button class="nav-item" data-page="fornecedores" type="button">
+          <span class="nav-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="m3 8 0 8 9 5 9-5 0-8"/><path d="M12 13v8"/></svg></span>
+          Fornecedores
+        </button>
+        <button class="nav-item" data-page="rastreio" type="button">
+          <span class="nav-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 17V5a1 1 0 0 0-1-1H2v12a1 1 0 0 0 1 1h1"/><path d="M14 8h4l3 3v5a1 1 0 0 1-1 1h-1"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg></span>
+          Rastreio
+        </button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <button class="toggle-row" id="themeToggle" type="button" role="switch" aria-checked="true">
+          <span class="nav-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg></span>
+          <span id="themeLabel">Modo escuro</span>
+          <span class="switch" aria-hidden="true"><span class="knob"></span></span>
+        </button>
+        <button class="nav-item" data-page="config" type="button">
+          <span class="nav-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg></span>
+          Configurações
+        </button>
+      </div>
+    </aside>
+
+    <!-- Content -->
+    <main class="content">
+      <header class="topbar">
+        <button class="back-btn" id="backBtn" type="button" hidden>
+          <span aria-hidden="true"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></span>
+          Voltar
+        </button>
+        <div class="topbar-title">
+          <span id="pageTitle">Dashboard</span>
+          <span class="topbar-sub" id="pageSub">Nenhum arquivo carregado</span>
+        </div>
+        <button class="cmdk" id="cmdkBtn" type="button">
+          <span class="nav-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></span>
+          Buscar comando…
+          <span class="kbd">Ctrl K</span>
+        </button>
+      </header>
+
+      <div class="view" id="view"></div>
+
+      <footer class="footer">
+        <span id="footerVersion">Fretio</span>
+      </footer>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="format.js"></script>
+  <script src="pages/cot_status.js"></script>
+  <script src="pages/dashboard.js"></script>
+  <script src="pages/cotacao.js"></script>
+  <script src="pages/rastreio.js"></script>
+  <script src="pages/romaneio.js"></script>
+  <script src="pages/fornecedores.js"></script>
+  <script src="pages/config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

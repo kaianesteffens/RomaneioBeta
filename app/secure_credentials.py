@@ -18,7 +18,7 @@ from typing import Any, Iterator
 _SERVICE_PREFIX = "Fretio"
 _CRED_TYPE_GENERIC = 1
 _CRED_PERSIST_LOCAL_MACHINE = 2
-_SENSITIVE_FIELDS = ("senha", "password", "token", "error_report_token")
+_SENSITIVE_FIELDS = ("senha", "password", "token")
 _CONFIG_CONTAINER_SECTIONS = {"fretio", "fretebot", "romaneio", "transportadoras"}
 _logger = logging.getLogger(__name__)
 _memory_fallback: dict[str, str] = {}
