@@ -17,6 +17,11 @@ ENV/
 installer/build/
 installer/dist/
 installer/release-assets/
+# Built release/update binaries — distributed via GitHub Releases, not the
+# source repo. latest.json (metadata) is kept; the binaries are not tracked.
+installer/repository-assets/*.exe
+installer/repository-assets/*.zip
+installer/repository-assets/*.sig
 installer/MicrosoftEdgeWebview2Setup.exe
 installer/python-3.12/
 installer/installer/
