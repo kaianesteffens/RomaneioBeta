@@ -754,20 +754,26 @@ def restart_app() -> None:
     """
     update_dir = _license_dir_update()
     pending_file = update_dir / "_pending_update"
+    # O alvo executável é SEMPRE o BAT determinístico gerado por apply_update
+    # dentro de update_dir. Não executamos o caminho gravado em _pending_update:
+    # esse arquivo fica no perfil do usuário e poderia ser adulterado por outro
+    # processo para apontar a um binário arbitrário (CWE-494).
+    expected_bat = (update_dir / "_apply_update.bat").resolve()
 
     if pending_file.exists():
-        bat_path = pending_file.read_text(encoding="utf-8").strip()
-        if Path(bat_path).exists():
+        if expected_bat.exists():
             # Lança o script batch em processo separado (não é filho do app)
             # CREATE_NO_WINDOW: cria console oculto para cmd.exe rodar o .bat
             # CREATE_NEW_PROCESS_GROUP: garante que o processo sobrevive ao pai
             # NÃO usar DETACHED_PROCESS junto, pois bloqueia o console do cmd
             subprocess.Popen(
-                ["cmd", "/c", bat_path],
+                ["cmd", "/c", str(expected_bat)],
                 creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                 | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
                 close_fds=True,
             )
+        else:
+            _log("restart_app: _apply_update.bat ausente em %s; restart cancelado.", update_dir)
         pending_file.unlink(missing_ok=True)
 
     # Fecha o app

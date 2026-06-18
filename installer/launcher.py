@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,16 @@ from pathlib import PurePosixPath
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """Contexto TLS com raízes do certifi quando disponível (espelha updater.py)."""
+    try:
+        import certifi  # type: ignore[import-untyped]
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
 
 try:
     import tkinter as tk
@@ -307,7 +318,7 @@ def _fetch_latest(repo: str) -> dict | None:
         "Accept": "application/vnd.github+json",
         "User-Agent": "Fretio-Launcher/1.0",
     })
-    with urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+    with urlopen(req, timeout=HTTP_TIMEOUT, context=_ssl_context()) as resp:
         return json.loads(resp.read())
 
 
@@ -345,7 +356,7 @@ def _resolve_latest_release():
 def _download(url: str, dest: Path, total: int, status_cb, progress_cb) -> None:
     req = Request(url, headers={"User-Agent": "Fretio-Launcher/1.0"})
     downloaded = 0
-    with urlopen(req, timeout=180) as resp, open(dest, "wb") as f:
+    with urlopen(req, timeout=180, context=_ssl_context()) as resp, open(dest, "wb") as f:
         while True:
             chunk = resp.read(65536)
             if not chunk:
