@@ -375,6 +375,51 @@ def _launch_app(app_exe: Path) -> None:
     subprocess.Popen([str(app_exe)], cwd=str(app_exe.parent))
 
 
+def _safe_unlink(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _select_signature_asset(assets, zip_asset_name: str) -> dict | None:
+    expected = f"{zip_asset_name}.sig".strip().lower()
+    for asset in assets:
+        if str(asset.get("name", "")).strip().lower() == expected:
+            return asset
+    return None
+
+
+def _verify_downloaded_update(
+    zip_path: Path,
+    signature_path: Path,
+    assets,
+    zip_asset_name: str,
+    status_cb,
+    progress_cb,
+) -> bool:
+    """Baixa o asset .sig e valida a assinatura Ed25519 do ZIP.
+
+    Fail-closed: retorna True somente quando a assinatura é válida. Qualquer
+    falha (asset .sig ausente, verificação indisponível, assinatura inválida)
+    retorna False — o ZIP NÃO deve ser extraído/instalado (CWE-347). update_security
+    é empacotado junto ao launcher e já traz a chave pública embutida no build.
+    """
+    try:
+        sig_asset = _select_signature_asset(assets, zip_asset_name)
+        if not sig_asset:
+            _log("Asset de assinatura (.sig) ausente na release; update não será instalado.")
+            return False
+        _download(sig_asset["browser_download_url"], signature_path, sig_asset.get("size", 0), status_cb, progress_cb)
+        from update_security import verify_update_signature  # empacotado no launcher
+        verify_update_signature(zip_path, signature_path)
+        _log("Assinatura do update verificada com sucesso.")
+        return True
+    except Exception:
+        _log_exception("Verificação de assinatura do update falhou")
+        return False
+
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 
 if _HAS_TK:
@@ -532,6 +577,7 @@ def _worker(win: "_Window | None") -> None:
             progress(0)
 
             tmp = Path(os.environ.get("TEMP", app_dir.parent)) / "_romaneio_launcher.zip"
+            sig_tmp = Path(os.environ.get("TEMP", app_dir.parent)) / "_romaneio_launcher.zip.sig"
             _download(
                 zip_asset["browser_download_url"],
                 tmp,
@@ -541,25 +587,43 @@ def _worker(win: "_Window | None") -> None:
             )
             _log("ZIP baixado: %s", tmp)
 
-            label("Instalando...")
-            status("Extraindo arquivos...")
-            progress(96)
+            # Verifica a assinatura Ed25519 ANTES de extrair/instalar. Sem isso, um
+            # comprometimento da release/CDN do GitHub ou um MITM resultaria em RCE
+            # silencioso na máquina do cliente (CWE-347). Fail-closed: update não
+            # autenticado nunca é instalado.
+            status("Verificando assinatura da atualização...")
+            if not _verify_downloaded_update(
+                tmp, sig_tmp, release.get("assets", []), str(zip_asset.get("name", "")), status, progress
+            ):
+                _safe_unlink(tmp)
+                _safe_unlink(sig_tmp)
+                if local_valid:
+                    _log("Assinatura inválida/ausente; mantendo a instalação local válida.")
+                    label("Atualização não verificada — abrindo versão instalada.")
+                    status(f"Versão {local_ver} — abrindo...")
+                else:
+                    raise FileNotFoundError(
+                        "Não foi possível verificar a assinatura da atualização e não há "
+                        f"versão local válida instalada.\n\nLog: {LOG_PATH}"
+                    )
+            else:
+                label("Instalando...")
+                status("Extraindo arquivos...")
+                progress(96)
 
-            _safe_extract_zip_to_app(tmp, app_dir)
-            _log("Caminho final de extração: %s", app_dir)
+                _safe_extract_zip_to_app(tmp, app_dir)
+                _log("Caminho final de extração: %s", app_dir)
 
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+                _safe_unlink(tmp)
+                _safe_unlink(sig_tmp)
 
-            app_exe = _resolve_app_exe(app_dir)
-            if not _is_valid_app_dir(app_dir):
-                raise FileNotFoundError(
-                    f"Update instalado sem executável/version.txt válido em {app_dir}"
-                )
-            progress(100)
-            status(f"v{ver_str} instalado com sucesso!")
+                app_exe = _resolve_app_exe(app_dir)
+                if not _is_valid_app_dir(app_dir):
+                    raise FileNotFoundError(
+                        f"Update instalado sem executável/version.txt válido em {app_dir}"
+                    )
+                progress(100)
+                status(f"v{ver_str} instalado com sucesso!")
         else:
             label("Fretio está atualizado!")
             status(f"Versão {local_ver} — abrindo...")

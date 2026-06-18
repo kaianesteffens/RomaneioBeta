@@ -14,12 +14,27 @@ for _name in ("romaneio.ico", "fretio.ico"):
         _icon = str(_assets / _name)
         break
 
+# Localiza app/ para empacotar update_security.py (verificação de assinatura do
+# update). A chave pública Ed25519 já é embutida em update_security.py pelo passo
+# "Embed update public key" do build-release.yml ANTES do build do launcher.
+_app_src = ""
+for _cand in (Path(SPECPATH).parent / "app", Path(SPECPATH).parent.parent / "app"):
+    if (_cand / "update_security.py").exists():
+        _app_src = str(_cand)
+        break
+
 a = Analysis(
     [str(Path(SPECPATH) / "launcher.py")],
-    pathex=[],
+    pathex=[_app_src] if _app_src else [],
     binaries=[],
     datas=[],
-    hiddenimports=["tkinter", "tkinter.ttk", "tkinter.messagebox"],
+    hiddenimports=[
+        "tkinter", "tkinter.ttk", "tkinter.messagebox",
+        "update_security",
+        "cryptography",
+        "cryptography.hazmat.primitives.asymmetric.ed25519",
+        "cryptography.hazmat.primitives.serialization",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
