@@ -49,9 +49,11 @@ if not exist "%PY%" (
         powershell -Command "(Get-Content '%%f') -replace '#import site','import site' | Set-Content '%%f'"
     )
 
-    REM Instalar pip. URL pinada por versao do Python (nao a "latest" movel), para
-    REM o get-pip.py nao migrar sozinho para uma versao de pip que largue o 3.12.
-    curl -L -o "%PYDIR%\get-pip.py" "https://bootstrap.pypa.io/pip/3.12/get-pip.py"
+    REM Instalar pip via get-pip.py oficial. A VERSAO do pip e pinada logo abaixo
+    REM (pip install --upgrade pip==%PINNED_PIP_VERSION%), entao nao ha risco de
+    REM drift. -f faz o curl falhar em erro HTTP (evita baixar uma pagina 404 como
+    REM se fosse o script, que quebraria com SyntaxError).
+    curl -fL -o "%PYDIR%\get-pip.py" "https://bootstrap.pypa.io/get-pip.py"
     if %ERRORLEVEL% neq 0 (
         echo ERRO: Falha ao baixar get-pip.py. Verifique sua conexao.
         %FB_PAUSE_CMD%
