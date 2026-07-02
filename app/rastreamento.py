@@ -42,23 +42,28 @@ except Exception:
 
 _TRANSPORTADORAS_IGNORADAS_RASTREIO = {"correios", "azul", "bornelli"}
 
-
-def _chave_acesso_valida(chave_acesso: str) -> bool:
-    """Valida se a chave de acesso tem 44 dígitos."""
-    return len(re.sub(r'\D', '', chave_acesso or "")) == 44
-
-
-@dataclass
-class ResultadoRastreio:
-    """Resultado do rastreamento de uma NF-e."""
-    numero_nfe: str
-    transportadora: str
-    entregue: bool = False
-    previsao_entrega: str = ""
-    link_rastreio: str = ""
-    screenshot_path: str = ""
-    status_texto: str = ""
-    erro: str = ""
+from rastreamento_common import (
+    ResultadoRastreio,
+    _download_dir,
+    _gerar_path_screenshot,
+)
+from rastreamento_captura import (
+    _braspress_screenshot,
+    _capturar_html_fullpage,
+    _capturar_ssw_detalhado_fullpage,
+    _extrair_url_ssw_detalhado,
+    _injetar_base_href,
+    _nova_pagina,
+    _salvar_screenshot_entrega,
+)
+from rastreamento_status import (
+    _chave_acesso_valida,
+    _extrair_etapas_agex,
+    _extrair_status_rodonaves,
+    _extrair_status_ssw_remetente,
+    _linhas_visiveis,
+    _montar_status,
+)
 
 
 _TRACKING_URLS: dict[str, str] = {
@@ -77,22 +82,6 @@ _TRACKING_URLS: dict[str, str] = {
 _SSW_SIGLAS: dict[str, str] = {
     "mengue": "MEN",
 }
-
-
-def _download_dir() -> Path:
-    """Diretório para salvar screenshots de rastreamento."""
-    cfg_dir = (os.getenv("FRETEBOT_RASTREIO_DIR") or "").strip()
-    if cfg_dir:
-        d = Path(cfg_dir)
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-    appdata = os.getenv("APPDATA")
-    if appdata:
-        d = Path(appdata) / "Fretio" / "rastreamento"
-    else:
-        d = Path.cwd() / "Fretio_rastreamento"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
 
 
 def obter_link_rastreio(transportadora: str, numero_nfe: str = "", cnpj_emitente: str = "") -> str:
@@ -212,230 +201,6 @@ async def _rastrear_braspress(
             resultado.status_texto = "Rastreamento indisponível no momento"
         else:
             resultado.status_texto = f"Erro ao rastrear: {msg or 'falha desconhecida'}"
-
-
-async def _braspress_screenshot(resultado: ResultadoRastreio, numero_nfe: str, track_url: str) -> None:
-    """Abre pagina de tracking no browser e tira screenshot com todos os detalhes expandidos."""
-    browser = None
-    try:
-        browser = await launch_browser_resilient(headless=True)
-        ctx = await browser.new_context(viewport={"width": 1366, "height": 900})
-        page = await ctx.new_page()
-
-        await page.goto(track_url, wait_until="networkidle", timeout=20000)
-        await asyncio.sleep(3)
-
-        # 1. Clicar em "Detalhes do Rastreamento" (desktop) via JS para expandir o log detalhado
-        await page.evaluate("""
-            () => {
-                const spans = document.querySelectorAll('span');
-                const match = Array.from(spans).find(s =>
-                    s.textContent.trim() === 'Detalhes do Rastreamento' &&
-                    !s.closest('[id^="mobTimeline"]')
-                );
-                if (match) match.click();
-            }
-        """)
-        await asyncio.sleep(2)
-
-        # 2. Clicar em "Mais Detalhes" via JS para carregar ocorrências (inclusive elementos ocultos)
-        await page.evaluate("""
-            () => {
-                document.querySelectorAll('a').forEach(a => {
-                    const href = a.getAttribute('href') || '';
-                    if (href.includes('openDetalhesPend')) {
-                        a.click();
-                    }
-                });
-            }
-        """)
-        await asyncio.sleep(3)
-
-        screenshot_path = _gerar_path_screenshot(numero_nfe)
-        await page.screenshot(path=str(screenshot_path), full_page=True)
-        resultado.screenshot_path = str(screenshot_path)
-        logger.info(f"[RASTREIO-BRASPRESS] Screenshot salvo: {screenshot_path}")
-    except Exception as e:
-        logger.warning(f"[RASTREIO-BRASPRESS] Erro no screenshot: {e}")
-    finally:
-        if browser:
-            try:
-                await browser.close()
-            except Exception:
-                pass
-
-
-def _linhas_visiveis(texto: str) -> list[str]:
-    return [linha.strip() for linha in texto.splitlines() if linha and linha.strip()]
-
-
-def _montar_status(status: str, detalhe: str = "", previsao: str = "") -> str:
-    base = (status or "").strip()
-    detalhe = (detalhe or "").strip()
-    if detalhe and detalhe.upper() != base.upper():
-        base = f"{base} — {detalhe}" if base else detalhe
-    if previsao and previsao not in base:
-        base = f"{base} — Previsão: {previsao}" if base else f"Previsão: {previsao}"
-    return base
-
-
-def _extrair_status_ssw_remetente(texto: str) -> tuple[str, str]:
-    linhas = _linhas_visiveis(texto)
-    try:
-        idx_situacao = next(
-            i for i, linha in enumerate(linhas)
-            if linha.upper() in {"SITUAÇÃO", "SITUACAO"}
-        )
-    except StopIteration:
-        return "", ""
-
-    relevantes: list[str] = []
-    for linha in linhas[idx_situacao + 1:]:
-        linha_upper = linha.upper()
-        if linha_upper in {"MAIS DETALHES", "VOLTAR"} or linha.startswith("Processado por"):
-            break
-        relevantes.append(linha)
-
-    if len(relevantes) >= 5:
-        status = relevantes[4]
-        detalhe = relevantes[5] if len(relevantes) >= 6 else ""
-        return status, detalhe
-    return "", ""
-
-
-async def _salvar_screenshot_entrega(page, resultado: ResultadoRastreio, numero_nfe: str) -> None:
-    screenshot_path = _gerar_path_screenshot(numero_nfe)
-    await page.screenshot(path=str(screenshot_path), full_page=True)
-    resultado.screenshot_path = str(screenshot_path)
-
-
-def _injetar_base_href(html: str, base_url: str) -> str:
-    if not html:
-        return html
-    if re.search(r"<base\s+href=", html, re.IGNORECASE):
-        return html
-    base_tag = f'<base href="{base_url}">'
-    if re.search(r"<head[^>]*>", html, re.IGNORECASE):
-        return re.sub(r"(<head[^>]*>)", rf"\1{base_tag}", html, count=1, flags=re.IGNORECASE)
-    return f"<head>{base_tag}</head>{html}"
-
-
-async def _capturar_html_fullpage(html: str, base_url: str, numero_nfe: str) -> str:
-    browser = None
-    temp_html_path = None
-    try:
-        browser = await launch_browser_resilient(headless=True)
-        contexts = browser.contexts
-        if contexts:
-            page = contexts[0].pages[0] if contexts[0].pages else await contexts[0].new_page()
-        else:
-            ctx = await browser.new_context(viewport={"width": 1366, "height": 900})
-            page = await ctx.new_page()
-        with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as tmp:
-            tmp.write(_injetar_base_href(html, base_url))
-            temp_html_path = tmp.name
-        await page.goto(Path(temp_html_path).resolve().as_uri(), wait_until="load")
-        try:
-            await page.wait_for_load_state("networkidle", timeout=10000)
-        except Exception:
-            pass
-        await asyncio.sleep(1)
-        screenshot_path = _gerar_path_screenshot(numero_nfe)
-        await page.screenshot(path=str(screenshot_path), full_page=True)
-        return str(screenshot_path)
-    finally:
-        if temp_html_path:
-            try:
-                Path(temp_html_path).unlink(missing_ok=True)
-            except Exception:
-                pass
-        if browser:
-            try:
-                await browser.close()
-            except Exception:
-                pass
-
-
-def _extrair_url_ssw_detalhado(html: str, base_url: str = "https://ssw.inf.br") -> str:
-    if not html:
-        return ""
-    match = re.search(r"opx\('([^']*SSWDetalhado[^']*)'\)", html, re.IGNORECASE)
-    if not match:
-        return ""
-    return urljoin(base_url, match.group(1))
-
-
-async def _capturar_ssw_detalhado_fullpage(detail_url: str, numero_nfe: str) -> str:
-    if not detail_url:
-        return ""
-
-    browser = None
-    try:
-        browser = await launch_browser_resilient(headless=True)
-        page = await _nova_pagina(browser)
-        await page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
-        try:
-            await page.wait_for_load_state("networkidle", timeout=10000)
-        except Exception:
-            pass
-        await asyncio.sleep(2)
-        screenshot_path = _gerar_path_screenshot(numero_nfe)
-        await page.screenshot(path=str(screenshot_path), full_page=True)
-        return str(screenshot_path)
-    finally:
-        if browser:
-            try:
-                await browser.close()
-            except Exception:
-                pass
-
-
-async def _nova_pagina(browser):
-    contexts = browser.contexts
-    if contexts:
-        return contexts[0].pages[0] if contexts[0].pages else await contexts[0].new_page()
-    ctx = await browser.new_context(viewport={"width": 1366, "height": 900})
-    return await ctx.new_page()
-
-
-async def _extrair_etapas_agex(page) -> dict:
-    return await page.evaluate(
-        """() => {
-            const labels = ['Recebida para transporte', 'A caminho', 'Saiu para entrega', 'Entregue'];
-            const rows = Array.from(document.querySelectorAll('div.flex.flex-row.gap-4'))
-                .map((row) => {
-                    const labelNode = Array.from(row.querySelectorAll('span,div,p'))
-                        .find((node) => labels.includes((node.textContent || '').trim()));
-                    if (!labelNode) return null;
-                    return {
-                        label: (labelNode.textContent || '').trim(),
-                        completed: row.outerHTML.includes('bg-green-500'),
-                    };
-                })
-                .filter(Boolean);
-            const bodyText = document.body ? (document.body.innerText || '') : '';
-            const previsaoMatch = bodyText.match(/Previsão de entrega:\\s*([^\\n]+)/i);
-            return {
-                rows,
-                previsao: previsaoMatch ? previsaoMatch[1].trim() : '',
-            };
-        }"""
-    )
-
-
-def _extrair_status_rodonaves(body_text: str) -> str:
-    linhas = _linhas_visiveis(body_text)
-    for idx, linha in enumerate(linhas):
-        if linha.upper() == "STATUS" and idx + 1 < len(linhas):
-            return linhas[idx + 1].strip()
-    for pattern in [
-        r'Status\s*\n\s*([^\n]+)',
-        r'Status\s*[:\-]?\s*([^\n]+)',
-    ]:
-        match = re.search(pattern, body_text, re.IGNORECASE)
-        if match:
-            return match.group(1).strip()
-    return ""
 
 
 async def _aplicar_resultado_texto(
@@ -1286,12 +1051,6 @@ def _extrair_previsao(texto: str) -> str:
         if match:
             return match.group(1).strip()
     return ""
-
-
-def _gerar_path_screenshot(numero_nfe: str, transportadora: str = "") -> Path:
-    safe_nfe = re.sub(r"[^\d]", "", numero_nfe) or "sem_numero"
-    filename = f"NF{safe_nfe}.png"
-    return _download_dir() / filename
 
 
 async def rastrear_multiplas(
