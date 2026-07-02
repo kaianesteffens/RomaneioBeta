@@ -13,7 +13,6 @@ sys.path.insert(0, str(ROOT / "app" / "fretio" / "src"))
 
 import cotacao_transportadoras as ct
 import extrator_nfe as nfe
-import license as lic
 import updater
 from fretio.config_manager import ConfigManager
 
@@ -161,74 +160,6 @@ def test_contract_config_manager_uses_hardcoded_fallback_when_no_config_exists(
     assert config["fretio"]["fator_cubagem"] == 6000
     assert config["romaneio"]["cep_origem"] == "99740000"
     assert config["transportadoras"]["braspress"]["habilitado"] is True
-
-
-def test_contract_validate_license_accepts_free_mode_when_no_url(monkeypatch):
-    _clear_license_api_env(monkeypatch)
-    monkeypatch.setattr(lic, "_get_gist_url", lambda: "")
-
-    status = lic.validate_license("FBOT-TESTE", machine_id="MAQ-1")
-
-    assert status == lic.LicenseStatus(
-        valid=True,
-        owner="(sem licenciamento)",
-        message="",
-    )
-
-
-def test_contract_validate_license_online_active_legacy_gist_is_read_only(monkeypatch, tmp_path):
-    _clear_license_api_env(monkeypatch)
-    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
-    monkeypatch.setattr(lic, "_get_gist_url", lambda: "https://example.test/licenses.json")
-    monkeypatch.setattr(
-        lic,
-        "_fetch_licenses",
-        lambda _url: {
-            "licenses": {
-                "FBOT-OK": {
-                    "owner": "Cliente Teste",
-                    "active": True,
-                    "machines": [],
-                    "max_machines": 1,
-                    "expires": "",
-                }
-            },
-            "blocked_keys": [],
-            "blocked_machines": [],
-        },
-    )
-    # Sem token de Gist, o vínculo de máquina não é gravado (read-only).
-    assert not hasattr(lic, "_register_machine")
-
-    status = lic.validate_license("fbot-ok", machine_id="MAQ-1")
-
-    assert status == lic.LicenseStatus(
-        valid=True,
-        owner="Cliente Teste",
-        message="Licença válida.",
-    )
-
-
-def test_contract_validate_license_offline_uses_valid_cache(monkeypatch, tmp_path):
-    _clear_license_api_env(monkeypatch)
-    appdata = tmp_path / "appdata"
-    (appdata / "Fretio").mkdir(parents=True)
-    monkeypatch.setenv("APPDATA", str(appdata))
-    lic._save_validation_cache(
-        "FBOT-CACHE",
-        lic.LicenseStatus(valid=True, owner="Cliente Cache", blocked=False),
-    )
-    monkeypatch.setattr(lic, "_get_gist_url", lambda: "https://example.test/licenses.json")
-    monkeypatch.setattr(lic, "_fetch_licenses", lambda _url: (_ for _ in ()).throw(URLError("offline")))
-
-    status = lic.validate_license("FBOT-CACHE", machine_id="MAQ-1")
-
-    assert status == lic.LicenseStatus(
-        valid=True,
-        owner="Cliente Cache",
-        message="Servidor indisponível, usando validação offline.",
-        offline=True,
-    )
 
 
 def test_contract_updater_check_for_update_returns_none_for_current_version(monkeypatch):

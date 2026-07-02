@@ -326,48 +326,12 @@ class StartupMixin:
     Delegate de domínio do god-object Api. Opera sobre o estado do Api (self) —
     superfície pública pywebview inalterada (test_char_web_app_api_surface.py)."""
 
-    def startup_licenca_estado(self) -> dict:
-        from license import get_saved_license, get_machine_id, validate_license
-        key = get_saved_license()
-        machine = get_machine_id()
-        if not key:
-            return {"fase": "pedir_chave", "msg": ""}
-        status = validate_license(key, machine)
-        if status.valid:
-            try:
-                from usage_reporter import report_license_validated
-                report_license_validated("ok")
-            except Exception:
-                pass
-            return {"fase": "ok", "msg": ""}
-        return {"fase": "revogada", "msg": status.message or "Sua licença não é mais válida."}
-
-    def startup_ativar_licenca(self, key: str) -> dict:
-        from license import get_machine_id, validate_license, save_license
-        key = str(key or "").strip().upper()
-        if not key:
-            return {"ok": False, "msg": "Informe a chave de licença."}
-        status = validate_license(key, get_machine_id())
-        if status.valid:
-            save_license(key)
-            try:
-                from usage_reporter import report_license_validated
-                report_license_validated("ok")
-            except Exception:
-                pass
-            return {"ok": True, "msg": ""}
-        return {"ok": False, "msg": status.message or "Chave não reconhecida."}
-
     def startup_pos_licenca(self) -> dict:
-        from startup import _fetch_remote_config_sync, _carregar_versao_app
-        from version_policy import evaluate_minimum_version
+        from startup import _carregar_versao_app
         from updater import get_repo_from_config, check_for_update
 
         cur = _carregar_versao_app()
         repo = get_repo_from_config()
-        payload = _fetch_remote_config_sync()
-        policy = evaluate_minimum_version((payload or {}).get("config", {}), cur)
-
         info = None
         try:
             info = check_for_update(repo, cur) if repo else None
@@ -381,13 +345,7 @@ class StartupMixin:
                 "notes": str(getattr(info, "release_notes", "") or "")[:1500],
                 "mandatory": bool(getattr(info, "mandatory", False)),
             }
-
-        bloqueado = bool(policy.is_outdated and policy.should_block)
-        msg = ""
-        if bloqueado:
-            msg = (f"Sua versão (v{policy.current_version}) não é compatível com o servidor.\n"
-                   f"Versão mínima: v{policy.min_app_version or 'desconhecida'}. Atualize para continuar.")
-        return {"bloqueado": bloqueado, "msg": msg, "update": upd}
+        return {"bloqueado": False, "msg": "", "update": upd}
 
     def startup_aplicar_update(self) -> dict:
         info = self._update_info
