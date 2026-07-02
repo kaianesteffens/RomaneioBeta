@@ -2,11 +2,12 @@
 from datetime import datetime
 from typing import Optional
 from decimal import Decimal, ROUND_HALF_UP
-import os
 import re
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from fretio.providers.base import ProviderBase
 from fretio.providers.provider_utils import _digits, _parse_brl, _format_decimal_br_2
+from fretio.providers.agex_browser import AGEXBrowserMixin
+from fretio.providers.agex_diagnostics import AGEXDiagnosticsMixin
 from fretio.models import Cotacao
 from fretio.quotation_contract import QuoteRequest, QuoteResponse
 from fretio.logging_conf import get_logger
@@ -14,7 +15,7 @@ from fretio.logging_conf import get_logger
 logger = get_logger(__name__)
 
 
-class AGEXProvider(ProviderBase):
+class AGEXProvider(AGEXBrowserMixin, AGEXDiagnosticsMixin, ProviderBase):
     """Provider AGEX Transportes via Playwright."""
 
     LOGIN_URL = "https://cliente.agex.com.br/login"
@@ -224,28 +225,6 @@ class AGEXProvider(ProviderBase):
         lowered = str(texto or "").lower()
         return "confirmar e ver resultado" in lowered or "ver resultado" in lowered
 
-    async def _init_browser(self) -> None:
-        if self._browser:
-            if self._browser.is_connected():
-                return
-            logger.warning(f"[{self.nome}] Browser desconectado, reinicializando...")
-            await self.cleanup()
-        from fretio.providers.base import launch_browser_resilient
-        self._browser = await launch_browser_resilient(
-            headless=self.headless,
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
-        )
-        self._context = await self._browser.new_context(
-            viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        )
-        self._page = await self._context.new_page()
-        self._page.set_default_timeout(self.DEFAULT_TIMEOUT_MS)
-        self._page.set_default_navigation_timeout(self.DEFAULT_TIMEOUT_MS)
-        await self._page.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-        )
-
     async def _fechar_popups(self) -> None:
         """Fecha qualquer alertdialog ou modal de aviso que esteja bloqueando a tela."""
         page = self._page
@@ -406,64 +385,6 @@ class AGEXProvider(ProviderBase):
                 self.last_error = f"Erro no login: {e}"
                 return False
         return False
-
-    async def pre_login(self):
-        """Inicializa browser e faz login antecipadamente."""
-        await self._init_browser()
-        await self._login()
-
-    async def cleanup(self):
-        """Fecha o browser."""
-        try:
-            if self._page and not self._page.is_closed():
-                await self._page.close()
-        except Exception:
-            pass
-        try:
-            if self._context:
-                await self._context.close()
-        except Exception:
-            pass
-        try:
-            if self._browser:
-                await self._browser.close()
-        except Exception:
-            pass
-        self._browser = None
-        self._context = None
-        self._page = None
-        self._logged_in = False
-
-    @staticmethod
-    def _safe_diagnostic_excerpt(value: object, *, limit: int = 900) -> str:
-        text = str(value or "")
-        text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)
-        text = re.sub(r"(?is)<[^>]+>", " ", text)
-        text = re.sub(r"(?<!\d)\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}(?!\d)", "***", text)
-        text = re.sub(r"(?<!\d)\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?!\d)", "***", text)
-        text = re.sub(r"\b\d{14}\b", "***", text)
-        text = re.sub(r"\b\d{11}\b", "***", text)
-        text = re.sub(r"\b\d{5}-?\d{3}\b", "***", text)
-        text = re.sub(r"\s+", " ", text).strip()
-        if len(text) > limit:
-            return text[:limit].rstrip() + "..."
-        return text
-
-    async def _salvar_debug(self, sufixo: str) -> None:
-        # Só grava diagnóstico quando explicitamente habilitado; nunca dump de
-        # HTML/screenshot cru (contém CNPJ do pagador/destinatário e endereço).
-        if not os.environ.get("FRETIO_DEBUG_DUMP"):
-            return
-        try:
-            if self._page:
-                debug_dir = os.path.join(os.environ.get("APPDATA", "."), "Fretio")
-                os.makedirs(debug_dir, exist_ok=True)
-                excerpt = self._safe_diagnostic_excerpt(await self._page.inner_text("body"))
-                linha = f"url={self._page.url or ''}\n{excerpt}\n"
-                with open(os.path.join(debug_dir, f"agex_{sufixo}.txt"), "w", encoding="utf-8") as f:
-                    f.write(linha)
-        except Exception as e:
-            logger.warning(f"[{self.nome}] Falha ao salvar debug: {e}")
 
     async def _set_react_select(self, page, value: str, selector: str = "select") -> bool:
         """Define valor em <select> React via native setter para disparar onChange."""
