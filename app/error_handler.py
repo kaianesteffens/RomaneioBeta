@@ -193,22 +193,26 @@ class ErrorHandler:
     @classmethod
     def report_to_server(cls, error_data: dict[str, Any]) -> bool:
         """
-        Envia erro para o servidor próprio (via error_reporter).
-        
+        Registra erro no log local (via error_reporter).
+
+        O envio ao servidor foi removido: ``error_reporter.report_error_message``
+        agora apenas grava no log local sanitizado. O nome é mantido por
+        compatibilidade com os chamadores existentes.
+
         Args:
             error_data: Dicionário com dados do erro
-        
+
         Returns:
-            True se envio bem-sucedido, False caso contrário
+            True se registrado, False caso contrário
         """
         if not cls._report_to_server or error_reporter is None:
             return False
-        
+
         try:
             context = error_data.get("context", "error_handler")
             message = error_data.get("message", "Unknown error")
-            
-            # Tenta enviar via error_reporter
+
+            # Registra via error_reporter (log local)
             if hasattr(error_reporter, "report_error_message"):
                 error_reporter.report_error_message(
                     message=f"{context}: {message}",
@@ -218,7 +222,7 @@ class ErrorHandler:
                 return True
         except Exception as e:
             _logger.debug(
-                "Falha ao enviar erro para servidor: %s",
+                "Falha ao registrar erro no log local: %s",
                 e,
                 extra={
                     "operation": "report_to_server",

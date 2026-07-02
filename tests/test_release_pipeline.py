@@ -1,5 +1,4 @@
 import sys
-import ssl
 from pathlib import Path
 from io import BytesIO
 from urllib.error import HTTPError
@@ -10,7 +9,6 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 sys.path.insert(0, str(ROOT / "installer"))
 
-import error_reporter as er
 import launcher
 import updater
 import validate_update_zip
@@ -288,92 +286,6 @@ def test_launcher_installs_update_with_valid_signature(monkeypatch, tmp_path):
 
     assert extracted == [app_dir]   # assinatura valida -> update instalado
     assert launched == [exe_path]
-
-
-def test_error_reporter_has_no_embedded_developer_secrets():
-    # O caminho via Gist (token do desenvolvedor) foi removido por completo.
-    assert not hasattr(er, "_EMBEDDED_ERROR_GIST_ID")
-    assert not hasattr(er, "_EMBEDDED_ERROR_REPORT_TOKEN")
-    assert not hasattr(er, "_send_to_gist")
-    assert not hasattr(er, "_gist_id")
-    assert not hasattr(er, "_token")
-
-
-def test_error_reporter_loads_error_api_url_from_env(monkeypatch):
-    monkeypatch.setenv("FRETIO_ERROR_API_URL", "https://env.example/api/errors")
-    monkeypatch.setattr(er, "_iter_config_candidates", lambda: [])
-    monkeypatch.setattr(er, "_error_api_url", "")
-    er._initialized = False
-
-    er._load_config()
-
-    assert er._error_api_url == "https://env.example/api/errors"
-
-
-def test_error_reporter_falls_back_to_default_error_api_url(monkeypatch):
-    monkeypatch.delenv("FRETIO_ERROR_API_URL", raising=False)
-    monkeypatch.delenv("FRETEBOT_ERROR_API_URL", raising=False)
-    monkeypatch.setattr(er, "_iter_config_candidates", lambda: [])
-    monkeypatch.setattr(er, "_error_api_url", "")
-    er._initialized = False
-
-    er._load_config()
-
-    assert er._error_api_url == er._DEFAULT_ERROR_API_URL
-
-
-def test_error_reporter_configure_reads_error_api_url_from_config(monkeypatch, tmp_path):
-    company_cfg = tmp_path / "CONFIG.toml"
-    company_cfg.write_text(
-        "[fretio]\n"
-        'error_api_url = "https://cfg.example/api/errors"\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(er, "_error_api_url", "")
-    er._initialized = False
-
-    er.configure(company_cfg)
-
-    assert er._error_api_url == "https://cfg.example/api/errors"
-
-
-def test_error_reporter_sends_recent_diag_log_to_server(monkeypatch, tmp_path):
-    log_path = tmp_path / "error_reporter.log"
-    log_path.write_text("linha antiga\nlinha recente\n", encoding="utf-8")
-    sent = {}
-
-    class _ImmediateThread:
-        def __init__(self, target, args=(), daemon=None):
-            self._target = target
-            self._args = args
-
-        def start(self):
-            self._target(*self._args)
-
-        def join(self, timeout=None):
-            return None
-
-    monkeypatch.setattr(er, "_log_path", lambda: log_path)
-    monkeypatch.setattr(er, "_load_config", lambda: None)
-    monkeypatch.setattr(er, "_is_rate_limited", lambda fingerprint: False)
-    monkeypatch.setattr(
-        er,
-        "_send_to_error_api",
-        lambda payload, label="": sent.setdefault("payload", payload) is None or True,
-    )
-    monkeypatch.setattr(er.threading, "Thread", _ImmediateThread)
-    monkeypatch.setattr(er, "_error_api_url", "https://srv.example/api/errors")
-    # Valida o caminho de envio: desliga o guard de reports originados de teste.
-    monkeypatch.setattr(er, "suppress_test_reports", False)
-
-    try:
-        raise RuntimeError("falha remota")
-    except RuntimeError:
-        er.report_error(context="teste", wait=True)
-
-    payload = sent["payload"]
-    assert payload["traceback"]
-    assert "linha recente" in payload["recent_diag"]
 
 
 def test_pyinstaller_spec_hiddenimports_dynamic_translovato_provider():
