@@ -8,7 +8,7 @@ Este repositorio contem o Fretio/RomaneioBeta Desktop, um aplicativo desktop Win
 
 Principais tecnologias:
 
-- UI local em PySide6.
+- UI local web em pywebview/WebView2 (front em `app/web/*`, bridge em `app/web_app.py`).
 - Automacao de portais com Playwright + Chromium no computador do cliente.
 - Leitura de PDFs com pdfplumber e leitura de XML/DANFE de NF-e.
 - Build Windows com PyInstaller e Inno Setup.
@@ -38,7 +38,7 @@ Principais tecnologias:
 
 ## Regras de trabalho
 
-- Entenda o projeto como app desktop Windows, nao como app web.
+- Entenda o projeto como app desktop Windows. A UI e renderizada em WebView2 com HTML/CSS/JS locais (`app/web/*`) via pywebview; nao e uma web app hospedada remotamente.
 - Leia o codigo existente antes de alterar comportamento.
 - Sempre procure o fluxo existente antes de criar um novo.
 - Mantenha mudancas pequenas, diretas e alinhadas aos padroes ja usados no repositorio.

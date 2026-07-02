@@ -1,6 +1,6 @@
 # Referencias visuais do redesign Fretio
 
-Este diretorio documenta as referencias visuais aprovadas pelo Eduardo para redesenho do app desktop PySide6.
+Este diretorio documenta as referencias visuais aprovadas pelo Eduardo para redesenho do app desktop (UI web em WebView2).
 
 As imagens originais foram geradas fora do repositorio e devem ser anexadas manualmente nas issues correspondentes quando for necessario renderizacao direta no GitHub.
 

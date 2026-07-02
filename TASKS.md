@@ -9,7 +9,7 @@
 ## Em andamento
 
 - Mapear estrutura completa dos providers.
-- Mapear telas PySide6.
+- Mapear telas da UI web (`app/web/pages/*.js`).
 - Mapear fluxo completo de cotacao.
 - Mapear fluxo de rastreio.
 - Mapear sistema de atualizacao.

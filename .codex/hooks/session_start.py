@@ -25,7 +25,7 @@ Antes de alterar qualquer arquivo, leia e respeite:
 Não recrie AGENTS.md, PROJECT_MAP.md ou TASKS.md. Esses arquivos já existem e são a fonte principal de orientação do projeto.
 
 Este repositório é o DESKTOP do Fretio/RomaneioBeta:
-- PySide6
+- UI web (pywebview/WebView2, app/web/*)
 - Playwright local
 - automações de cotação
 - interface desktop
@@ -33,7 +33,7 @@ Este repositório é o DESKTOP do Fretio/RomaneioBeta:
 - desenvolvimento/testes também podem ocorrer no Linux/Zorin
 
 Regra de escopo:
-- Se a tarefa envolver Rodonaves, Translovato, Eucatur, Coopex, provider, cotação, UI desktop, PySide6 ou Playwright local, trate como tarefa do desktop.
+- Se a tarefa envolver Rodonaves, Translovato, Eucatur, Coopex, provider, cotação, UI desktop web (WebView2) ou Playwright local, trate como tarefa do desktop.
 - Não altere servidor, FastAPI, PostgreSQL, Alembic, Docker ou deploy salvo se o usuário pedir explicitamente.
 - Não misture alterações de desktop e servidor na mesma tarefa.
 

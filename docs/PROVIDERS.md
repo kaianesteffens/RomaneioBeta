@@ -146,7 +146,7 @@ _PROVIDER_SPECS["nova"] = ProviderSpec(
 
 ## Boas práticas
 
-- Não tocar widgets PySide6 dentro do provider.
+- Não emitir/alterar UI diretamente dentro do provider (a UI é a bridge web em `app/web_app.py`).
 - Não criar event loop próprio.
 - Não salvar senha em log.
 - Tratar rota não atendida como `nao_atendido`, não como falha técnica.

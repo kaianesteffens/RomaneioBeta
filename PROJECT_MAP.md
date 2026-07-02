@@ -28,7 +28,7 @@ Aplicativo desktop Windows para:
 Stack principal:
 
 - Python 3.12
-- PySide6 para UI local
+- pywebview/WebView2 para UI local (UI web em `app/web/*`)
 - Playwright + Chromium para automacao local de portais
 - PyInstaller para empacotamento
 - Inno Setup para instalador
@@ -42,37 +42,35 @@ Stack principal:
 
 ## Entradas principais
 
-- `app/romaneio_app.py`: entrada da interface PySide6, janela principal, navegacao, startup, update, licenca, configuracao remota, eventos de UI e chamadas para modulos.
-- `python app/romaneio_app.py`: comando de desenvolvimento citado no README.
+- `app/web_app.py`: entrada da interface web, janela pywebview/WebView2, bridge `Api`, navegacao, startup, update, licenca, configuracao remota e chamadas para modulos.
+- `python app/web_app.py`: comando de desenvolvimento citado no README (ou `app/dev.bat`).
 - `app/version.txt`: versao usada em producao.
 - `app/CONFIG.example.toml`: exemplo versionado de configuracao. Nao versionar `CONFIG.toml` real.
 
-## Interface PySide6
+## Interface web
 
-Arquivo principal:
+Arquivos principais:
 
-- `app/romaneio_app.py`
+- `app/web_app.py`: bridge pywebview/WebView2, expoe a classe `Api` para o front e cria a janela.
+- `app/web_presenters.py`: monta os dados apresentados na UI a partir dos modulos locais.
+- `app/app_bootstrap.py` e `app/startup.py`: startup, licenca, configuracao remota e update antes de abrir a UI.
+
+Front (HTML/CSS/JS locais renderizados no WebView2):
+
+- `app/web/index.html`: shell da UI.
+- `app/web/app.js`: navegacao e integracao com a bridge `Api`.
+- `app/web/app.css`: estilos.
+- `app/web/format.js`: mascaras de CEP, CNPJ, moeda e decimal.
+- `app/web/pages/*.js`: telas (romaneio, cotacao, fornecedores, rastreio, configuracoes, selecao de empresa).
 
 Responsabilidades observadas:
 
-- Importa PySide6 (`QApplication`, `QMainWindow`, `QWidget`, `QTabWidget`, `QStackedWidget`, tabelas, botoes, dialogs e layouts).
-- Carrega fontes e componentes de UI via `ui_components.py`.
-- Usa eventos em `app/ui/events.py` para comunicacao segura com a thread da UI.
-- Usa formatacao em `app/ui/formatting.py` para mascaras de CEP, CNPJ, moeda e decimal.
-- Usa `app/ui/widgets.py` para widgets auxiliares.
 - Controla startup, licenca, configuracao remota e update.
-- Dispara cotacao, rastreio, importacao de NF-e e processamento de romaneio.
-
-Arquivos auxiliares de UI:
-
-- `app/ui/events.py`: eventos Qt customizados como progresso de cotacao, importacao de NF-e, rastreio e update.
-- `app/ui/formatting.py`: mascaras de campos.
-- `app/ui/widgets.py`: componentes visuais auxiliares.
-- `app/ui_components.py`: componentes visuais, icones, fontes, nav e toggles.
+- Dispara cotacao, rastreio, importacao de NF-e e processamento de romaneio via metodos da bridge `Api`.
 
 Regra importante:
 
-- Nao execute Playwright, leitura pesada de arquivo, update ou chamada remota longa na thread principal do Qt.
+- Nao execute Playwright, leitura pesada de arquivo, update ou chamada remota longa bloqueando a thread da UI/bridge.
 - Use `app/async_worker.py` e workers/threading ja existentes.
 
 ## Configuracao por empresa
@@ -251,7 +249,7 @@ Para criar provider novo:
 
 Boas praticas:
 
-- Nao tocar PySide6 dentro de provider.
+- Nao emitir/alterar UI diretamente dentro do provider (a UI e a bridge web em `app/web_app.py`).
 - Nao criar event loop proprio.
 - Usar seletores robustos de Playwright.
 - Preservar cleanup de page/context/browser/Playwright/processos.
@@ -396,7 +394,7 @@ Cuidados:
 
 ## Onde mexer por tipo de tarefa
 
-- Erro visual/tela/botao: comece por `app/romaneio_app.py`, depois `app/ui/*` e `app/ui_components.py`.
+- Erro visual/tela/botao: comece por `app/web/*` (`index.html`, `app.js`, `app.css`, `pages/*.js`), depois `app/web_app.py` e `app/web_presenters.py`.
 - Erro de cotacao geral: comece por `app/cotacao_transportadoras.py`, `app/cotacao/orchestrator.py` e `app/cotacao/romaneio_parser.py`.
 - Erro em transportadora especifica: comece por `app/fretio/src/fretio/providers/<transportadora>.py` e `factory.py`.
 - Erro de credenciais/config: comece por `app/company_config.py`, `app/CONFIG.example.toml`, `factory.py` e validacao do provider.
@@ -421,7 +419,6 @@ Explique como testar pela interface.
 
 ## Pendencias de mapeamento futuro
 
-- Detalhar classes/metodos principais dentro de `app/romaneio_app.py`.
 - Mapear todos os arquivos em `app/fretio/src/fretio/browser/`.
 - Mapear cada provider individualmente: login, cotacao, seletores, cleanup e erros comuns.
 - Mapear fluxo completo de rastreio.

@@ -1,13 +1,13 @@
 # Fretio / RomaneioBeta Desktop
 
-Aplicativo desktop Windows para operação de romaneios, cotação de frete e rastreio. A interface local é feita em PySide6 e as automações dos portais das transportadoras rodam no próprio desktop com Playwright/Chromium.
+Aplicativo desktop Windows para operação de romaneios, cotação de frete e rastreio. A interface local é feita em pywebview/WebView2 (UI web) e as automações dos portais das transportadoras rodam no próprio desktop com Playwright/Chromium.
 
 O servidor é usado como API central para licença, configuração remota, telemetria, logs sanitizados, jobs de cotação e descoberta de versão. Ele não recebe credenciais de transportadoras e não executa Playwright.
 
 ## Stack
 
 - Python 3.12
-- PySide6 para UI local
+- pywebview/WebView2 (UI web) para UI local
 - Playwright + Chromium no desktop para automação dos portais
 - PyInstaller + Inno Setup para build Windows
 - Configuração por empresa em TOML
@@ -18,7 +18,7 @@ O servidor é usado como API central para licença, configuração remota, telem
 2. O app carrega `%APPDATA%\Fretio\empresas\<empresa>\CONFIG.toml`.
 3. A licença é validada em `license_api_url`.
 4. A configuração remota segura é buscada no servidor.
-5. A UI PySide6 dispara módulos locais: romaneio, cotação, frete fornecedores e rastreio.
+5. A UI web (pywebview/WebView2) dispara módulos locais: romaneio, cotação, frete fornecedores e rastreio.
 6. Providers em `app/fretio/src/fretio/providers` usam Playwright localmente quando precisam acessar portais.
 7. Eventos, erros e jobs são enviados ao servidor em modo best-effort, sempre sanitizados.
 
@@ -56,7 +56,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r installer\requirements.in
 python -m playwright install chromium
-python app\romaneio_app.py
+python app\web_app.py
 ```
 
 Em produção, a versão do app vem de `app/version.txt`.

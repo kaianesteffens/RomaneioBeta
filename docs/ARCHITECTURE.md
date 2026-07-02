@@ -1,10 +1,12 @@
 # Arquitetura do Desktop
 
-O RomaneioBeta desktop é uma aplicação local Windows. A UI é PySide6, e todo acesso aos portais das transportadoras acontece no computador do cliente com Playwright/Chromium.
+O RomaneioBeta desktop é uma aplicação local Windows. A UI é web renderizada em WebView2 via pywebview (HTML/CSS/JS locais em `app/web/*`), e todo acesso aos portais das transportadoras acontece no computador do cliente com Playwright/Chromium.
 
 ## Componentes
 
-- `app/romaneio_app.py`: janela principal PySide6 e navegação entre módulos.
+- `app/web_app.py`: bridge pywebview/WebView2 (classe `Api`), cria a janela e expõe os métodos consumidos pelo front.
+- `app/web/`: front local (`index.html`, `app.js`, `app.css`, `format.js`, `pages/*.js`) com as telas e a navegação.
+- `app/web_presenters.py`: monta os dados apresentados na UI a partir dos módulos locais.
 - `app/company_config.py` e `app/fretio/src/fretio/config_manager.py`: seleção de empresa e leitura de `CONFIG.toml`.
 - `app/cotacao/`: validação, parsing de romaneio, telemetria, sessão e orquestração de cotação.
 - `app/cotacao_transportadoras.py`: compatibilidade e orquestração das transportadoras.
@@ -31,13 +33,13 @@ O servidor não deve receber credenciais e não substitui a automação local.
 
 ## Threads e Playwright
 
-A thread principal do Qt deve ficar restrita a widgets e eventos. Não execute Playwright, download de update, leitura pesada de arquivo ou chamada remota longa na thread principal.
+A thread da UI/bridge (pywebview/WebView2) deve ficar restrita a apresentar dados e responder chamadas do front. Não execute Playwright, download de update, leitura pesada de arquivo ou chamada remota longa bloqueando essa thread.
 
 Padrão atual:
 
 - Coroutines e providers rodam via `app/async_worker.py` (`AsyncWorkerLoop`).
 - Tarefas síncronas longas rodam em worker thread.
-- Callbacks de progresso postam eventos Qt de `app/ui/events.py`.
+- Callbacks de progresso voltam ao front pela bridge `Api` em `app/web_app.py`.
 - Providers implementam `async cleanup()` para fechar page, context, browser, Playwright e processos próprios.
 
 ## Integração com servidor
