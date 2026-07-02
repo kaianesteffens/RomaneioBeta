@@ -4,37 +4,17 @@ O updater fica em `app/updater.py`. Ele descobre versões novas, baixa o ZIP de 
 
 ## Descoberta de versão
 
-Preferencialmente o app consulta:
+A descoberta é feita 100% via GitHub Releases. O app consulta a release mais recente (`releases/latest`) do repositório configurado:
 
 ```toml
 [fretio]
-version_api_url = "https://api.exemplo.com/api/version/latest"
+github_repo = "kaianesteffens/RomaneioBeta"
+github_repo_aliases = ["kaianesteffens/RomaneioBeta-releases"]
 ```
 
-Resposta esperada:
+O updater lê a tag/versão da release mais recente e o asset do ZIP de update anexado a ela. Se a versão da release for maior que a versão local, o app mostra o update.
 
-```json
-{
-  "latest_version": "2.31.0",
-  "download_url": "https://github.com/owner/releases/download/v2.31.0/Fretio-Update-2.31.0.zip",
-  "mandatory": false,
-  "release_notes": "Correções e melhorias."
-}
-```
-
-Se `latest_version` for maior que a versão local, o app mostra o update. Se `mandatory` for `true`, o uso fica bloqueado até atualizar ou fechar o app.
-
-## Fallback GitHub Releases
-
-Se `version_api_url` estiver ausente, indisponível ou retornar resposta inválida, o updater usa:
-
-```toml
-[fretio]
-github_repo = "owner/releases-repo"
-github_repo_aliases = ["owner/releases-repo-antigo"]
-```
-
-O `download_url` do servidor pode continuar apontando para assets publicados no GitHub Releases. O servidor só centraliza a decisão de qual versão está ativa.
+`github_repo_aliases` serve apenas como fallback histórico para builds antigos que ainda apontavam para o repositório legado de releases.
 
 ## Aplicação do update
 
@@ -44,19 +24,6 @@ O pacote de update deve conter:
 - `version.txt` ou `_internal/version.txt`
 
 O updater rejeita ZIP com path traversal, caminho absoluto ou estrutura inválida. Quando existir assinatura, `update_security.py` verifica o asset `.sig`.
-
-## Política de versão mínima
-
-A configuração remota pode retornar:
-
-```json
-{
-  "min_app_version": "2.30.0",
-  "force_update": true
-}
-```
-
-Com `force_update=true`, versões abaixo da mínima são bloqueadas. Com `force_update=false`, o app apenas avisa e permite continuar.
 
 ## Publicação
 

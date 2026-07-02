@@ -1,6 +1,6 @@
 # Arquitetura do Desktop
 
-O RomaneioBeta desktop é uma aplicação local Windows. A UI é web renderizada em WebView2 via pywebview (HTML/CSS/JS locais em `app/web/*`), e todo acesso aos portais das transportadoras acontece no computador do cliente com Playwright/Chromium.
+O RomaneioBeta desktop é uma aplicação local Windows standalone (sem servidor). A UI é web renderizada em WebView2 via pywebview (HTML/CSS/JS locais em `app/web/*`), e todo acesso aos portais das transportadoras acontece no computador do cliente com Playwright/Chromium.
 
 ## Componentes
 
@@ -8,14 +8,11 @@ O RomaneioBeta desktop é uma aplicação local Windows. A UI é web renderizada
 - `app/web/`: front local (`index.html`, `app.js`, `app.css`, `format.js`, `pages/*.js`) com as telas e a navegação.
 - `app/web_presenters.py`: monta os dados apresentados na UI a partir dos módulos locais.
 - `app/company_config.py` e `app/fretio/src/fretio/config_manager.py`: seleção de empresa e leitura de `CONFIG.toml`.
-- `app/cotacao/`: validação, parsing de romaneio, telemetria, sessão e orquestração de cotação.
+- `app/cotacao/`: validação, parsing de romaneio, sessão e orquestração de cotação.
 - `app/cotacao_transportadoras.py`: compatibilidade e orquestração das transportadoras.
 - `app/fretio/src/fretio/providers/`: providers das transportadoras.
 - `app/fretio/src/fretio/browser/`: localização, abertura e cleanup de Chrome/Playwright.
-- `app/license.py`: validação de licença local/remota.
-- `app/remote_config.py`: configuração remota segura por licença.
-- `app/updater.py`: descoberta e aplicação de atualização.
-- `app/error_reporter.py`, `app/usage_reporter.py`, `app/quotation_jobs_client.py`: chamadas best-effort ao servidor.
+- `app/updater.py`: descoberta (via GitHub Releases) e aplicação de atualização.
 
 ## Responsabilidade do desktop
 
@@ -29,7 +26,7 @@ O desktop é dono da operação sensível:
 - Normalizar respostas de providers em `QuoteResponse`.
 - Exibir resultado na UI.
 
-O servidor não deve receber credenciais e não substitui a automação local.
+Toda a operação é local: não há licenciamento, configuração remota nem servidor.
 
 ## Threads e Playwright
 
@@ -42,31 +39,17 @@ Padrão atual:
 - Callbacks de progresso voltam ao front pela bridge `Api` em `app/web_app.py`.
 - Providers implementam `async cleanup()` para fechar page, context, browser, Playwright e processos próprios.
 
-## Integração com servidor
+## Atualização
 
-Endpoints públicos usados pelo desktop:
+A descoberta de versão é feita via GitHub Releases (o updater consulta a release mais recente do `github_repo`). Não há servidor de versão. Detalhes em [UPDATE.md](UPDATE.md).
 
-- `POST /api/licenses/validate`: valida licença.
-- `POST /api/licenses/config`: busca configuração remota segura.
-- `GET /api/version/latest`: descobre última versão ativa.
-- `POST /api/errors`: envia erro sanitizado.
-- `POST /api/usage/events`: envia evento de uso.
-- `POST /api/quotations/normalize`: normalização remota opcional.
-- `POST /api/quotations/jobs`: cria job de cotação para auditoria/status.
-- `GET /api/quotations/jobs/{job_id}`: consulta job da própria licença/máquina.
-- `PATCH /api/quotations/jobs/{job_id}/result`: envia resultado sanitizado.
+## Dados sensíveis em log
 
-Essas chamadas são auxiliares. Falhas de rede não devem travar a cotação local, exceto quando a política de licença/update exigir bloqueio.
-
-## O que não enviar ao servidor
-
-Não enviar:
+Como toda a operação é local, nada é enviado a servidor. Em logs locais, nunca gravar:
 
 - Senhas, logins, cookies, tokens ou headers de sessão.
-- `ADMIN_TOKEN`, `DATABASE_URL`, token GitHub ou secrets de CI.
 - HTML bruto de portais, screenshots, PDFs, XMLs completos ou DANFEs completos.
 - CPF/CNPJ completos de destinatários ou chaves completas de NF-e.
-- Tracebacks sem sanitização.
-- Arquivos `CONFIG.toml`, `license.key` ou caches locais.
+- Tracebacks com dados reais de cliente sem sanitização.
 
-Quando for necessário diagnosticar, enviar apenas contexto mínimo, status, provider, etapa, versão, erro sanitizado e metadados sem credenciais.
+Registrar apenas contexto mínimo: status, provider, etapa, versão e erro sanitizado, sem credenciais.

@@ -8,14 +8,6 @@ from typing import Any
 
 
 _DEFAULT_GITHUB_REPO = "kaianesteffens/RomaneioBeta"
-_DEFAULT_LICENSE_API_URL = "https://fretio.api.br/api/licenses/validate"
-_DEFAULT_LICENSE_CONFIG_API_URL = "https://fretio.api.br/api/licenses/config"
-_DEFAULT_VERSION_API_URL = "https://fretio.api.br/api/version/latest"
-_DEFAULT_LICENSE_URL = "https://gist.githubusercontent.com/kaianesteffens/4a327b33711420ab88f20806e528f906/raw/licenses.json"
-_DEFAULT_ERROR_API_URL = "https://fretio.api.br/api/errors"
-_DEFAULT_USAGE_API_URL = "https://fretio.api.br/api/usage/events"
-_DEFAULT_QUOTATION_JOBS_API_URL = "https://fretio.api.br/api/quotations/jobs"
-_DEFAULT_QUOTATION_NORMALIZATION_API_URL = "https://fretio.api.br/api/quotations/normalize"
 
 TODAS_UFS = [
     "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA",
@@ -221,14 +213,6 @@ def _garantir_defaults_fretio(config: dict[str, Any]) -> bool:
 
     required_defaults = {
         "github_repo": _DEFAULT_GITHUB_REPO,
-        "license_api_url": _DEFAULT_LICENSE_API_URL,
-        "license_config_api_url": _DEFAULT_LICENSE_CONFIG_API_URL,
-        "version_api_url": _DEFAULT_VERSION_API_URL,
-        "license_url": _DEFAULT_LICENSE_URL,
-        "error_api_url": _DEFAULT_ERROR_API_URL,
-        "usage_api_url": _DEFAULT_USAGE_API_URL,
-        "quotation_jobs_api_url": _DEFAULT_QUOTATION_JOBS_API_URL,
-        "quotation_normalization_api_url": _DEFAULT_QUOTATION_NORMALIZATION_API_URL,
     }
     for key, fallback in required_defaults.items():
         current = str(fretio_cfg.get(key, "") or "").strip()
@@ -260,14 +244,6 @@ def _criar_config_empresa_vazia(nome: str) -> None:
             "fator_cubagem": 6000,
             "cache_dir": "cache",
             "github_repo": _DEFAULT_GITHUB_REPO,
-            "license_api_url": _DEFAULT_LICENSE_API_URL,
-            "license_config_api_url": _DEFAULT_LICENSE_CONFIG_API_URL,
-            "version_api_url": _DEFAULT_VERSION_API_URL,
-            "license_url": _DEFAULT_LICENSE_URL,
-            "error_api_url": _DEFAULT_ERROR_API_URL,
-            "usage_api_url": _DEFAULT_USAGE_API_URL,
-            "quotation_jobs_api_url": _DEFAULT_QUOTATION_JOBS_API_URL,
-            "quotation_normalization_api_url": _DEFAULT_QUOTATION_NORMALIZATION_API_URL,
         },
         "romaneio": {"cep_origem": "", "cnpj_pagador_padrao": ""},
         "transportadoras": {

@@ -14,16 +14,13 @@ Mapa operacional do Fretio/RomaneioBeta Desktop para Codex CLI, Claude Code CLI 
 
 ## Visao geral
 
-Aplicativo desktop Windows para:
+Aplicativo desktop Windows standalone (sem servidor) para:
 
 - Romaneio
 - Cotacao de frete
 - Frete de fornecedores
 - Rastreio
-- Licenciamento
-- Configuracao remota
-- Telemetria/logs sanitizados
-- Atualizacao automatica
+- Atualizacao automatica via GitHub Releases
 
 Stack principal:
 
@@ -36,13 +33,12 @@ Stack principal:
 
 ## Repositorios relacionados
 
-- `kaianesteffens/RomaneioBeta`: desktop, UI, automacoes locais, providers, updater e instalador.
-- `kaianesteffens/RomaneioBeta-server`: API FastAPI para licencas, configuracao remota, versoes, logs, eventos, jobs e admin.
-- `kaianesteffens/RomaneioBeta-releases`: repositorio legado de releases; mantido apenas como fallback de leitura do updater para clientes/builds antigos. Novas releases sao publicadas no proprio `kaianesteffens/RomaneioBeta`.
+- `kaianesteffens/RomaneioBeta`: desktop standalone, UI, automacoes locais, providers, updater, instalador e releases.
+- `kaianesteffens/RomaneioBeta-releases`: repositorio legado de releases; mantido apenas como fallback historico de leitura do updater para clientes/builds antigos. Novas releases sao publicadas no proprio `kaianesteffens/RomaneioBeta`.
 
 ## Entradas principais
 
-- `app/web_app.py`: entrada da interface web, janela pywebview/WebView2, bridge `Api`, navegacao, startup, update, licenca, configuracao remota e chamadas para modulos.
+- `app/web_app.py`: entrada da interface web, janela pywebview/WebView2, bridge `Api`, navegacao, startup, update e chamadas para modulos.
 - `python app/web_app.py`: comando de desenvolvimento citado no README (ou `app/dev.bat`).
 - `app/version.txt`: versao usada em producao.
 - `app/CONFIG.example.toml`: exemplo versionado de configuracao. Nao versionar `CONFIG.toml` real.
@@ -53,7 +49,7 @@ Arquivos principais:
 
 - `app/web_app.py`: bridge pywebview/WebView2, expoe a classe `Api` para o front e cria a janela.
 - `app/web_presenters.py`: monta os dados apresentados na UI a partir dos modulos locais.
-- `app/app_bootstrap.py` e `app/startup.py`: startup, licenca, configuracao remota e update antes de abrir a UI.
+- `app/app_bootstrap.py` e `app/startup.py`: startup e update antes de abrir a UI.
 
 Front (HTML/CSS/JS locais renderizados no WebView2):
 
@@ -65,12 +61,12 @@ Front (HTML/CSS/JS locais renderizados no WebView2):
 
 Responsabilidades observadas:
 
-- Controla startup, licenca, configuracao remota e update.
+- Controla startup e update.
 - Dispara cotacao, rastreio, importacao de NF-e e processamento de romaneio via metodos da bridge `Api`.
 
 Regra importante:
 
-- Nao execute Playwright, leitura pesada de arquivo, update ou chamada remota longa bloqueando a thread da UI/bridge.
+- Nao execute Playwright, leitura pesada de arquivo ou update bloqueando a thread da UI/bridge.
 - Use `app/async_worker.py` e workers/threading ja existentes.
 
 ## Configuracao por empresa
@@ -92,22 +88,18 @@ Cuidados:
 - Nao inserir credenciais reais de transportadoras no repositorio.
 - Providers devem ler apenas sua secao em `[transportadoras.<nome>]`.
 
-## Licenca e configuracao remota
+## Configuracao (somente local)
+
+O app e standalone: nao ha licenciamento, configuracao remota nem permissoes/feature flags de servidor. O app abre livre e le apenas configuracao local.
 
 Arquivos principais:
 
-- `app/license.py`: validacao local/remota, chave salva, machine id e status da licenca.
-- `app/remote_config.py`: busca configuracao remota segura por licenca.
-- `app/remote_permissions.py`: permissoes/feature flags vindas do server.
-- `app/version_policy.py`: politica de versao minima e update obrigatorio.
+- `app/remote_permissions.py`: reduzido a normalizacao pura de nomes de transportadora (sem servidor).
 
 Fluxo resumido:
 
-1. Desktop carrega empresa e CONFIG.toml.
-2. Valida licenca usando `license_api_url`.
-3. Busca configuracao remota usando `license_config_api_url`.
-4. Aplica permissoes: cotacao, rastreio, NF-e, romaneio, transportadoras e versao minima.
-5. Usa cache/defaults quando permitido e quando servidor estiver indisponivel.
+1. Desktop carrega empresa e CONFIG.toml local.
+2. Cotacao, rastreio, NF-e e romaneio rodam localmente sem checagem de permissao remota.
 
 ## Atualizacao
 
@@ -122,11 +114,10 @@ Arquivos principais:
 
 Fluxo:
 
-1. Consulta primeiro `version_api_url` no server.
-2. Se indisponivel, pode usar GitHub Releases via `github_repo` e aliases.
-3. Baixa ZIP de update.
-4. Valida estrutura do ZIP.
-5. Aplica update e reinicia quando necessario.
+1. Descobre a versao mais recente via GitHub Releases (`release/latest` do `github_repo`, com `github_repo_aliases` como fallback historico).
+2. Baixa ZIP de update.
+3. Valida estrutura e assinatura do ZIP.
+4. Aplica update e reinicia quando necessario.
 
 Cuidados:
 
@@ -149,21 +140,19 @@ Modulo dividido:
 - `app/cotacao/romaneio_parser.py`: extracao de dados do romaneio colado/processado.
 - `app/cotacao/session_manager.py`: sessoes/providers reaproveitaveis.
 - `app/cotacao/orchestrator.py`: prepara dados, valida e executa providers.
-- `app/cotacao/telemetry.py`: eventos de uso.
-- `app/cotacao/jobs_client.py`: jobs de cotacao no server.
 - `app/cotacao/error_context.py`: contexto de erro por provider.
 
 Fluxo de cotacao:
 
 1. UI chama `cotar_transportadoras(...)` ou `cotar_transportadoras_romaneio_colado(...)` pela fachada.
-2. Fachada carrega config, cria job best-effort e normalizacao shadow quando aplicavel.
+2. Fachada carrega config local.
 3. Parser monta dados: CEP origem/destino, UF, CNPJ destinatario, peso, valor, volumes e cubagens.
 4. `app/cotacao/orchestrator.py` valida dados obrigatorios.
 5. `ProviderFactory` instancia providers configurados e habilitados.
 6. Providers executam Playwright localmente.
 7. Resultados voltam como `ResultadoCotacao`/`QuoteResponse`.
 8. UI exibe resultados.
-9. Uso, erros e job result sao enviados ao server em modo best-effort.
+9. Erros ficam apenas em log local; nao ha envio ao servidor.
 
 Bloqueios comuns antes de cotar:
 
@@ -287,54 +276,14 @@ Fluxos provaveis:
 - NF-e/XML/DANFE -> `extrator_nfe.py` -> dados resumidos -> UI/cotacao.
 - Rastreio -> `rastreamento.py` -> resultados na UI -> evento de uso.
 
-## Server/API usada pelo desktop
+## Erros e logs (somente local)
 
-Repositorio relacionado:
-
-- `kaianesteffens/RomaneioBeta-server`
-
-Endpoints publicos usados pelo desktop:
-
-- `POST /api/licenses/validate`
-- `POST /api/licenses/config`
-- `GET /api/version/latest`
-- `POST /api/errors`
-- `POST /api/usage/events`
-- `POST /api/quotations/normalize`
-- `POST /api/quotations/jobs`
-- `GET /api/quotations/jobs/{job_id}`
-- `PATCH /api/quotations/jobs/{job_id}/result`
-
-Responsabilidade do server:
-
-- Validar licenca.
-- Entregar config remota segura.
-- Publicar versao atual.
-- Receber erros sanitizados.
-- Receber eventos de uso.
-- Registrar jobs de cotacao.
-- Normalizar payloads em modo auxiliar.
-- Servir painel admin.
-
-O server nao deve:
-
-- Rodar Playwright.
-- Fazer login em transportadoras.
-- Ler PDF/XML/DANFE.
-- Armazenar senha de transportadora.
-
-## Telemetria, erros e jobs
-
-Arquivos desktop:
-
-- `app/error_reporter.py`: erros sanitizados.
-- `app/usage_reporter.py`: eventos de uso.
-- `app/quotation_jobs_client.py`: cliente de jobs.
-- `app/quotation_normalization_client.py`: normalizacao remota shadow/opcional.
+O app nao fala com servidor. Nao ha telemetria de uso, envio de erros, jobs de cotacao nem normalizacao remota.
 
 Regra:
 
-- Essas chamadas sao best-effort e nao devem travar cotacao local, salvo politica explicita de licenca/update.
+- Erros ficam apenas em log local.
+- Nunca gravar em log senha, login, cookie, token, CPF/CNPJ completo ou dados reais de cliente.
 
 ## Build, release e instalador
 
@@ -385,10 +334,9 @@ Cuidados:
 ## Documentacao existente
 
 - `README.md`: visao geral, stack, fluxo principal e desenvolvimento.
-- `docs/ARCHITECTURE.md`: arquitetura local, threads, Playwright e integracao com server.
+- `docs/ARCHITECTURE.md`: arquitetura local, threads e Playwright.
 - `docs/PROVIDERS.md`: contrato e criacao de providers.
-- `docs/LICENSING.md`: licenca, config remota e dados permitidos.
-- `docs/UPDATE.md`: descoberta de versao e update.
+- `docs/UPDATE.md`: descoberta de versao via GitHub Releases e update.
 - `docs/RELEASE.md`: checklist de release.
 - `CHANGELOG.md`: historico de mudancas.
 
@@ -398,9 +346,7 @@ Cuidados:
 - Erro de cotacao geral: comece por `app/cotacao_transportadoras.py`, `app/cotacao/orchestrator.py` e `app/cotacao/romaneio_parser.py`.
 - Erro em transportadora especifica: comece por `app/fretio/src/fretio/providers/<transportadora>.py` e `factory.py`.
 - Erro de credenciais/config: comece por `app/company_config.py`, `app/CONFIG.example.toml`, `factory.py` e validacao do provider.
-- Erro de licenca: comece por `app/license.py`, `app/remote_config.py`, `app/remote_permissions.py` e server `app/routers/licenses.py`.
 - Erro de update: comece por `app/updater.py`, `app/version.txt`, `docs/UPDATE.md` e `installer/`.
-- Erro de logs/telemetria/jobs: comece por `app/error_reporter.py`, `app/usage_reporter.py`, `app/quotation_jobs_client.py` e server correspondente.
 - Erro de build: comece por `installer/`, `.github/workflows/`, `requirements` e specs.
 
 ## Checklist antes de pedir ao agente para programar

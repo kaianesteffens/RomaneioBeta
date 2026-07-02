@@ -111,14 +111,6 @@ def _migrate_appdata_fretebot_to_fretio() -> None:
             src_fb = src_data.get("fretio", {}) if isinstance(src_data.get("fretio", {}), dict) else {}
             for key in (
                 "github_repo",
-                "license_api_url",
-                "license_config_api_url",
-                "version_api_url",
-                "license_url",
-                "error_api_url",
-                "usage_api_url",
-                "quotation_jobs_api_url",
-                "quotation_normalization_api_url",
             ):
                 src_val = str(src_fb.get(key, "") or "").strip()
                 dst_val = str(dst_fb.get(key, "") or "").strip()

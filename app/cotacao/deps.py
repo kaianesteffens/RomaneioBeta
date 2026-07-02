@@ -25,20 +25,12 @@ except Exception:
     def report_error_payload(*a, **kw):
         pass
 
-try:
-    from remote_config import apply_safe_runtime_overrides
-except Exception:
-    def apply_safe_runtime_overrides(config):
-        return dict(config) if isinstance(config, dict) else {}
+from remote_permissions import carrier_enabled_or_message, normalize_carrier_name
 
-try:
-    from remote_permissions import carrier_enabled_or_message, normalize_carrier_name
-except Exception:
-    def carrier_enabled_or_message(carrier):
-        return True, ""
 
-    def normalize_carrier_name(carrier):
-        return str(carrier or "").strip().lower()
+def apply_safe_runtime_overrides(config):
+    # Sem servidor de configuração remota: usa a config local como está.
+    return dict(config) if isinstance(config, dict) else {}
 
 
 __all__ = [

@@ -1,8 +1,8 @@
 # Fretio / RomaneioBeta Desktop
 
-Aplicativo desktop Windows para operação de romaneios, cotação de frete e rastreio. A interface local é feita em pywebview/WebView2 (UI web) e as automações dos portais das transportadoras rodam no próprio desktop com Playwright/Chromium.
+Aplicativo desktop Windows standalone para operação de romaneios, cotação de frete e rastreio. A interface local é feita em pywebview/WebView2 (UI web) e as automações dos portais das transportadoras rodam no próprio desktop com Playwright/Chromium.
 
-O servidor é usado como API central para licença, configuração remota, telemetria, logs sanitizados, jobs de cotação e descoberta de versão. Ele não recebe credenciais de transportadoras e não executa Playwright.
+O app abre livre: não há servidor, licenciamento, configuração remota nem telemetria. A configuração é sempre local e a descoberta de versão/update é feita via GitHub Releases.
 
 ## Stack
 
@@ -16,27 +16,19 @@ O servidor é usado como API central para licença, configuração remota, telem
 
 1. O usuário abre o app e seleciona a empresa.
 2. O app carrega `%APPDATA%\Fretio\empresas\<empresa>\CONFIG.toml`.
-3. A licença é validada em `license_api_url`.
-4. A configuração remota segura é buscada no servidor.
-5. A UI web (pywebview/WebView2) dispara módulos locais: romaneio, cotação, frete fornecedores e rastreio.
-6. Providers em `app/fretio/src/fretio/providers` usam Playwright localmente quando precisam acessar portais.
-7. Eventos, erros e jobs são enviados ao servidor em modo best-effort, sempre sanitizados.
+3. A UI web (pywebview/WebView2) dispara módulos locais: romaneio, cotação, frete fornecedores e rastreio.
+4. Providers em `app/fretio/src/fretio/providers` usam Playwright localmente quando precisam acessar portais.
+5. Erros ficam apenas em log local; nada é enviado a servidor.
 
 ## Configuração
 
-Use [app/CONFIG.example.toml](app/CONFIG.example.toml) como referência. Não versionar `CONFIG.toml`, chaves de licença, senhas ou arquivos de cache.
+Use [app/CONFIG.example.toml](app/CONFIG.example.toml) como referência. Não versionar `CONFIG.toml`, senhas ou arquivos de cache.
 
 Exemplo mínimo, com valores fictícios:
 
 ```toml
 [fretio]
-version_api_url = "https://api.exemplo.com/api/version/latest"
-license_api_url = "https://api.exemplo.com/api/licenses/validate"
-license_config_api_url = "https://api.exemplo.com/api/licenses/config"
-error_api_url = "https://api.exemplo.com/api/errors"
-usage_api_url = "https://api.exemplo.com/api/usage/events"
-quotation_jobs_api_url = "https://api.exemplo.com/api/quotations/jobs"
-quotation_normalization_api_url = "https://api.exemplo.com/api/quotations/normalize"
+github_repo = "kaianesteffens/RomaneioBeta"
 
 [romaneio]
 cep_origem = "01001000"
@@ -70,17 +62,16 @@ cd installer
 build.bat
 ```
 
-O fluxo de update consulta primeiro `version_api_url`. Se o servidor estiver indisponível, o updater usa GitHub Releases via `github_repo` e `github_repo_aliases`.
+O fluxo de update descobre a versão mais recente via GitHub Releases (`releases/latest` do `github_repo`, com `github_repo_aliases` como fallback histórico para builds antigos).
 
 ## Documentação
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): arquitetura local, threads, Playwright e integração com servidor.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): arquitetura local, threads e Playwright.
 - [docs/PROVIDERS.md](docs/PROVIDERS.md): como providers funcionam e como criar uma nova transportadora.
-- [docs/LICENSING.md](docs/LICENSING.md): `license_api_url`, configuração remota e dados permitidos.
-- [docs/UPDATE.md](docs/UPDATE.md): descoberta de versão, update obrigatório e fallback GitHub.
+- [docs/UPDATE.md](docs/UPDATE.md): descoberta de versão via GitHub Releases e aplicação do update.
 - [docs/RELEASE.md](docs/RELEASE.md): checklist de release segura e rollback.
 - [CHANGELOG.md](CHANGELOG.md): mudanças por versão.
 
 ## Regra de segurança
 
-O desktop nunca deve enviar ao servidor senhas de transportadoras, cookies, HTML bruto, screenshots, XML completo, DANFE/PDF completo, CPF/CNPJ completos de clientes finais, token GitHub, `ADMIN_TOKEN`, `DATABASE_URL` ou tracebacks sem sanitização.
+Como o app é standalone, nada é enviado a servidor. Em logs locais, nunca gravar senhas de transportadoras, cookies, HTML bruto, screenshots, XML completo, DANFE/PDF completo, CPF/CNPJ completos de clientes finais, token GitHub ou tracebacks com dados reais sem sanitização.

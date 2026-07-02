@@ -12,8 +12,9 @@ Principais tecnologias:
 - Automacao de portais com Playwright + Chromium no computador do cliente.
 - Leitura de PDFs com pdfplumber e leitura de XML/DANFE de NF-e.
 - Build Windows com PyInstaller e Inno Setup.
-- Releases e assets pelo GitHub Actions.
-- Integracao com `RomaneioBeta-server` para licenca, configuracao remota, versao, logs sanitizados, eventos de uso e jobs de cotacao.
+- Releases e assets pelo GitHub Actions, publicados no proprio repositorio.
+
+O app e standalone: nao ha servidor, licenciamento, configuracao remota, telemetria nem jobs de cotacao. Versao/update vem de GitHub Releases.
 
 ## Politica de plataformas
 
@@ -23,7 +24,7 @@ Principais tecnologias:
 - Linux nao deve virar alvo oficial de produto, instalador de cliente ou release publica sem pedido explicito do Eduardo.
 - Mudancas para Linux devem ser isoladas, opt-in e nunca devem alterar o comportamento padrao do Windows.
 - O modo Linux interno pode ajustar somente itens de ambiente local: caminhos, logs, venv, dependencias do Playwright/Chromium, abertura de navegador visivel e comandos de execucao local.
-- O modo Linux interno nao pode alterar regra de negocio, contrato de provider, calculo de cotacao, licenciamento, updater, API do servidor, workflow de release Windows ou comportamento esperado pelo cliente.
+- O modo Linux interno nao pode alterar regra de negocio, contrato de provider, calculo de cotacao, updater, workflow de release Windows ou comportamento esperado pelo cliente.
 - Se uma tarefa mencionar Linux sem dizer o contrario, interprete como `Linux dev/test interno`, nao como distribuicao oficial para clientes.
 - Para trabalhos de compatibilidade Linux, documente claramente o que foi feito para Linux e confirme que Windows continua sendo o alvo oficial.
 
@@ -71,9 +72,8 @@ Não adicionar comentários que apenas descrevem o que o código já faz.
 
 ## Responsabilidades entre repositorios
 
-- `RomaneioBeta`: aplicativo desktop, UI, automacoes locais, providers, updater e build Windows.
-- `RomaneioBeta-server`: API FastAPI, licencas, configuracao remota, versoes, logs, eventos, jobs e painel admin.
-- `RomaneioBeta-releases`: repositorio legado de releases; fallback de leitura do updater para builds antigos. Novas releases vao para o proprio `RomaneioBeta`.
+- `RomaneioBeta`: aplicativo desktop standalone, UI, automacoes locais, providers, updater, build Windows e releases. Nao depende de servidor.
+- `RomaneioBeta-releases`: repositorio legado de releases; fallback historico de leitura do updater para builds antigos. Novas releases vao para o proprio `RomaneioBeta`.
 
 ## Verificacao
 
