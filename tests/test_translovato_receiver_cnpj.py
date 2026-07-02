@@ -1,0 +1,176 @@
+import asyncio
+import importlib.util
+import sys
+from pathlib import Path
+from types import ModuleType
+
+
+def _install_playwright_test_stub():
+    if "playwright.async_api" in sys.modules:
+        return
+    try:
+        if importlib.util.find_spec("playwright.async_api") is not None:
+            return
+    except (ImportError, ModuleNotFoundError, ValueError):
+        pass
+    playwright_module = ModuleType("playwright")
+    playwright_module.__path__ = []
+    async_api_module = ModuleType("playwright.async_api")
+
+    class PlaywrightTimeoutError(TimeoutError):
+        pass
+
+    class _AsyncPlaywrightStub:
+        async def start(self):
+            return self
+
+        async def stop(self):
+            return None
+
+    def async_playwright():
+        return _AsyncPlaywrightStub()
+
+    class Page:
+        pass
+
+    class Frame:
+        pass
+
+    async_api_module.TimeoutError = PlaywrightTimeoutError
+    async_api_module.Page = Page
+    async_api_module.Frame = Frame
+    async_api_module.async_playwright = async_playwright
+    playwright_module.async_api = async_api_module
+    sys.modules.setdefault("playwright", playwright_module)
+    sys.modules["playwright.async_api"] = async_api_module
+
+
+_install_playwright_test_stub()
+
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT / "app" / "fretio" / "src"))
+
+from fretio.providers.translovato import TranslovatoProvider
+
+
+EXPECTED = "03770000000175"
+WRONG = "03770000000101"
+
+
+class FakeReceiverLocator:
+    def __init__(self, page):
+        self.page = page
+        self.actions = []
+
+    @property
+    def first(self):
+        return self
+
+    async def wait_for(self, **kwargs):
+        self.actions.append(("wait_for", kwargs))
+
+    async def fill(self, value):
+        self.actions.append(("fill", value))
+        self.page.receiver_value = value
+        if value == "":
+            self.page.after_clear = True
+
+    async def dispatch_event(self, event):
+        self.actions.append(("event", event))
+        if event == "blur" and self.page.receiver_value == EXPECTED:
+            if self.page.always_wrong or not self.page.after_clear:
+                self.page.receiver_value = WRONG
+
+    async def press(self, key):
+        self.actions.append(("press", key))
+
+    async def input_value(self, timeout=1500):
+        return self.page.receiver_value
+
+
+class FakeLocatorCollection:
+    def __init__(self, locator):
+        self._locator = locator
+
+    @property
+    def first(self):
+        return self._locator
+
+
+class FakePage:
+    def __init__(self, *, always_wrong=False):
+        self.receiver_value = ""
+        self.after_clear = False
+        self.always_wrong = always_wrong
+        self.receiver_locator = FakeReceiverLocator(self)
+        self.waits = []
+        self.evaluations = []
+
+    def locator(self, selector):
+        assert selector == TranslovatoProvider.RECEIVER_CNPJ_SELECTOR
+        return FakeLocatorCollection(self.receiver_locator)
+
+    async def wait_for_timeout(self, ms):
+        self.waits.append(ms)
+
+    async def evaluate(self, script, *args):
+        self.evaluations.append((script, args))
+        return False
+
+
+async def _empty_city_uf():
+    return "", "", ""
+
+
+async def _empty_zip():
+    return ""
+
+
+def _provider(page):
+    provider = TranslovatoProvider(cnpj="12345678000190", usuario="usuario", senha="senha")
+    provider._page = page
+    provider._read_delivery_city_uf = _empty_city_uf
+    provider._read_delivery_zip_digits = _empty_zip
+    return provider
+
+
+def test_translovato_rewrites_receiver_cnpj_after_blur_divergence():
+    async def run():
+        page = FakePage(always_wrong=False)
+        provider = _provider(page)
+
+        await provider._preencher_cnpj_destinatario(EXPECTED)
+
+        assert page.receiver_value == EXPECTED
+        assert ("fill", "") in page.receiver_locator.actions
+        assert page.receiver_locator.actions.count(("event", "input")) >= 2
+        assert page.receiver_locator.actions.count(("event", "change")) >= 2
+        assert page.receiver_locator.actions.count(("event", "blur")) >= 2
+        assert page.receiver_locator.actions[-1] == ("press", "Tab")
+        assert provider._last_receiver_diagnostic["expected_masked"] == "0377***75"
+        assert provider._last_receiver_diagnostic["found_masked"] == "0377***01"
+
+    asyncio.run(run())
+
+
+def test_translovato_blocks_quote_when_fallback_keeps_divergent_cnpj():
+    async def run():
+        page = FakePage(always_wrong=True)
+        provider = _provider(page)
+
+        try:
+            await provider._preencher_cnpj_destinatario(EXPECTED)
+        except ValueError as exc:
+            message = str(exc)
+        else:
+            raise AssertionError("CNPJ divergente deveria bloquear a cotação")
+
+        assert "portal alterou o CNPJ destinatário após blur" in message
+        assert "cotação bloqueada" in message
+        assert "0377***75" in message
+        assert "0377***01" in message
+        assert EXPECTED not in message
+        assert WRONG not in message
+        assert page.receiver_value == WRONG
+
+    asyncio.run(run())

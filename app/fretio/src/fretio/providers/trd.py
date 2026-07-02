@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from playwright.async_api import Frame
 from fretio.providers.base import ProviderBase
 from fretio.providers.provider_utils import _digits, _fmt_peso, get_stealth_script
+from fretio.providers.trd_browser import TRDBrowserMixin
+from fretio.providers.trd_diagnostics import TRDDiagnosticsMixin
 from fretio.models import Cotacao
 from fretio.quotation_contract import QuoteRequest, QuoteResponse
 from fretio.logging_conf import get_logger
@@ -21,7 +23,7 @@ from fretio.logging_conf import get_logger
 logger = get_logger(__name__)
 
 
-class TRDProvider(ProviderBase):
+class TRDProvider(TRDBrowserMixin, TRDDiagnosticsMixin, ProviderBase):
     """Provider TRD Transportes usando Playwright."""
     
     LOGIN_URL = "https://platform.senior.com.br/login/?redirectTo=https%3A%2F%2Fplatform.senior.com.br%2Fsenior-x%2F&tenant=trdtransportes.com"
@@ -188,70 +190,6 @@ class TRDProvider(ProviderBase):
             if len(self._digits(value_now)) >= min_digits:
                 return True
         return False
-
-    async def _init_browser(self):
-        """Inicializa browser Playwright."""
-        if self._browser:
-            if self._browser.is_connected():
-                return
-            logger.warning(f"[{self.nome}] Browser desconectado, reinicializando...")
-            await self.cleanup()
-        
-        from fretio.providers.base import launch_browser_resilient
-        self._browser = await launch_browser_resilient(
-            headless=self.headless,
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
-                '--enable-features=NetworkService,NetworkServiceInProcess',
-                '--disable-features=IsolateOrigins,site-per-process,TranslateUI',
-            ],
-        )
-        self._context = await self._browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
-            user_agent=(
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/133.0.0.0 Safari/537.36'
-            ),
-        )
-        self._page = await self._context.new_page()
-        self._login_frame = None
-        await self._page.add_init_script(self._STEALTH_JS)
-
-    @staticmethod
-    def _is_logged_in_url(url: Optional[str]) -> bool:
-        current_url = str(url or "").lower()
-        if not current_url or "platform.senior.com.br" not in current_url:
-            return False
-        if "/login" in current_url:
-            return False
-        return any(token in current_url for token in ("senior-x/#/", "/senior-x/", "documentos-frontend/#/"))
-
-    @staticmethod
-    def _is_transient_sso_url(url: Optional[str]) -> bool:
-        current_url = str(url or "").lower()
-        if not current_url:
-            return False
-        return any(
-            token in current_url
-            for token in (
-                "login-actions/authenticate",
-                "login-actions/required-action",
-                "sso.senior.com.br/realms/senior-x",
-                "platform.senior.com.br/login",
-            )
-        )
-
-    async def _recreate_page(self) -> None:
-        self._login_frame = None
-        try:
-            if self._page and not self._page.is_closed():
-                await self._page.close()
-        except Exception:
-            pass
-        self._page = await self._context.new_page()
-        await self._page.add_init_script(self._STEALTH_JS)
 
     async def _coletar_feedback_login(self, login_context) -> str | None:
         selectors = (
@@ -477,41 +415,6 @@ class TRDProvider(ProviderBase):
         if not ok:
             raise RuntimeError(self.last_error or "Falha no login TRD")
         return True
-
-    async def _goto_cotacao_tratavel(self) -> None:
-        try:
-            await self._page.goto(
-                self.COTACAO_URL,
-                wait_until='domcontentloaded',
-                timeout=self.COTACAO_GOTO_TIMEOUT_MS,
-            )
-        except PlaywrightTimeoutError as exc:
-            raise RuntimeError(
-                "TRD: timeout de navegação ao abrir cotação Senior; provável instabilidade do portal/rede"
-            ) from exc
-
-    async def cleanup(self):
-        """Fecha o browser."""
-        try:
-            if self._page and not self._page.is_closed():
-                await self._page.close()
-        except Exception:
-            pass
-        try:
-            if self._context:
-                await self._context.close()
-        except Exception:
-            pass
-        try:
-            if self._browser:
-                await self._browser.close()
-        except Exception:
-            pass
-        self._browser = None
-        self._context = None
-        self._page = None
-        self._login_frame = None
-        self._logged_in = False
 
     @staticmethod
     def _normalizar_cubagens_cm(cubagens: Optional[list[dict]]) -> list[dict]:
@@ -1295,86 +1198,6 @@ class TRDProvider(ProviderBase):
             pass
 
         return False
-
-    def _safe_diagnostic_excerpt(self, value: Any, *, limit: int = 1500) -> str:
-        """Excerpt textual sanitizado: remove tags, mascara CNPJ/CPF/CEP e corta."""
-        text = str(value or "")
-        text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)
-        # reaproveita o mascaramento de documento do ProviderBase (trata separadores)
-        text = self._sanitize_quote_details(text) or ""
-        text = re.sub(r"\b\d{14}\b", "***", text)
-        text = re.sub(r"\b\d{11}\b", "***", text)
-        text = re.sub(r"\b\d{5}-?\d{3}\b", "***", text)
-        text = re.sub(r"\s+", " ", text).strip()
-        if len(text) > limit:
-            return text[:limit].rstrip() + "..."
-        return text
-
-    def _sanitize_extra_value(self, value: Any) -> Any:
-        """Sanitiza recursivamente, preservando estrutura de dict/list; strings viram excerpt mascarado."""
-        if isinstance(value, (int, float, bool)) or value is None:
-            return value
-        if isinstance(value, dict):
-            return {str(k): self._sanitize_extra_value(v) for k, v in value.items()}
-        if isinstance(value, (list, tuple)):
-            return [self._sanitize_extra_value(v) for v in value]
-        return self._safe_diagnostic_excerpt(value)
-
-    async def _capturar_diagnostico_etapa2(
-        self,
-        motivo: str,
-        extra_data: Optional[dict[str, Any]] = None,
-    ) -> dict[str, str]:
-        """Grava um excerpt textual sanitizado para diagnosticar falhas na etapa 2.
-
-        Gated por FRETIO_DEBUG_DUMP: sem a env var, nada é gravado em disco. Mesmo
-        ativo, não persiste screenshot/HTML/payloads de rede crus — só um resumo
-        textual com CNPJ/CPF/CEP mascarados e tamanho reduzido.
-        """
-        paths: dict[str, str] = {}
-        if not self._page:
-            return paths
-        if not os.environ.get("FRETIO_DEBUG_DUMP"):
-            return paths
-
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        base_dir = Path(tempfile.gettempdir()) / "fretio_trd_debug"
-        try:
-            base_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            return paths
-
-        json_path = base_dir / f"{ts}_{motivo}.json"
-
-        try:
-            alerts = await self._coletar_alertas_ui()
-        except Exception:
-            alerts = []
-        alerts_safe = [self._safe_diagnostic_excerpt(a, limit=300) for a in alerts]
-
-        extra_safe = {
-            str(key): self._sanitize_extra_value(value)
-            for key, value in (extra_data or {}).items()
-        }
-
-        try:
-            payload = {
-                "motivo": motivo,
-                "url": self._safe_diagnostic_excerpt(self._page.url, limit=240),
-                "timestamp": ts,
-                "alerts": alerts_safe,
-                "extra": extra_safe,
-            }
-            json_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            paths["json"] = str(json_path)
-        except Exception:
-            pass
-
-        paths["dir"] = str(base_dir)
-        return paths
 
     async def _aguardar_cep_cidade_entrega(self, *, tentativas: int = 16, intervalo_ms: int = 300) -> tuple[bool, bool, str, str]:
         """Poll do auto-complete Angular do CEP/cidade-UF de entrega.

@@ -782,7 +782,7 @@ def test_rodonaves_cleanup_uses_active_user_data_dir_and_own_process_only(monkey
     class Proc:
         pid = 999
 
-    monkeypatch.setattr("fretio.providers.rodonaves._kill_proc", lambda proc: calls.append(("proc", proc.pid if proc else None)))
+    monkeypatch.setattr("fretio.providers.rodonaves_browser._kill_proc", lambda proc: calls.append(("proc", proc.pid if proc else None)))
     monkeypatch.setattr(RodonavesProvider, "_fix_preferences", staticmethod(lambda path: calls.append(("prefs", path))))
 
     provider._page = Page()

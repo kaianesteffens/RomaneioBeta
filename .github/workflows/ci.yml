@@ -44,7 +44,7 @@ jobs:
           fi
 
       - name: Compile Python sources
-        run: python -m compileall -q app test_*.py
+        run: python -m compileall -q app tests
 
       - name: Run safe unit tests
         run: >-
