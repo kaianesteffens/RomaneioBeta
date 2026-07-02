@@ -439,6 +439,8 @@ class AGEXProvider(ProviderBase):
         text = str(value or "")
         text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)
         text = re.sub(r"(?is)<[^>]+>", " ", text)
+        text = re.sub(r"(?<!\d)\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}(?!\d)", "***", text)
+        text = re.sub(r"(?<!\d)\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?!\d)", "***", text)
         text = re.sub(r"\b\d{14}\b", "***", text)
         text = re.sub(r"\b\d{11}\b", "***", text)
         text = re.sub(r"\b\d{5}-?\d{3}\b", "***", text)
