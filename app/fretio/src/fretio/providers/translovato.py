@@ -970,7 +970,9 @@ class TranslovatoProvider(ProviderBase):
         self._passo_atual = "extraindo_resultado"
         text, valor, prazo = await self._wait_for_quote_result(timeout_ms=30000)
         if valor is None or prazo is None:
-            self.last_error = "Portal respondeu sem valor ou prazo de cotação"
+            # Frase alinhada a _SEM_COTACAO_PATTERNS (base.py) para classificar como
+            # sem_cotacao, não erro técnico: portal simplesmente não devolveu cotação.
+            self.last_error = "Portal respondeu sem cotação (sem valor ou prazo)"
             logger.warning("[TRANSLOVATO] %s", self.last_error)
             return None
         detalhes = detalhes_extra or None

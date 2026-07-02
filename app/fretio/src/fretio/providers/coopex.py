@@ -4,6 +4,7 @@ from typing import Optional
 import re
 from playwright.async_api import async_playwright, Page, TimeoutError as PlaywrightTimeoutError
 from fretio.providers.base import ProviderBase
+from fretio.providers.provider_utils import _sanitize_ssw_xml_excerpt
 from fretio.models import Cotacao
 from fretio.quotation_contract import QuoteRequest, QuoteResponse
 from fretio.logging_conf import get_logger
@@ -623,10 +624,13 @@ class CoopexProvider(ProviderBase):
                 logger.debug(f"[{self.nome}] Fallback texto completo falhou: {e}")
 
         if not vlr_frete_str or vlr_frete_str == '0,00':
-            # Log de diagnóstico: XMLs capturados para análise futura (uma única vez)
+            # Log de diagnóstico: XMLs capturados para análise futura (sanitizado)
             if xml_responses:
                 for idx, xml in enumerate(xml_responses):
-                    logger.warning(f"[{self.nome}] XML #{idx+1} capturado ({len(xml)} chars): {xml[:500]}")
+                    logger.warning(
+                        f"[{self.nome}] XML #{idx+1} capturado ({len(xml)} chars): "
+                        f"{_sanitize_ssw_xml_excerpt(xml)}"
+                    )
             if prazo_str:
                 self.last_error = (
                     f"Rota não atendida: sem valor de frete retornado (prazo={prazo_str!r} encontrado — "
