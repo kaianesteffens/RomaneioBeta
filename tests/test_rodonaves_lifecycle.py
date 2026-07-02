@@ -478,8 +478,8 @@ def test_rodonaves_show_window_brings_to_front_for_captcha(monkeypatch):
         provider._page = Page()
         provider._context = Context()
         provider._sync_active_page = noop
-        monkeypatch.setattr("fretio.providers.rodonaves.ocultar_taskbar_por_pagina", noop)
-        monkeypatch.setattr("fretio.providers.rodonaves.posicionar_janela_por_pagina", fake_position)
+        monkeypatch.setattr("fretio.providers.rodonaves_browser.ocultar_taskbar_por_pagina", noop)
+        monkeypatch.setattr("fretio.providers.rodonaves_browser.posicionar_janela_por_pagina", fake_position)
 
         shown = await provider._mostrar_janela()
 

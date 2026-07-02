@@ -25,6 +25,10 @@ hiddenimports = [
     "fretio.providers.base",
     "fretio.providers.factory",
     "fretio.providers.provider_utils",
+    "fretio.providers.rodonaves_browser",
+    "fretio.providers.rodonaves_diagnostics",
+    "fretio.providers.trd_browser",
+    "fretio.providers.trd_diagnostics",
     # Fretio core
     "fretio.models",
     "fretio.logging_conf",

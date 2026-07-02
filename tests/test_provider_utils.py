@@ -185,8 +185,8 @@ def test_rodonaves_window_fallback_uses_pid(monkeypatch):
 
     provider._chrome_proc = _Proc()
 
-    monkeypatch.setattr("fretio.providers.rodonaves.posicionar_janela_por_pagina", fake_by_page)
-    monkeypatch.setattr("fretio.providers.rodonaves.posicionar_janela_por_pid", fake_by_pid)
+    monkeypatch.setattr("fretio.providers.rodonaves_browser.posicionar_janela_por_pagina", fake_by_page)
+    monkeypatch.setattr("fretio.providers.rodonaves_browser.posicionar_janela_por_pid", fake_by_pid)
 
     ok = asyncio.run(
         provider._reposicionar_janela_win32(
