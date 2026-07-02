@@ -29,23 +29,6 @@ except Exception:
     def report_error_payload(*a, **kw): pass
 
 try:
-    from usage_reporter import (
-        report_carrier_quotation_result,
-        report_quotation_finished,
-        report_quotation_started,
-    )
-except Exception:
-    def report_carrier_quotation_result(*a, **kw): return {"sent": False}
-    def report_quotation_finished(*a, **kw): return {"sent": False}
-    def report_quotation_started(*a, **kw): return {"sent": False}
-
-try:
-    from quotation_jobs_client import create_quotation_job, update_quotation_job_result
-except Exception:
-    def create_quotation_job(*a, **kw): return {"created": False, "job_id": None}
-    def update_quotation_job_result(*a, **kw): return {"updated": False}
-
-try:
     from remote_config import apply_safe_runtime_overrides
 except Exception:
     def apply_safe_runtime_overrides(config):
@@ -392,7 +375,6 @@ __all__ = [
     "apply_safe_runtime_overrides",
     "carrier_enabled_or_message",
     "carrier_login_indicator_from_progress_payload",
-    "create_quotation_job",
     "get_logger",
     "normalize_carrier_name",
     "normalize_provider_progress_message",
@@ -400,12 +382,8 @@ __all__ = [
     "provider_progress_from_resultado",
     "quote_request_from_legacy_kwargs",
     "quote_response_to_resultado_cotacao",
-    "report_carrier_quotation_result",
     "report_error",
     "report_error_message",
     "report_error_payload",
-    "report_quotation_finished",
-    "report_quotation_started",
     "setup_logging",
-    "update_quotation_job_result",
 ]

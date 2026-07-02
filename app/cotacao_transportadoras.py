@@ -15,7 +15,6 @@ import time
 from cotacao.common import *
 from cotacao.validation import *
 from cotacao.telemetry import *
-from cotacao.jobs_client import *
 from cotacao.config import *
 from cotacao.romaneio_parser import *
 from cotacao.session_manager import *
@@ -23,36 +22,6 @@ from cotacao.error_context import *
 from cotacao import deps
 from cotacao import session_manager as _session_mod
 from cotacao import orchestrator as _orchestrator_mod
-
-
-def _run_shadow_normalization_compat(
-    source_type: str,
-    config: dict,
-    dados: dict,
-    *,
-    cep_origem: str = "",
-    modo: str = "",
-    log_func=None,
-) -> None:
-    try:
-        payload = {
-            "modo": str(modo or ""),
-            "cep_origem": _cep(cep_origem),
-            "destino_cep": dados.get("destino_cep") if isinstance(dados, dict) else None,
-            "uf_destino": dados.get("uf_destino") if isinstance(dados, dict) else None,
-            "volumes": dados.get("volumes") if isinstance(dados, dict) else None,
-            "peso": dados.get("peso") if isinstance(dados, dict) else None,
-            "valor": dados.get("valor") if isinstance(dados, dict) else None,
-            "cubagem_m3": dados.get("cubagem_m3") if isinstance(dados, dict) else None,
-            "cubagens": dados.get("cubagens") if isinstance(dados, dict) else None,
-        }
-        deps.normalize_quotation_remote_shadow(source_type, payload=payload, wait=False)
-    except Exception as exc:
-        try:
-            if log_func is not None:
-                log_func(f"shadow normalization skipped/fail: {exc}")
-        except Exception:
-            pass
 
 
 TransportadoraSession = _session_mod.TransportadoraSession
@@ -72,68 +41,18 @@ async def cotar_transportadoras(
 ) -> list[ResultadoCotacao]:
     """Executa cotação em todas as transportadoras configuradas."""
     config = sessao.config if sessao else _carregar_config(config_path=config_path)
-    started_at = time.monotonic()
-    dados: dict[str, Any] | None = None
-    resultados: list[ResultadoCotacao] | None = None
-    job_payload = _quotation_job_start_payload(
-        config,
-        modo="pdf",
-        quantidade_pedidos=len(pedidos or []),
+    dados = _dados_envio(extrator=extrator, pedidos=pedidos)
+    if not dados:
+        _log_diag("Sem dados de envio para cotação")
+        return [ResultadoCotacao(transportadora="GERAL", status="erro", detalhes="Nenhum pedido disponível para cotação")]
+    return await _executar_cotacoes_com_dados(
+        config=config,
+        dados=dados,
+        cep_origem=cep_origem,
+        sessao=sessao,
+        progresso_callback=progresso_callback,
+        source_type="romaneio",
     )
-    job_id = _create_quotation_job_best_effort("romaneio", job_payload)
-    deps.report_quotation_started(metadata=_quotation_usage_metadata(None, modo="pdf", job_id=job_id))
-    cancelled = False
-    try:
-        dados = _dados_envio(extrator=extrator, pedidos=pedidos)
-        if not dados:
-            _log_diag("Sem dados de envio para cotação")
-            resultados = [ResultadoCotacao(transportadora="GERAL", status="erro", detalhes="Nenhum pedido disponível para cotação")]
-            return resultados
-        _run_shadow_normalization_compat(
-            "romaneio",
-            config,
-            dados,
-            cep_origem=cep_origem,
-            modo="pdf",
-            log_func=_log_diag,
-        )
-        _mark_quotation_job_running_best_effort(job_id)
-        resultados = await _executar_cotacoes_com_dados(
-            config=config,
-            dados=dados,
-            cep_origem=cep_origem,
-            sessao=sessao,
-            progresso_callback=progresso_callback,
-            source_type="romaneio",
-            quote_job_id=job_id,
-        )
-        return resultados
-    except asyncio.CancelledError:
-        cancelled = True
-        raise
-    finally:
-        duration_ms = int((time.monotonic() - started_at) * 1000)
-        _report_quotation_usage_results(
-            config=config,
-            dados=dados,
-            resultados=resultados,
-            modo="pdf",
-            duration_ms=duration_ms,
-            job_id=job_id,
-        )
-        general_error = _quotation_results_indicate_general_error(resultados)
-        job_result = _quotation_job_result_payload(config, resultados)
-        job_status = _quotation_job_final_status(
-            job_result,
-            cancelled=cancelled,
-            general_error=general_error,
-        )
-        _finish_quotation_job_best_effort(
-            job_id,
-            status=job_status,
-            result=job_result,
-            error_message=_quotation_job_error_message(resultados) if general_error else None,
-        )
 
 
 async def cotar_transportadoras_romaneio_colado(
@@ -147,87 +66,21 @@ async def cotar_transportadoras_romaneio_colado(
     tipo_frete: str = "",
 ) -> list[ResultadoCotacao]:
     config = sessao.config if sessao else _carregar_config(config_path=config_path)
-    started_at = time.monotonic()
-    dados: dict[str, Any] | None = None
-    resultados: list[ResultadoCotacao] | None = None
-    modo = "fornecedor" if cnpj_remetente else "romaneio_colado"
-    job_payload = _quotation_job_start_payload(
-        config,
-        modo=modo,
-        quantidade_linhas=_count_non_empty_lines(romaneio_colado),
-    )
-    job_id = _create_quotation_job_best_effort("manual", job_payload)
-    deps.report_quotation_started(metadata=_quotation_usage_metadata(None, modo=modo, job_id=job_id))
-    cancelled = False
     try:
         dados = _dados_envio_romaneio_colado(romaneio_colado)
     except ValueError as e:
         _log_diag(f"Romaneio colado inválido: {e}")
-        resultados = [ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=str(e))]
-        duration_ms = int((time.monotonic() - started_at) * 1000)
-        _report_quotation_usage_results(
-            config=config,
-            dados=dados,
-            resultados=resultados,
-            modo=modo,
-            duration_ms=duration_ms,
-            job_id=job_id,
-        )
-        _finish_quotation_job_best_effort(
-            job_id,
-            status="error",
-            result=_quotation_job_result_payload(config, resultados),
-            error_message=_quotation_job_error_message(resultados),
-        )
-        return resultados
-    try:
-        _run_shadow_normalization_compat(
-            "manual",
-            config,
-            dados,
-            cep_origem=cep_origem,
-            modo=modo,
-            log_func=_log_diag,
-        )
-        _mark_quotation_job_running_best_effort(job_id)
-        resultados = await _executar_cotacoes_com_dados(
-            config=config,
-            dados=dados,
-            cep_origem=cep_origem,
-            sessao=sessao,
-            progresso_callback=progresso_callback,
-            cnpj_remetente=cnpj_remetente,
-            tipo_frete=tipo_frete,
-            source_type="manual",
-            quote_job_id=job_id,
-        )
-        return resultados
-    except asyncio.CancelledError:
-        cancelled = True
-        raise
-    finally:
-        duration_ms = int((time.monotonic() - started_at) * 1000)
-        _report_quotation_usage_results(
-            config=config,
-            dados=dados,
-            resultados=resultados,
-            modo=modo,
-            duration_ms=duration_ms,
-            job_id=job_id,
-        )
-        general_error = _quotation_results_indicate_general_error(resultados)
-        job_result = _quotation_job_result_payload(config, resultados)
-        job_status = _quotation_job_final_status(
-            job_result,
-            cancelled=cancelled,
-            general_error=general_error,
-        )
-        _finish_quotation_job_best_effort(
-            job_id,
-            status=job_status,
-            result=job_result,
-            error_message=_quotation_job_error_message(resultados) if general_error else None,
-        )
+        return [ResultadoCotacao(transportadora="GERAL", status="erro", detalhes=str(e))]
+    return await _executar_cotacoes_com_dados(
+        config=config,
+        dados=dados,
+        cep_origem=cep_origem,
+        sessao=sessao,
+        progresso_callback=progresso_callback,
+        cnpj_remetente=cnpj_remetente,
+        tipo_frete=tipo_frete,
+        source_type="manual",
+    )
 
 
 async def diagnosticar_transportadoras(

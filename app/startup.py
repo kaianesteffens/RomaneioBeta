@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from remote_config import fetch_remote_config, get_last_fetch_status
-from usage_reporter import report_remote_config_fetched
 from version_policy import parse_semantic_version
 
 
@@ -41,10 +40,6 @@ def _fetch_remote_config_sync(startup_logger=None) -> dict[str, Any]:
         if startup_logger is not None:
             startup_logger.warning("Falha ao buscar configuracao remota: %s", exc)
         status = "error"
-    try:
-        report_remote_config_fetched(status=status)
-    except Exception:
-        pass
     return payload
 
 
