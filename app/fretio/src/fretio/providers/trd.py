@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Optional, Any
 import asyncio
 import json
+import os
 import re
 import time
 import tempfile
@@ -404,11 +405,15 @@ class TRDProvider(ProviderBase):
                         logger.info(f"[{self.nome}] Já logado (detectado após espera)")
                         self._logged_in = True
                         return True
-                    try:
-                        body_text = await self._page.inner_text("body")
-                        logger.warning(f"[{self.nome}] Página de login (500 chars): {body_text[:500]}")
-                    except Exception:
-                        pass
+                    if os.environ.get("FRETIO_DEBUG_DUMP"):
+                        try:
+                            body_text = await self._page.inner_text("body")
+                            logger.debug(
+                                f"[{self.nome}] Página de login (excerpt): "
+                                f"{self._safe_diagnostic_excerpt(body_text, limit=500)}"
+                            )
+                        except Exception:
+                            pass
                     raise TimeoutError(f"Timeout aguardando campo de login TRD (URL: {self._page.url})")
                 await self._page.wait_for_timeout(500)
                 await email_loc.fill(self.email)
@@ -1291,14 +1296,45 @@ class TRDProvider(ProviderBase):
 
         return False
 
+    def _safe_diagnostic_excerpt(self, value: Any, *, limit: int = 1500) -> str:
+        """Excerpt textual sanitizado: remove tags, mascara CNPJ/CPF/CEP e corta."""
+        text = str(value or "")
+        text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)
+        # reaproveita o mascaramento de documento do ProviderBase (trata separadores)
+        text = self._sanitize_quote_details(text) or ""
+        text = re.sub(r"\b\d{14}\b", "***", text)
+        text = re.sub(r"\b\d{11}\b", "***", text)
+        text = re.sub(r"\b\d{5}-?\d{3}\b", "***", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) > limit:
+            return text[:limit].rstrip() + "..."
+        return text
+
+    def _sanitize_extra_value(self, value: Any) -> Any:
+        """Sanitiza recursivamente, preservando estrutura de dict/list; strings viram excerpt mascarado."""
+        if isinstance(value, (int, float, bool)) or value is None:
+            return value
+        if isinstance(value, dict):
+            return {str(k): self._sanitize_extra_value(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._sanitize_extra_value(v) for v in value]
+        return self._safe_diagnostic_excerpt(value)
+
     async def _capturar_diagnostico_etapa2(
         self,
         motivo: str,
         extra_data: Optional[dict[str, Any]] = None,
     ) -> dict[str, str]:
-        """Salva screenshot + HTML + JSON para diagnosticar falhas na etapa 2."""
+        """Grava um excerpt textual sanitizado para diagnosticar falhas na etapa 2.
+
+        Gated por FRETIO_DEBUG_DUMP: sem a env var, nada é gravado em disco. Mesmo
+        ativo, não persiste screenshot/HTML/payloads de rede crus — só um resumo
+        textual com CNPJ/CPF/CEP mascarados e tamanho reduzido.
+        """
         paths: dict[str, str] = {}
         if not self._page:
+            return paths
+        if not os.environ.get("FRETIO_DEBUG_DUMP"):
             return paths
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -1308,68 +1344,26 @@ class TRDProvider(ProviderBase):
         except Exception:
             return paths
 
-        png_path = base_dir / f"{ts}_{motivo}.png"
-        html_path = base_dir / f"{ts}_{motivo}.html"
         json_path = base_dir / f"{ts}_{motivo}.json"
-
-        try:
-            await self._page.screenshot(path=str(png_path), full_page=True)
-            paths["screenshot"] = str(png_path)
-        except Exception:
-            pass
-
-        try:
-            html = await self._page.content()
-            html_path.write_text(html, encoding="utf-8")
-            paths["html"] = str(html_path)
-        except Exception:
-            pass
 
         try:
             alerts = await self._coletar_alertas_ui()
         except Exception:
             alerts = []
+        alerts_safe = [self._safe_diagnostic_excerpt(a, limit=300) for a in alerts]
 
-        try:
-            inputs_info = await self._page.evaluate(
-                """() => {
-                    const clean = (v) => (v || '').replace(/\\s+/g, ' ').trim();
-                    const isVisible = (el) => {
-                        if (!el || !(el instanceof HTMLElement)) return false;
-                        const r = el.getBoundingClientRect();
-                        const st = window.getComputedStyle(el);
-                        return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none';
-                    };
-                    const inputs = Array.from(document.querySelectorAll('input')).filter((el) => isVisible(el));
-                    return inputs.slice(0, 80).map((el) => {
-                        const wrapper = el.closest('div,section,form,tr,td,mat-form-field') || el.parentElement;
-                        return {
-                            type: el.type || '',
-                            id: el.id || '',
-                            name: el.name || '',
-                            placeholder: el.placeholder || '',
-                            ariaLabel: el.getAttribute('aria-label') || '',
-                            value: el.value || '',
-                            maxLength: el.maxLength || 0,
-                            className: String(el.className || '').slice(0, 200),
-                            wrapperText: clean((wrapper?.innerText || '').slice(0, 240)),
-                            disabled: !!el.disabled,
-                            readOnly: !!el.readOnly,
-                        };
-                    });
-                }"""
-            )
-        except Exception:
-            inputs_info = []
+        extra_safe = {
+            str(key): self._sanitize_extra_value(value)
+            for key, value in (extra_data or {}).items()
+        }
 
         try:
             payload = {
                 "motivo": motivo,
-                "url": self._page.url,
+                "url": self._safe_diagnostic_excerpt(self._page.url, limit=240),
                 "timestamp": ts,
-                "alerts": alerts,
-                "inputs_visiveis": inputs_info,
-                "extra": extra_data or {},
+                "alerts": alerts_safe,
+                "extra": extra_safe,
             }
             json_path.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2),
@@ -1889,20 +1883,19 @@ class TRDProvider(ProviderBase):
                 network_tail: list[dict[str, Any]] = []
                 for sample in network_payloads[-8:]:
                     compact: dict[str, Any] = {
-                        "url": str(sample.get("url", "")),
+                        "url": self._safe_diagnostic_excerpt(sample.get("url", ""), limit=240),
                         "status": sample.get("status"),
                         "content_type": sample.get("content_type"),
                     }
                     if "json" in sample:
                         try:
-                            compact["json_excerpt"] = json.dumps(
-                                sample.get("json"),
-                                ensure_ascii=False,
-                            )[:1800]
+                            compact["json_excerpt"] = self._safe_diagnostic_excerpt(
+                                json.dumps(sample.get("json"), ensure_ascii=False)
+                            )
                         except Exception:
                             compact["json_excerpt"] = "<erro ao serializar json>"
                     elif "text" in sample:
-                        compact["text_excerpt"] = str(sample.get("text", ""))[:1800]
+                        compact["text_excerpt"] = self._safe_diagnostic_excerpt(sample.get("text", ""))
                     network_tail.append(compact)
 
                 diag = await self._capturar_diagnostico_etapa2(
@@ -1910,7 +1903,7 @@ class TRDProvider(ProviderBase):
                     extra_data={
                         "network_payloads_count": len(network_payloads),
                         "network_payloads_tail": network_tail,
-                        "body_excerpt": texto[:6000],
+                        "body_excerpt": self._safe_diagnostic_excerpt(texto),
                     },
                 )
                 extra_diag = ""

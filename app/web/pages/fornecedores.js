@@ -51,7 +51,14 @@
     // anterior já concluído nesta sessão (preservado em app.state.fornecedores).
     const btn = document.getElementById("fornCotar");
     btn.disabled = true; btn.classList.add("loading");
-    const res = await (await app.api()).fornecedor_cotar(form);
+    let res;
+    try {
+      res = await (await app.api()).fornecedor_cotar(form);
+    } catch (e) {
+      finalizar(app);
+      app.toast("Falha ao cotar o frete do fornecedor");
+      return;
+    }
     if (res && res.erro) {
       btn.disabled = false; btn.classList.remove("loading");
       document.getElementById("fornResult").textContent = res.erro;

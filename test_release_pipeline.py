@@ -231,6 +231,65 @@ def test_launcher_opens_valid_local_app_when_github_is_offline(monkeypatch, tmp_
     assert launched == [exe_path]
 
 
+def _fake_release_with_sig():
+    return {
+        "tag_name": "v2.0",
+        "assets": [
+            {"name": "Fretio-Update-latest.zip",
+             "browser_download_url": "https://example.test/u.zip", "size": 10},
+            {"name": "Fretio-Update-latest.zip.sig",
+             "browser_download_url": "https://example.test/u.zip.sig", "size": 6},
+        ],
+    }
+
+
+def _setup_launcher_worker(monkeypatch, tmp_path, verify, extracted, launched):
+    app_dir = tmp_path / "Fretio"
+    app_dir.mkdir()
+    exe_path = app_dir / "Fretio.exe"
+    exe_path.write_text("", encoding="utf-8")
+    (app_dir / "version.txt").write_text("1.2", encoding="utf-8")
+
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    monkeypatch.setattr(launcher, "APP_DIR_CANDIDATES", (app_dir,))
+    monkeypatch.setattr(launcher, "_resolve_latest_release",
+                        lambda: ("kaianesteffens/RomaneioBeta", _fake_release_with_sig()))
+    monkeypatch.setattr(launcher, "_download",
+                        lambda url, dest, total, status_cb, progress_cb: dest.write_bytes(b"x"))
+    monkeypatch.setattr(launcher, "verify_update_signature", verify)
+    monkeypatch.setattr(launcher, "_safe_extract_zip_to_app",
+                        lambda zip_path, ad: extracted.append(ad))
+    monkeypatch.setattr(launcher, "_launch_app", lambda app_exe: launched.append(app_exe))
+    monkeypatch.setattr(launcher.time, "sleep", lambda _seconds: None)
+    return app_dir, exe_path
+
+
+def test_launcher_rejects_update_with_invalid_signature_and_opens_local(monkeypatch, tmp_path):
+    extracted, launched = [], []
+
+    def _bad_sig(zip_path, sig_path):
+        raise launcher.UpdateSignatureError("assinatura invalida")
+
+    app_dir, exe_path = _setup_launcher_worker(monkeypatch, tmp_path, _bad_sig, extracted, launched)
+
+    launcher._worker(None)
+
+    assert extracted == []          # update nao assinado NAO foi instalado
+    assert launched == [exe_path]   # abriu a versao local valida (fallback)
+
+
+def test_launcher_installs_update_with_valid_signature(monkeypatch, tmp_path):
+    extracted, launched = [], []
+    app_dir, exe_path = _setup_launcher_worker(
+        monkeypatch, tmp_path, lambda zip_path, sig_path: None, extracted, launched
+    )
+
+    launcher._worker(None)
+
+    assert extracted == [app_dir]   # assinatura valida -> update instalado
+    assert launched == [exe_path]
+
+
 def test_error_reporter_has_no_embedded_developer_secrets():
     # O caminho via Gist (token do desenvolvedor) foi removido por completo.
     assert not hasattr(er, "_EMBEDDED_ERROR_GIST_ID")

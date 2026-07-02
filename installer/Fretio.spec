@@ -28,9 +28,6 @@ hiddenimports = [
     # Fretio core
     "fretio.models",
     "fretio.logging_conf",
-    "fretio.config",
-    "fretio.cache",
-    "fretio.calc",
     "fretio.config_manager",
     # Dependências externas
     "bs4",

@@ -144,6 +144,17 @@ def sanitize_error_payload(text: str) -> str:
     return sanitized
 
 
+def _sanitize_extra_value(value):
+    """Sanitiza recursivamente valores do dict ``extra`` (dict/list/str)."""
+    if isinstance(value, dict):
+        return {k: _sanitize_extra_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_extra_value(item) for item in value]
+    if isinstance(value, str):
+        return sanitize_error_payload(value)
+    return value
+
+
 def _log_path() -> Path:
     appdata = os.getenv("APPDATA", "")
     if appdata:
@@ -436,10 +447,8 @@ def _build_error_api_payload(
         for key, value in extra.items():
             if key in {"license_key", "machine_id", "app_version"}:
                 payload[key] = value
-            elif isinstance(value, str):
-                payload[key] = sanitize_error_payload(value)
             else:
-                payload[key] = value
+                payload[key] = _sanitize_extra_value(value)
     return payload
 
 

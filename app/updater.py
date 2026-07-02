@@ -164,8 +164,16 @@ def _load_toml_file(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _require_web_url(url: str) -> None:
+    """Rejeita esquemas não-web (file://, ftp://, data:...) antes de urlopen."""
+    scheme = urlparse(str(url or "")).scheme.lower()
+    if scheme not in ("http", "https"):
+        raise URLError(f"Esquema de URL não permitido: {scheme or 'vazio'}")
+
+
 def _github_api(url: str) -> Any:
     """Faz GET na API do GitHub e retorna JSON."""
+    _require_web_url(url)
     req = Request(url, headers={
         "Accept": "application/vnd.github+json",
         "User-Agent": "Fretio-Updater/1.0",
@@ -176,6 +184,7 @@ def _github_api(url: str) -> Any:
 
 def _version_api(url: str) -> Any:
     """Faz GET no endpoint publico de versao e retorna JSON."""
+    _require_web_url(url)
     req = Request(url, headers={
         "Accept": "application/json",
         "User-Agent": "Fretio-Updater/1.0",
@@ -551,6 +560,7 @@ def _download_with_progress(
     callback: Optional[Callable[[str], None]] = None,
 ) -> None:
     """Baixa arquivo com progresso."""
+    _require_web_url(url)
     req = Request(url, headers={"User-Agent": "Fretio-Updater/1.0"})
     with urlopen(req, timeout=120, context=_ssl_context()) as resp:
         downloaded = 0
@@ -659,7 +669,11 @@ def apply_update(
 
         safe_version = _safe_bat_version(getattr(info, "version", ""))
 
-        # Arquivos/pastas protegidos (não sobrescrever)
+        # Backup do app instalado para rollback caso o xcopy falhe no meio.
+        # O version.txt vem do pacote ASSINADO (copiado pelo xcopy), então não é
+        # reescrito com o valor da tag (que não passa por verificação de assinatura).
+        backup_dir = update_dir / "backup"
+        restart_line = f'start "" "{app_exe}"\n' if app_exe else ""
         bat_content = f'''@echo off
 chcp 65001 >nul 2>&1
 title Fretio - Atualizando...
@@ -675,30 +689,31 @@ if %ERRORLEVEL% == 0 (
 echo Fretio fechou. Aplicando atualizacao v{safe_version}...
 timeout /t 2 /nobreak >nul
 
+if exist "{backup_dir}" rmdir /S /Q "{backup_dir}" >nul 2>&1
+xcopy /E /Y /I /Q "{app_dir}" "{backup_dir}" >nul 2>&1
+
 xcopy /E /Y /I /Q "{source_dir}" "{app_dir}" >nul 2>&1
-
-REM Restaurar CONFIG.toml protegido (xcopy pode ter sobrescrito)
-REM O CONFIG.toml do usuario fica em %APPDATA%, entao nao e afetado
-
-REM Atualizar version.txt
-if not exist "{app_dir}\\_internal" mkdir "{app_dir}\\_internal"
-echo {safe_version}> "{app_dir}\\version.txt"
-echo {safe_version}> "{app_dir}\\_internal\\version.txt"
+if errorlevel 1 goto rollback
 
 echo Atualizacao concluida! Reiniciando...
 timeout /t 1 /nobreak >nul
 
-REM Limpar arquivos de update
 del /Q "{zip_path}" >nul 2>&1
 rmdir /S /Q "{extract_dir}" >nul 2>&1
+rmdir /S /Q "{backup_dir}" >nul 2>&1
 
-REM Reiniciar o app
+{restart_line}del "%~f0" >nul 2>&1
+exit
+
+:rollback
+echo Falha ao aplicar atualizacao. Restaurando versao anterior...
+xcopy /E /Y /I /Q "{backup_dir}" "{app_dir}" >nul 2>&1
+del /Q "{zip_path}" >nul 2>&1
+rmdir /S /Q "{extract_dir}" >nul 2>&1
+rmdir /S /Q "{backup_dir}" >nul 2>&1
+{restart_line}del "%~f0" >nul 2>&1
+exit
 '''
-        if app_exe:
-            bat_content += f'start "" "{app_exe}"\n'
-
-        bat_content += 'del "%~f0" >nul 2>&1\n'
-        bat_content += 'exit\n'
 
         bat_encoding = "mbcs" if os.name == "nt" else "utf-8"
         bat_path.write_text(bat_content, encoding=bat_encoding)

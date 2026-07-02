@@ -57,10 +57,17 @@
         const cep = root.querySelector("#cCep"), pag = root.querySelector("#cPag");
         cep.addEventListener("input", () => cep.value = maskCEP(cep.value));
         pag.addEventListener("input", () => pag.value = maskCNPJ(pag.value));
-        root.querySelector("#cSaveEmp").addEventListener("click", async () => {
-          const data = { cep_origem: cep.value, cnpj_pagador: pag.value, paralelas: root.querySelector("#cPar").value };
-          const r = await (await app.api()).config_salvar_empresa(data);
-          app.toast(r && r.ok ? "Empresa salva" : "Falha ao salvar");
+        root.querySelector("#cSaveEmp").addEventListener("click", async (ev) => {
+          const btn = ev.currentTarget; btn.disabled = true;
+          try {
+            const data = { cep_origem: cep.value, cnpj_pagador: pag.value, paralelas: root.querySelector("#cPar").value };
+            const r = await (await app.api()).config_salvar_empresa(data);
+            app.toast(r && r.ok ? "Empresa salva" : "Falha ao salvar");
+          } catch (e) {
+            app.toast("Falha ao salvar");
+          } finally {
+            btn.disabled = false;
+          }
         });
       },
     };
@@ -80,14 +87,21 @@
       </div>`,
       bind(root) {
         bindSeg(root);
-        root.querySelector("#cSaveAp").addEventListener("click", async () => {
-          const data = { tema: segVal(root, "tema"), raio: segVal(root, "raio"), botao: segVal(root, "botao") };
-          const r = await (await app.api()).config_salvar_aparencia(data);
-          if (r && r.ok) {
-            window.App.applyTema(r.tema_efetivo);
-            window.App.applyAparencia(data.raio, data.botao);
-            app.toast("Aparência aplicada");
-          } else app.toast("Falha ao salvar");
+        root.querySelector("#cSaveAp").addEventListener("click", async (ev) => {
+          const btn = ev.currentTarget; btn.disabled = true;
+          try {
+            const data = { tema: segVal(root, "tema"), raio: segVal(root, "raio"), botao: segVal(root, "botao") };
+            const r = await (await app.api()).config_salvar_aparencia(data);
+            if (r && r.ok) {
+              window.App.applyTema(r.tema_efetivo);
+              window.App.applyAparencia(data.raio, data.botao);
+              app.toast("Aparência aplicada");
+            } else app.toast("Falha ao salvar");
+          } catch (e) {
+            app.toast("Falha ao salvar");
+          } finally {
+            btn.disabled = false;
+          }
         });
       },
     };
@@ -124,17 +138,24 @@
           b.querySelector(".switch-lbl").textContent = on ? "Habilitada" : "Desabilitada";
         }));
         root.querySelectorAll(".uf-chip").forEach((c) => c.addEventListener("click", () => c.classList.toggle("active")));
-        root.querySelector("#cSaveTransp").addEventListener("click", async () => {
-          const a = await app.api();
-          let ok = true;
-          for (const card of root.querySelectorAll(".carrier-cfg")) {
-            const nome = card.dataset.carrier;
-            const habilitado = card.querySelector("[data-enable]").classList.contains("on");
-            const ufs = Array.from(card.querySelectorAll(".uf-chip.active")).map((x) => x.dataset.uf);
-            const r = await a.config_salvar_transportadora(nome, { habilitado, ufs_atendidas: ufs });
-            ok = ok && r && r.ok;
+        root.querySelector("#cSaveTransp").addEventListener("click", async (ev) => {
+          const btn = ev.currentTarget; btn.disabled = true;
+          try {
+            const a = await app.api();
+            let ok = true;
+            for (const card of root.querySelectorAll(".carrier-cfg")) {
+              const nome = card.dataset.carrier;
+              const habilitado = card.querySelector("[data-enable]").classList.contains("on");
+              const ufs = Array.from(card.querySelectorAll(".uf-chip.active")).map((x) => x.dataset.uf);
+              const r = await a.config_salvar_transportadora(nome, { habilitado, ufs_atendidas: ufs });
+              ok = ok && r && r.ok;
+            }
+            app.toast(ok ? "Transportadoras salvas" : "Falha ao salvar");
+          } catch (e) {
+            app.toast("Falha ao salvar");
+          } finally {
+            btn.disabled = false;
           }
-          app.toast(ok ? "Transportadoras salvas" : "Falha ao salvar");
         });
       },
     };
@@ -151,26 +172,45 @@
             <div class="cfg-grid">
               ${c.campos.map((f) => `<label class="field">
                 <span class="field-label">${F().esc(f.label)}</span>
-                <input class="field-input" data-key="${F().esc(f.key)}" type="${f.tipo === "password" ? "password" : "text"}"
-                       value="${F().esc(f.valor)}" autocomplete="off"
-                       placeholder="${f.tipo === "password" && f.tem_valor ? "•••••• salva — deixe em branco para manter" : ""}"/>
+                <div class="field-pw">
+                  <input class="field-input" data-key="${F().esc(f.key)}" type="${f.tipo === "password" ? "password" : "text"}"
+                         value="${F().esc(f.valor)}" autocomplete="off"
+                         placeholder="${f.tipo === "password" && f.tem_valor ? "•••••• salva — deixe em branco para manter" : ""}"/>
+                  ${f.tipo === "password" ? `<button class="cred-toggle" type="button" aria-pressed="false" aria-label="Mostrar senha">Mostrar</button>` : ""}
+                </div>
               </label>`).join("")}
             </div>
           </div>`).join("")}
         <button class="btn btn-primary" id="cSaveCred" type="button">Salvar credenciais</button>
       </div>`,
       bind(root) {
-        root.querySelector("#cSaveCred").addEventListener("click", async () => {
-          const a = await app.api();
-          let ok = true;
-          for (const grp of root.querySelectorAll(".cred-group")) {
-            const nome = grp.dataset.carrier;
-            const campos = {};
-            grp.querySelectorAll("[data-key]").forEach((inp) => { campos[inp.dataset.key] = inp.value; });
-            const r = await a.config_salvar_credenciais(nome, campos);
-            ok = ok && r && r.ok;
+        root.querySelectorAll(".cred-toggle").forEach((b) => b.addEventListener("click", () => {
+          const inp = b.parentElement.querySelector(".field-input");
+          if (!inp) return;
+          const mostrar = inp.type === "password";
+          inp.type = mostrar ? "text" : "password";
+          b.setAttribute("aria-pressed", String(mostrar));
+          b.setAttribute("aria-label", mostrar ? "Ocultar senha" : "Mostrar senha");
+          b.textContent = mostrar ? "Ocultar" : "Mostrar";
+        }));
+        root.querySelector("#cSaveCred").addEventListener("click", async (ev) => {
+          const btn = ev.currentTarget; btn.disabled = true;
+          try {
+            const a = await app.api();
+            let ok = true;
+            for (const grp of root.querySelectorAll(".cred-group")) {
+              const nome = grp.dataset.carrier;
+              const campos = {};
+              grp.querySelectorAll("[data-key]").forEach((inp) => { campos[inp.dataset.key] = inp.value; });
+              const r = await a.config_salvar_credenciais(nome, campos);
+              ok = ok && r && r.ok;
+            }
+            app.toast(ok ? "Credenciais salvas" : "Falha ao salvar");
+          } catch (e) {
+            app.toast("Falha ao salvar");
+          } finally {
+            btn.disabled = false;
           }
-          app.toast(ok ? "Credenciais salvas" : "Falha ao salvar");
         });
       },
     };

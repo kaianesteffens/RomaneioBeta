@@ -11,7 +11,7 @@
 ## Build Rápido (um clique)
 
 ```cmd
-cd _release_stage\app
+cd installer
 build.bat
 ```
 
@@ -23,10 +23,12 @@ O script faz tudo automaticamente:
 
 ## Build Manual (passo a passo)
 
+Rode os comandos a partir de `installer\`.
+
 ### 1. Instalar dependências
 
 ```cmd
-cd _release_stage\app
+cd installer
 pip install --no-deps -r requirements-lock.txt
 ```
 
@@ -38,13 +40,11 @@ pyinstaller --clean --noconfirm Fretio.spec
 
 Saída: `dist\Fretio\Fretio.exe` + dependências na mesma pasta.
 
-### 3. Copiar CONFIG.toml (se tiver credenciais)
+O app não é distribuído com `CONFIG.toml`. A configuração por empresa é criada pelo
+próprio app no primeiro uso, sem credenciais versionadas — não copie `CONFIG.toml`
+para dentro do build.
 
-```cmd
-copy Fretio\CONFIG.toml dist\Fretio\Fretio\CONFIG.toml
-```
-
-### 4. Compilar instalador
+### 3. Compilar instalador
 
 ```cmd
 "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" Fretio-installer.iss
@@ -59,12 +59,13 @@ Fretio-Setup.exe
 ├── Instala em: C:\Program Files\Fretio\
 │   ├── Fretio.exe           (aplicação principal)
 │   ├── *.dll / *.pyd          (dependências Python empacotadas)
-│   ├── Fretio\              (pacote Python)
-│   │   └── CONFIG.example.toml
-│   └── instalar_navegador.bat (instala Chromium pós-instalação)
+│   └── Fretio\              (pacote Python)
+│       └── CONFIG.example.toml
+│
+├── Instala (se ausente): Microsoft Edge WebView2 Runtime
+│       via MicrosoftEdgeWebview2Setup.exe (a UI depende do WebView2)
 │
 ├── Cria: %APPDATA%\Fretio\
-│   ├── CONFIG.toml            (copiado do example na 1ª instalação)
 │   └── cache\                 (cache de cotações)
 │
 ├── Atalho: Menu Iniciar → Fretio
@@ -73,10 +74,12 @@ Fretio-Setup.exe
 
 ## Após Instalar no Windows do Usuário
 
-1. Executar o instalador `Fretio-Setup.exe`
-2. Na tela final, marcar "Instalar navegador Chromium" → executa `instalar_navegador.bat`
-3. Editar `%APPDATA%\Fretio\CONFIG.toml` com as credenciais reais
-4. Executar Fretio pelo atalho no Menu Iniciar
+1. Executar o instalador `Fretio-Setup.exe` (instala o WebView2 Runtime se ele estiver ausente)
+2. Executar Fretio pelo atalho no Menu Iniciar
+3. Configurar a empresa e as credenciais pela própria interface do app
+
+Para conferir se o Google Chrome está presente, execute `verificar_navegador.bat`
+a partir de `installer\`. Ele apenas verifica a instalação do Chrome e não instala nada.
 
 ## Arquivos do Build
 
@@ -85,15 +88,20 @@ Fretio-Setup.exe
 | `Fretio.spec` | Configuração PyInstaller (one-folder, GUI, sem console) |
 | `Fretio-installer.iss` | Script Inno Setup (instalador Windows) |
 | `build.bat` | Script automatizado de build |
-| `instalar_navegador.bat` | Instala Chromium após instalação |
+| `verificar_navegador.bat` | Verifica a presença do Google Chrome (não instala) |
+| `MicrosoftEdgeWebview2Setup.exe` | Bootstrapper do WebView2 Runtime baixado para o build; instalado pelo instalador quando ausente |
 | `requirements.in` | Dependências diretas mantidas por humanos |
 | `requirements.txt` | Alias de compatibilidade para instalações locais (`-r requirements.in`) |
 | `requirements-lock.txt` | Dependências Python congeladas consumidas pelo build reproduzível |
 
 ## Notas
 
-- **Playwright/Chromium**: O navegador Chromium (~150MB) é instalado separadamente pelo `instalar_navegador.bat`. Não é empacotado dentro do .exe para manter o instalador leve.
-- **CONFIG.toml**: Contém credenciais das transportadoras. Nunca é sobrescrito em atualizações (flag `onlyifdoesntexist` no Inno Setup).
+- **UI / WebView2**: A interface roda em WebView2 via pywebview. O instalador instala o
+  Microsoft Edge WebView2 Runtime quando ele está ausente (`MicrosoftEdgeWebview2Setup.exe`,
+  baixado de <https://go.microsoft.com/fwlink/p/?LinkId=2124703>). No Windows 11 o runtime
+  costuma já vir presente; em Windows 10 ou imagens corporativas pode faltar.
+- **Google Chrome**: O Fretio usa o Google Chrome já instalado no computador (não empacota
+  Chromium). `verificar_navegador.bat` só confere a presença do Chrome.
 - **Modo GUI**: O .exe roda sem janela de console (`console=False` no PyInstaller).
 - **Desinstalação**: Pelo Windows → Configurações → Apps → Fretio → Desinstalar.
 

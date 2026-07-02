@@ -49,9 +49,31 @@ if not exist "%PY%" (
         powershell -Command "(Get-Content '%%f') -replace '#import site','import site' | Set-Content '%%f'"
     )
 
-    REM Instalar pip
-    curl -L -o "%PYDIR%\get-pip.py" "https://bootstrap.pypa.io/get-pip.py"
+    REM Instalar pip via get-pip.py oficial. A VERSAO do pip e pinada logo abaixo
+    REM (pip install --upgrade pip==%PINNED_PIP_VERSION%), entao nao ha risco de
+    REM drift. -f faz o curl falhar em erro HTTP (evita baixar uma pagina 404 como
+    REM se fosse o script, que quebraria com SyntaxError).
+    curl -fL -o "%PYDIR%\get-pip.py" "https://bootstrap.pypa.io/get-pip.py"
+    if %ERRORLEVEL% neq 0 (
+        echo ERRO: Falha ao baixar get-pip.py. Verifique sua conexao.
+        %FB_PAUSE_CMD%
+        exit /b 1
+    )
+    for %%A in ("%PYDIR%\get-pip.py") do set "GETPIP_SIZE=%%~zA"
+    if not defined GETPIP_SIZE set "GETPIP_SIZE=0"
+    if !GETPIP_SIZE! LEQ 0 (
+        echo ERRO: get-pip.py baixado esta vazio ^(download corrompido^).
+        del "%PYDIR%\get-pip.py" 2>nul
+        %FB_PAUSE_CMD%
+        exit /b 1
+    )
     "%PY%" "%PYDIR%\get-pip.py" --quiet
+    if %ERRORLEVEL% neq 0 (
+        echo ERRO: Falha ao instalar pip via get-pip.py.
+        del "%PYDIR%\get-pip.py" 2>nul
+        %FB_PAUSE_CMD%
+        exit /b 1
+    )
     del "%PYDIR%\get-pip.py"
 
     echo [OK] Python 3.12 pronto em: %PYDIR%
@@ -138,6 +160,35 @@ REM Apenas o template CONFIG.example.toml acompanha o build (incluido pelo
 REM Fretio.spec). NUNCA embarcar um CONFIG.toml real: ele iria em texto puro para
 REM a maquina do cliente. O app cria a config por empresa no primeiro uso, com as
 REM URLs padrao definidas em company_config.
+
+REM ── 5.5. Baixar bootstrapper do WebView2 Runtime ─────────────
+REM A interface roda em WebView2. O instalador (Fretio-installer.iss) embute este
+REM bootstrapper Evergreen (per-user) e so o executa quando o runtime faltar
+REM (Windows 10/imagens sem Edge). No Windows 11 ja vem instalado. Espelha o passo
+REM "Download WebView2 Runtime bootstrapper" de .github/workflows/build-release.yml.
+set "WEBVIEW2_SETUP=%~dp0MicrosoftEdgeWebview2Setup.exe"
+if not exist "%WEBVIEW2_SETUP%" (
+    echo.
+    echo Baixando bootstrapper do WebView2 Runtime...
+    curl -L --retry 3 -o "%WEBVIEW2_SETUP%" "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+    if %ERRORLEVEL% neq 0 (
+        echo ERRO: Falha ao baixar o WebView2 bootstrapper. A UI roda em WebView2;
+        echo      publicar sem o bootstrapper deixa Win10/imagens corporativas sem runtime.
+        %FB_PAUSE_CMD%
+        exit /b 1
+    )
+    for %%A in ("%WEBVIEW2_SETUP%") do set "WEBVIEW2_SIZE=%%~zA"
+    if not defined WEBVIEW2_SIZE set "WEBVIEW2_SIZE=0"
+    if !WEBVIEW2_SIZE! LEQ 100000 (
+        echo ERRO: WebView2 bootstrapper baixado esta vazio ou incompleto ^(!WEBVIEW2_SIZE! bytes^).
+        del "%WEBVIEW2_SETUP%" 2>nul
+        %FB_PAUSE_CMD%
+        exit /b 1
+    )
+    echo [OK] WebView2 bootstrapper baixado ^(!WEBVIEW2_SIZE! bytes^).
+) else (
+    echo [OK] WebView2 bootstrapper ja presente.
+)
 
 REM ── 6. Compilar instalador com Inno Setup ────────────────────
 echo.

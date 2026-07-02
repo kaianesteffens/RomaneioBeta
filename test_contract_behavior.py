@@ -212,21 +212,12 @@ def test_contract_validate_license_online_active_legacy_gist_is_read_only(monkey
 def test_contract_validate_license_offline_uses_valid_cache(monkeypatch, tmp_path):
     _clear_license_api_env(monkeypatch)
     appdata = tmp_path / "appdata"
-    cache_path = appdata / "Fretio" / ".license_cache"
-    cache_path.parent.mkdir(parents=True)
-    cache_path.write_text(
-        json.dumps(
-            {
-                "key": "FBOT-CACHE",
-                "valid": True,
-                "owner": "Cliente Cache",
-                "blocked": False,
-                "timestamp": time.time(),
-            }
-        ),
-        encoding="utf-8",
-    )
+    (appdata / "Fretio").mkdir(parents=True)
     monkeypatch.setenv("APPDATA", str(appdata))
+    lic._save_validation_cache(
+        "FBOT-CACHE",
+        lic.LicenseStatus(valid=True, owner="Cliente Cache", blocked=False),
+    )
     monkeypatch.setattr(lic, "_get_gist_url", lambda: "https://example.test/licenses.json")
     monkeypatch.setattr(lic, "_fetch_licenses", lambda _url: (_ for _ in ()).throw(URLError("offline")))
 

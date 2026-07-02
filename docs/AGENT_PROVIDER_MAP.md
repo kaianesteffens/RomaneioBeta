@@ -33,12 +33,13 @@ Status permitidos:
 - `rodonaves` -> `rodonaves.py`
 - `alfa` -> `alfa.py`
 - `coopex` -> `coopex.py`
+- `translovato` -> `translovato.py`
 
 ## Regras de trabalho
 
-- Nao tocar PySide6 dentro de provider.
+- Nao emitir/alterar UI diretamente dentro do provider (a UI e a bridge web em `app/web_app.py`).
 - Nao criar event loop proprio dentro de provider.
-- Playwright deve rodar fora da thread principal do Qt.
+- Playwright deve rodar fora da thread da UI/bridge.
 - Sempre preservar `cleanup()` quando o provider abrir browser, context ou page.
 - Nao registrar dados sensiveis em log.
 - Tratar rota fora de cobertura como `nao_atendido`.
@@ -51,7 +52,7 @@ Status permitidos:
 - Transportadora nao aparece/cria: `factory.py`.
 - Resultado padronizado errado: `quotation_contract.py`.
 - Cotacao bloqueada antes de abrir portal: `app/cotacao/orchestrator.py`.
-- UI trava: `app/async_worker.py` e `app/romaneio_app.py`.
+- UI trava: `app/async_worker.py` e `app/web_app.py`.
 - Campo de configuracao: `app/company_config.py`, `app/CONFIG.example.toml` e `factory.py`.
 
 ## ProviderBase

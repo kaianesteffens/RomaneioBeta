@@ -149,6 +149,10 @@ _TIMEOUT_PRELOGIN_S: dict[str, int] = {
 }
 _TIMEOUT_PRELOGIN_PADRAO_S = 45
 
+# Limite por provider para o cleanup (fechar browser). Um browser.close()
+# travado não pode pendurar o encerramento dos demais providers.
+_TIMEOUT_CLEANUP_S = 8
+
 
 class _ProviderSessionRegistry:
     """Mantém providers ativos e timestamps de uso sob lock único."""
@@ -370,8 +374,10 @@ class TransportadoraSession:
         failure_message: str,
     ) -> None:
         try:
-            await provider.cleanup()
+            await asyncio.wait_for(provider.cleanup(), timeout=_TIMEOUT_CLEANUP_S)
             _log_diag(success_message)
+        except asyncio.TimeoutError:
+            _log_diag(f"{failure_message}: timeout ({_TIMEOUT_CLEANUP_S}s) — seguindo para o próximo provider")
         except Exception as e:
             _log_diag(f"{failure_message}: {e}")
             report_provider_error(

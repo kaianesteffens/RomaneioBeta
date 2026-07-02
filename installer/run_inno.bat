@@ -19,11 +19,16 @@ if not defined ISCC (
 
 echo Usando: %ISCC%
 
-REM Ler versão de version.txt (evita hardcode)
-set "APP_VERSION=2.9"
+REM Ler versão de version.txt (sem fallback hardcoded)
+set "APP_VERSION="
 set "VERSION_FILE=%~dp0..\app\version.txt"
 if exist "%VERSION_FILE%" (
     for /f "usebackq tokens=*" %%v in ("%VERSION_FILE%") do set "APP_VERSION=%%v"
+)
+if not defined APP_VERSION (
+    echo ERRO: Falha ao ler a versao em app\version.txt.
+    pause
+    exit /b 1
 )
 echo Versao: %APP_VERSION%
 

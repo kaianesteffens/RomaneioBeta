@@ -60,6 +60,37 @@ def _load_config(path: Path) -> dict[str, Any]:
         return {}
 
 
+class _ConfigUnsafeToWrite(Exception):
+    """Config existente que nao pode ser lida/parseada com seguranca.
+
+    Usada para abortar um ciclo read-modify-write antes de sobrescrever o
+    CONFIG.toml com um dict vazio (o que apagaria credenciais e a secao
+    [fretio])."""
+
+
+def _load_config_for_write(path: Path) -> dict[str, Any]:
+    """Carrega config para um ciclo read-modify-write.
+
+    Diferente de _load_config, distingue 'arquivo inexistente' (novo, ok) de
+    'arquivo existe mas ilegivel/corrompido'. No segundo caso levanta
+    _ConfigUnsafeToWrite, evitando que um Salvar sobrescreva e apague as demais
+    secoes (credenciais das transportadoras, [fretio]) quando a leitura falha."""
+    if not path.exists():
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise _ConfigUnsafeToWrite(str(exc)) from exc
+    if not raw.strip():
+        return {}
+    try:
+        if _toml_reader is not None:
+            return _toml_reader.loads(raw)
+        return _toml_fallback.loads(raw)
+    except Exception as exc:
+        raise _ConfigUnsafeToWrite("CONFIG.toml ilegivel/corrompido") from exc
+
+
 def _carregar_versao() -> str:
     candidates = [
         Path(getattr(sys, "_MEIPASS", "") or "") / "version.txt",
@@ -140,7 +171,10 @@ class ConfigMixin:
         modo = (modo or "sistema").lower()
         if modo not in ("claro", "escuro", "sistema"):
             modo = "sistema"
-        cfg = _load_config(self._config_path)
+        try:
+            cfg = _load_config_for_write(self._config_path)
+        except _ConfigUnsafeToWrite:
+            return {"ok": False, "tema": modo, "tema_efetivo": _resolver_tema_efetivo(modo)}
         if not isinstance(cfg.get("fretio"), dict):
             cfg["fretio"] = {}
         cfg["fretio"]["ui_tema"] = modo
@@ -206,7 +240,10 @@ class ConfigMixin:
         }
 
     def _write_config(self, mutate) -> bool:
-        cfg = _load_config(self._config_path)
+        try:
+            cfg = _load_config_for_write(self._config_path)
+        except _ConfigUnsafeToWrite:
+            return False
         try:
             mutate(cfg)
             cc._escrever_config_toml(cfg, self._config_path)
@@ -800,6 +837,8 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin)
         self._rastreando = False
         # Serializa o check-and-set de _cotando/_rastreando: chamadas do js_api
         # podem chegar concorrentes, então reservar a flag precisa ser atômico.
+        # Os resets para False ficam fora do lock de propósito: são stores de um
+        # único bool, atômicos sob o GIL.
         self._op_lock = threading.Lock()
         self._notas: list[Any] = []  # NotaFiscal carregadas (rastreio)
         self._romaneios: list[dict] = []  # romaneios processados na sessão (dashboard)
@@ -947,16 +986,35 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin)
         return {"cards": cards, "total_notas": len(self._notas)}
 
     def abrir_externo(self, alvo: str) -> dict:
-        """Abre arquivo (screenshot) ou URL (rastreio) no app padrão do sistema."""
+        """Abre arquivo (screenshot) ou URL (rastreio) no app padrão do sistema.
+
+        Só permite URLs http(s) e arquivos locais dentro da pasta de screenshots
+        conhecida — o alvo chega do resultado do provider e não pode virar um
+        caminho local arbitrário (ex.: um .exe) nem um esquema file://."""
         alvo = str(alvo or "").strip()
         if not alvo:
             return {"erro": "alvo vazio"}
-        try:
-            if sys.platform == "win32" and not alvo.lower().startswith(("http://", "https://")):
-                os.startfile(alvo)  # type: ignore[attr-defined]
-            else:
+        low = alvo.lower()
+        if low.startswith(("http://", "https://")):
+            try:
                 import webbrowser
                 webbrowser.open(alvo)
+                return {"ok": True}
+            except Exception as exc:
+                return {"erro": str(exc)}
+        if "://" in low:
+            return {"erro": "destino não permitido"}
+        try:
+            from rastreamento import _download_dir
+            base = Path(_download_dir()).resolve()
+            target = Path(alvo).resolve()
+            if os.path.commonpath([str(base), str(target)]) != str(base) or not target.exists():
+                return {"erro": "destino não permitido"}
+            if sys.platform == "win32":
+                os.startfile(str(target))  # type: ignore[attr-defined]
+            else:
+                import webbrowser
+                webbrowser.open(str(target))
             return {"ok": True}
         except Exception as exc:
             return {"erro": str(exc)}

@@ -107,22 +107,12 @@ def test_license_service_backend_invalid_response_is_not_cached(monkeypatch):
 
 def test_license_service_backend_offline_uses_existing_validation_cache(monkeypatch, tmp_path):
     appdata = tmp_path / "appdata"
-    cache_path = appdata / "Fretio" / ".license_cache"
-    cache_path.parent.mkdir(parents=True)
-    cache_path.write_text(
-        json.dumps(
-            {
-                "key": "FBOT-CACHE",
-                "valid": True,
-                "owner": "Cliente Cache",
-                "blocked": False,
-                "timestamp": time.time(),
-            }
-        ),
-        encoding="utf-8",
-    )
-
+    (appdata / "Fretio").mkdir(parents=True)
     monkeypatch.setenv("APPDATA", str(appdata))
+    lic._save_validation_cache(
+        "FBOT-CACHE",
+        lic.LicenseStatus(valid=True, owner="Cliente Cache", blocked=False),
+    )
     monkeypatch.setattr(lic, "_get_license_api_url", lambda: "https://licenses.example.test/validate")
     monkeypatch.setattr(lic, "urlopen", lambda req, timeout, context=None: (_ for _ in ()).throw(URLError("offline")))
 
@@ -134,6 +124,32 @@ def test_license_service_backend_offline_uses_existing_validation_cache(monkeypa
         message="Servidor indisponível, usando validação offline.",
         offline=True,
     )
+
+
+def test_license_service_rejects_forged_offline_cache(monkeypatch, tmp_path):
+    appdata = tmp_path / "appdata"
+    cache_path = appdata / "Fretio" / ".license_cache"
+    cache_path.parent.mkdir(parents=True)
+    # Cache forjado à mão (sem HMAC), como um usuário tentando burlar a licença.
+    cache_path.write_text(
+        json.dumps(
+            {
+                "key": "FORJADO",
+                "valid": True,
+                "owner": "Pirata",
+                "blocked": False,
+                "timestamp": time.time(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("APPDATA", str(appdata))
+    monkeypatch.setattr(lic, "_get_license_api_url", lambda: "https://licenses.example.test/validate")
+    monkeypatch.setattr(lic, "urlopen", lambda req, timeout, context=None: (_ for _ in ()).throw(URLError("offline")))
+
+    status = lic.validate_license("FORJADO", machine_id="MAQ-1")
+
+    assert status.valid is False
 
 
 def test_license_service_backend_offline_without_cache_returns_friendly_message(monkeypatch, tmp_path):
@@ -151,21 +167,12 @@ def test_license_service_backend_offline_without_cache_returns_friendly_message(
 
 def test_license_service_blocked_cache_never_unlocks_license(monkeypatch, tmp_path):
     appdata = tmp_path / "appdata"
-    cache_path = appdata / "Fretio" / ".license_cache"
-    cache_path.parent.mkdir(parents=True)
-    cache_path.write_text(
-        json.dumps(
-            {
-                "key": "FBOT-BLOCKED",
-                "valid": False,
-                "owner": "Cliente Bloqueado",
-                "blocked": True,
-                "timestamp": time.time(),
-            }
-        ),
-        encoding="utf-8",
-    )
+    (appdata / "Fretio").mkdir(parents=True)
     monkeypatch.setenv("APPDATA", str(appdata))
+    lic._save_validation_cache(
+        "FBOT-BLOCKED",
+        lic.LicenseStatus(valid=False, owner="Cliente Bloqueado", blocked=True),
+    )
     monkeypatch.setattr(lic, "_get_license_api_url", lambda: "https://licenses.example.test/validate")
     monkeypatch.setattr(lic, "urlopen", lambda req, timeout, context=None: (_ for _ in ()).throw(URLError("offline")))
 

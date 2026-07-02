@@ -14,18 +14,24 @@
     setInfo("Processando PDF…", "info");
     const btn = document.getElementById("romSelect");
     btn.disabled = true; btn.classList.add("loading");
-    const res = await (await app.api()).romaneio_processar();
-    btn.disabled = false; btn.classList.remove("loading");
-    if (!res || res.cancelado) { setInfo("Nenhum arquivo carregado", ""); return; }
-    if (res.erro) { setInfo(res.erro, "err"); app.toast(res.erro.split("\n")[0]); return; }
+    try {
+      const res = await (await app.api()).romaneio_processar();
+      if (!res || res.cancelado) { setInfo("Nenhum arquivo carregado", ""); return; }
+      if (res.erro) { setInfo(res.erro, "err"); app.toast(res.erro.split("\n")[0]); return; }
 
-    document.getElementById("romResult").textContent = res.texto || "";
-    document.getElementById("romUse").disabled = false;
-    document.getElementById("romCopy").disabled = false;
-    app.state.romaneioTexto = res.texto || "";
-    setInfo(`OK: ${res.pedidos} pedido(s) — destino ${res.destino || "—"} (${Path_name(res.arquivo)})`, "ok");
-    app.state.subTitulo = `${res.arquivo} — ${res.pedidos} pedido(s)`;
-    document.getElementById("pageSub").textContent = app.state.subTitulo;
+      document.getElementById("romResult").textContent = res.texto || "";
+      document.getElementById("romUse").disabled = false;
+      document.getElementById("romCopy").disabled = false;
+      app.state.romaneioTexto = res.texto || "";
+      setInfo(`OK: ${res.pedidos} pedido(s) — destino ${res.destino || "—"} (${Path_name(res.arquivo)})`, "ok");
+      app.state.subTitulo = `${res.arquivo} — ${res.pedidos} pedido(s)`;
+      document.getElementById("pageSub").textContent = app.state.subTitulo;
+    } catch (e) {
+      setInfo("Nenhum arquivo carregado", "");
+      app.toast("Falha ao processar o PDF");
+    } finally {
+      btn.disabled = false; btn.classList.remove("loading");
+    }
   }
 
   function Path_name(p) { return String(p || ""); }

@@ -144,7 +144,7 @@
     detail.innerHTML = "";
     const F = window.Fmt;
     const linha = (lbl, val) => `<div class="nfe-row"><span class="nfe-row-l">${lbl}</span><span class="nfe-row-v">${F.esc(val)}</span></div>`;
-    const linkBtn = (lbl, target) => `<button class="link-btn" data-open="${F.esc(target)}" type="button">${lbl}</button>`;
+    const linkBtn = (lbl, target, kind) => `<button class="link-btn" data-open="${F.esc(target)}" data-kind="${kind}" type="button">${lbl}</button>`;
 
     if (r.erro) {
       status.className = "nfe-track-status err";
@@ -154,13 +154,13 @@
       status.textContent = "✓ ENTREGUE";
       if (r.status_texto && r.status_texto !== "ENTREGUE") detail.innerHTML += linha("Status:", r.status_texto);
       if (r.previsao_entrega) detail.innerHTML += linha("Data entrega:", r.previsao_entrega);
-      if (r.screenshot_path) detail.innerHTML += linkBtn("Abrir screenshot", r.screenshot_path);
-      if (r.link_rastreio) detail.innerHTML += linkBtn("Abrir rastreio", r.link_rastreio);
+      if (r.screenshot_path) detail.innerHTML += linkBtn("Abrir screenshot", r.screenshot_path, "file");
+      if (r.link_rastreio) detail.innerHTML += linkBtn("Abrir rastreio", r.link_rastreio, "url");
     } else {
       status.className = "nfe-track-status transito";
       status.textContent = "▣ " + (r.status_texto || "Em trânsito");
       if (r.previsao_entrega) detail.innerHTML += linha("Previsão:", r.previsao_entrega);
-      if (r.link_rastreio) detail.innerHTML += linkBtn("Abrir rastreio", r.link_rastreio);
+      if (r.link_rastreio) detail.innerHTML += linkBtn("Abrir rastreio", r.link_rastreio, "url");
     }
   }
 
@@ -183,7 +183,17 @@
       // listeners no #view a cada visita à tela.
       $("#rastCards", view).addEventListener("click", (e) => {
         const open = e.target.closest("[data-open]");
-        if (open) { app.api().then((a) => a.abrir_externo(open.getAttribute("data-open"))); return; }
+        if (open) {
+          const alvo = open.getAttribute("data-open");
+          // Defesa em profundidade: o link de rastreio vem do provider; só abre
+          // http(s) — rejeita esquemas locais/perigosos (file:, javascript:, etc.).
+          if (open.getAttribute("data-kind") === "url" && !/^https?:\/\//i.test(alvo || "")) {
+            app.toast("Link de rastreio inválido");
+            return;
+          }
+          app.api().then((a) => a.abrir_externo(alvo));
+          return;
+        }
         const copy = e.target.closest("[data-copy]");
         if (copy) {
           // Copia o texto do bloco (licitação/entrega) — selecionar no WebView2 é

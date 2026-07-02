@@ -15,7 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: app:app/fretio/src
-      QT_QPA_PLATFORM: offscreen
 
     steps:
       - name: Checkout
@@ -50,6 +49,3 @@ jobs:
       - name: Run safe unit tests
         run: >-
           python -m pytest -q
-          --deselect=test_contract_behavior.py::test_contract_parse_romaneio_colado_preserves_shipping_payload
-          --deselect=test_cotacao_validation.py::test_enabled_incomplete_provider_returns_clear_status_without_cotacao
-          --deselect=test_provider_utils.py::test_coopex_coteir_updates_current_step_before_each_phase

@@ -868,8 +868,13 @@ class AlfaProvider(ProviderBase):
 
     # ── login ─────────────────────────────────────────────────────────
 
+    _DEBUG_SCREENSHOT_RETENTION = 20
+
     async def _save_debug_screenshot(self, suffix: str = "") -> None:
-        """Salva screenshot para diagnóstico em ~/.fretebot/alfa_debug/."""
+        """Salva screenshot para diagnóstico em ~/.fretio/alfa_debug/ (só com FRETIO_DEBUG_DUMP)."""
+        # Screenshot full-page expõe CNPJ/endereço; só captura sob flag explícita.
+        if not os.environ.get("FRETIO_DEBUG_DUMP"):
+            return
         try:
             debug_dir = os.path.join(os.path.expanduser("~"), ".fretio", "alfa_debug")
             os.makedirs(debug_dir, exist_ok=True)
@@ -879,8 +884,26 @@ class AlfaProvider(ProviderBase):
             if self._page:
                 await self._page.screenshot(path=fpath, full_page=True)
                 logger.info("[ALFA] Screenshot salvo: %s", fpath)
+                self._prune_debug_screenshots(debug_dir)
         except Exception as e:
             logger.debug("[ALFA] Falha ao salvar screenshot: %s", e)
+
+    @classmethod
+    def _prune_debug_screenshots(cls, debug_dir: str) -> None:
+        try:
+            arquivos = [
+                os.path.join(debug_dir, n)
+                for n in os.listdir(debug_dir)
+                if n.startswith("alfa_") and n.endswith(".png")
+            ]
+            arquivos.sort(key=os.path.getmtime, reverse=True)
+            for antigo in arquivos[cls._DEBUG_SCREENSHOT_RETENTION:]:
+                try:
+                    os.remove(antigo)
+                except OSError:
+                    pass
+        except OSError:
+            pass
 
     async def _navegar_para_cotacao(self) -> bool:
         """Navega para o formulário de cotação: card 'Painel de Cotações' → botão 'Nova Cotação'."""

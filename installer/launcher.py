@@ -32,6 +32,17 @@ try:
 except ImportError:
     _HAS_TK = False
 
+try:
+    # Em runtime frozen o módulo vem no bundle (launcher.spec). O fallback mantém
+    # o comportamento fail-closed: sem verificação disponível, nenhum ZIP é instalado.
+    from update_security import UpdateSignatureError, verify_update_signature
+except Exception:  # pragma: no cover
+    class UpdateSignatureError(Exception):
+        pass
+
+    def verify_update_signature(zip_path, signature_path, public_key_b64=None):
+        raise UpdateSignatureError("Verificação de assinatura indisponível no launcher.")
+
 GITHUB_REPOS = (
     "kaianesteffens/RomaneioBeta",
     "kaianesteffens/RomaneioBeta-releases",
@@ -329,6 +340,16 @@ def _select_zip_asset(assets) -> dict | None:
     return min(zip_assets, key=_rank)
 
 
+def _select_signature_asset(assets, zip_asset) -> dict | None:
+    if not zip_asset:
+        return None
+    target = f"{zip_asset.get('name', '')}.sig".lower()
+    for asset in assets or []:
+        if str(asset.get("name", "")).lower() == target:
+            return asset
+    return None
+
+
 def _resolve_latest_release():
     for repo in _load_repo_candidates():
         try:
@@ -515,13 +536,16 @@ def _worker(win: "_Window | None") -> None:
                 f"Release remota encontrada, mas nenhum asset ZIP de update foi localizado. Log: {LOG_PATH}"
             )
 
+        installed = False
         if needs_dl and zip_asset:
             ver_str = remote_ver or "?"
             source_label = f" ({release_repo})" if release_repo else ""
             label(f"Baixando Fretio v{ver_str}{source_label}...")
             progress(0)
 
-            tmp = Path(os.environ.get("TEMP", app_dir.parent)) / "_romaneio_launcher.zip"
+            temp_root = Path(os.environ.get("TEMP", app_dir.parent))
+            tmp = temp_root / "_romaneio_launcher.zip"
+            sig_tmp = temp_root / "_romaneio_launcher.zip.sig"
             _download(
                 zip_asset["browser_download_url"],
                 tmp,
@@ -531,26 +555,58 @@ def _worker(win: "_Window | None") -> None:
             )
             _log("ZIP baixado: %s", tmp)
 
-            label("Instalando...")
-            status("Extraindo arquivos...")
-            progress(96)
-
-            _safe_extract_zip_to_app(tmp, app_dir)
-            _log("Caminho final de extração: %s", app_dir)
-
+            # Verifica a assinatura Ed25519 ANTES de extrair (fail-closed): o
+            # updater.py assinado não pode ser contornado por este caminho.
+            label("Verificando assinatura...")
             try:
-                tmp.unlink()
-            except OSError:
-                pass
-
-            app_exe = _resolve_app_exe(app_dir)
-            if not _is_valid_app_dir(app_dir):
-                raise FileNotFoundError(
-                    f"Update instalado sem executável/version.txt válido em {app_dir}"
+                sig_asset = _select_signature_asset(release.get("assets", []), zip_asset)
+                if sig_asset is None:
+                    raise UpdateSignatureError("Asset de assinatura (.sig) ausente na release.")
+                _download(
+                    sig_asset["browser_download_url"],
+                    sig_tmp,
+                    sig_asset.get("size", 0),
+                    status,
+                    progress,
                 )
-            progress(100)
-            status(f"v{ver_str} instalado com sucesso!")
-        else:
+                verify_update_signature(tmp, sig_tmp)
+                _log("Assinatura Ed25519 do update verificada.")
+            except Exception:
+                _log_exception("Falha na verificação de assinatura do update; instalação abortada")
+                for _p in (tmp, sig_tmp):
+                    try:
+                        _p.unlink()
+                    except OSError:
+                        pass
+                if not local_valid:
+                    raise UpdateSignatureError(
+                        f"Não foi possível verificar a assinatura da atualização e não há versão local válida. Log: {LOG_PATH}"
+                    )
+                _log("Update rejeitado pela assinatura; abrindo versão local válida.")
+            else:
+                label("Instalando...")
+                status("Extraindo arquivos...")
+                progress(96)
+
+                _safe_extract_zip_to_app(tmp, app_dir)
+                _log("Caminho final de extração: %s", app_dir)
+
+                for _p in (tmp, sig_tmp):
+                    try:
+                        _p.unlink()
+                    except OSError:
+                        pass
+
+                app_exe = _resolve_app_exe(app_dir)
+                if not _is_valid_app_dir(app_dir):
+                    raise FileNotFoundError(
+                        f"Update instalado sem executável/version.txt válido em {app_dir}"
+                    )
+                progress(100)
+                status(f"v{ver_str} instalado com sucesso!")
+                installed = True
+
+        if not installed:
             label("Fretio está atualizado!")
             status(f"Versão {local_ver} — abrindo...")
 

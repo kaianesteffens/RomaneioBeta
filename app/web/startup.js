@@ -47,10 +47,15 @@ function renderLicenca(aviso) {
   key.focus();
   $("#suAtivar").addEventListener("click", async () => {
     const btn = $("#suAtivar"); btn.disabled = true;
-    const r = await (await apiBridge()).startup_ativar_licenca(key.value);
-    btn.disabled = false;
-    if (r && r.ok) posLicenca();
-    else renderLicenca(r ? r.msg : "Falha na ativação");
+    try {
+      const r = await (await apiBridge()).startup_ativar_licenca(key.value);
+      if (r && r.ok) posLicenca();
+      else renderLicenca(r ? r.msg : "Falha na ativação");
+    } catch (e) {
+      toast("Falha na ativação");
+    } finally {
+      btn.disabled = false;
+    }
   });
 }
 
@@ -137,15 +142,21 @@ async function renderEmpresas() {
   });
   $("#suEntrar").addEventListener("click", async () => {
     if (!empresaSel) return;
-    const r = await (await apiBridge()).startup_entrar(empresaSel);
-    if (r && r.ok) {
-      // Navega só DEPOIS do await — o backend resolveu o callback de retorno do
-      // pywebview, então trocar a página agora não deixa callback órfão. Navegar
-      // no Python (load_url) correria com essa resolução e dispararia
-      // JavascriptException ('_returnValuesCallbacks.abrir_app.<id> is not a function').
-      const nav = await (await apiBridge()).abrir_app();
-      window.location.assign((nav && nav.navegar) || "index.html");
-    } else toast((r && r.erro) || "Falha ao entrar");
+    const btn = $("#suEntrar"); btn.disabled = true;
+    try {
+      const r = await (await apiBridge()).startup_entrar(empresaSel);
+      if (r && r.ok) {
+        // Navega só DEPOIS do await — o backend resolveu o callback de retorno do
+        // pywebview, então trocar a página agora não deixa callback órfão. Navegar
+        // no Python (load_url) correria com essa resolução e dispararia
+        // JavascriptException ('_returnValuesCallbacks.abrir_app.<id> is not a function').
+        const nav = await (await apiBridge()).abrir_app();
+        window.location.assign((nav && nav.navegar) || "index.html");
+      } else { toast((r && r.erro) || "Falha ao entrar"); btn.disabled = false; }
+    } catch (e) {
+      toast("Falha ao entrar");
+      btn.disabled = false;
+    }
   });
 }
 

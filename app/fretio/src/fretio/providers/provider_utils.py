@@ -16,6 +16,22 @@ def _digits(value: str) -> str:
     return re.sub(r"\D", "", str(value or ""))
 
 
+def _sanitize_ssw_xml_excerpt(xml: str, *, limit: int = 300) -> str:
+    """Excerpt sanitizado de XML do SSW para log de diagnóstico.
+
+    Mascara CNPJ/CPF (formatados ou só dígitos) e limita o tamanho para não
+    despejar o XML bruto — que pode conter documentos do remetente/destinatário —
+    nos logs, que são enviados ao servidor.
+    """
+    text = re.sub(r"(?is)<[^>]+>", " ", str(xml or ""))
+    text = re.sub(r"(?<!\d)\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}(?!\d)", "***", text)
+    text = re.sub(r"(?<!\d)\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?!\d)", "***", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > limit:
+        return text[:limit].rstrip() + "..."
+    return text
+
+
 def _fmt_decimal(
     value: float,
     decimals: int = 2,
