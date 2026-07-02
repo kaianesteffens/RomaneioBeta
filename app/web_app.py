@@ -539,38 +539,16 @@ class RastreioMixin:
             })
 
         try:
-            from usage_reporter import report_tracking_started, report_tracking_finished
-        except Exception:
-            def report_tracking_started(*a, **k):
-                pass
-
-            def report_tracking_finished(*a, **k):
-                pass
-
-        try:
-            report_tracking_started(metadata={"total": len(notas_track)})
-        except Exception:
-            pass
-
-        try:
             resultados = await rastrear_multiplas(notas_track, callback=_cb)
             entregues = sum(1 for r in resultados if getattr(r, "entregue", False))
             com_ss = sum(1 for r in resultados if getattr(r, "screenshot_path", ""))
             self._emit("rastreio_finished", {
                 "total": len(resultados), "entregues": entregues, "screenshots": com_ss,
             })
-            try:
-                report_tracking_finished("ok", metadata={"total": len(resultados), "entregues": entregues})
-            except Exception:
-                pass
         except Exception as exc:
             self._emit("rastreio_finished", {
                 "total": 0, "entregues": 0, "screenshots": 0, "erro": str(exc),
             })
-            try:
-                report_tracking_finished("error", metadata={"erro": type(exc).__name__})
-            except Exception:
-                pass
         finally:
             self._rastreando = False
 
@@ -749,11 +727,6 @@ class RomaneioMixin:
             "volumes": len(pedidos),
         })
         self._romaneio_texto = texto
-        try:
-            from usage_reporter import report_romaneio_processed
-            report_romaneio_processed("ok", metadata={"pedidos": len(pedidos)})
-        except Exception:
-            pass
         return {
             "ok": True, "texto": texto, "arquivo": Path(arq).name,
             "pedidos": len(pedidos), "destino": destino,
@@ -927,12 +900,6 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin)
         base = len(self._notas)
         self._notas.extend(novas)
         cards = [nota_card(base + i + 1, nf) for i, nf in enumerate(novas)]
-        if novas:
-            try:
-                from usage_reporter import report_nfe_imported
-                report_nfe_imported("ok", metadata={"quantidade": len(novas)})
-            except Exception:
-                pass
         return {"cards": cards, "erros": erros, "total_notas": len(self._notas)}
 
     def nfe_cards(self) -> dict:
@@ -1164,11 +1131,6 @@ def _run_producao() -> None:
     cont, _logger = run_process_startup()
     if not cont:
         return
-    try:
-        from usage_reporter import report_app_started
-        report_app_started()
-    except Exception:
-        pass
 
     # Cliente que atualizou in-app (Qt->WebView2) sem o runtime WebView2: abrir a
     # janela daria tela em branco. Avisa com instruções e não inicia, em vez de
