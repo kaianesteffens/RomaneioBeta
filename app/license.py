@@ -7,6 +7,7 @@ Fallback legado temporário: leitura de licenças via GitHub Gist.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -94,9 +95,8 @@ def get_machine_id() -> str:
     # Serial do volume C:
     try:
         result = subprocess.run(
-            ["vol", "C:"],
+            ["cmd", "/c", "vol", "C:"],
             capture_output=True, text=True, timeout=10,
-            shell=True,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         for line in result.stdout.strip().splitlines():
@@ -245,8 +245,16 @@ def _get_gist_url() -> str:
     return _get_config_value("license_url")
 
 
+def _require_web_url(url: str) -> None:
+    """Rejeita esquemas não-web (file://, ftp://, data:...) antes de urlopen."""
+    scheme = urlparse(str(url or "")).scheme.lower()
+    if scheme not in ("http", "https"):
+        raise URLError(f"Esquema de URL não permitido: {scheme or 'vazio'}")
+
+
 def _fetch_licenses(gist_url: str) -> dict:
     """Busca o JSON de licenças do gist remoto."""
+    _require_web_url(gist_url)
     req = Request(gist_url, headers={
         "Accept": "application/json",
         "User-Agent": "Fretio-License/1.0",
@@ -255,8 +263,22 @@ def _fetch_licenses(gist_url: str) -> dict:
         return json.loads(resp.read())
 
 
+# Pepper embutido: combinado ao machine_id, prende o cache offline à máquina e
+# impede edição manual/cópia entre máquinas do arquivo .license_cache.
+_CACHE_HMAC_PEPPER = b"fretio-license-cache-v1"
+
+
+def _cache_signature(payload: str, machine_id: str) -> str:
+    return hmac.new(
+        _CACHE_HMAC_PEPPER + machine_id.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
 def _save_validation_cache(key: str, status: LicenseStatus) -> None:
-    """Salva cache da última validação bem-sucedida."""
+    """Salva cache da última validação bem-sucedida, assinado (HMAC) e preso à máquina."""
+    machine_id = get_machine_id()
     data = {
         "key": key,
         "valid": status.valid,
@@ -264,14 +286,17 @@ def _save_validation_cache(key: str, status: LicenseStatus) -> None:
         "blocked": status.blocked,
         "expires": status.expires,
         "timestamp": time.time(),
+        "machine_id": machine_id,
     }
+    payload = json.dumps(data, sort_keys=True, ensure_ascii=False)
+    data["sig"] = _cache_signature(payload, machine_id)
     _validation_cache_file().write_text(json.dumps(data), encoding="utf-8")
 
 
 def _load_validation_cache(key: str) -> Optional[LicenseStatus]:
     """
     Carrega validação em cache se ainda dentro do período de graça.
-    Retorna None se cache expirado ou inexistente.
+    Retorna None se cache expirado, inexistente, adulterado ou de outra máquina.
     """
     f = _validation_cache_file()
     if not f.exists():
@@ -279,6 +304,19 @@ def _load_validation_cache(key: str) -> Optional[LicenseStatus]:
     try:
         data = json.loads(f.read_text(encoding="utf-8"))
         if data.get("key") != key:
+            return None
+        machine_id = get_machine_id()
+        if data.get("machine_id") != machine_id:
+            return None
+        sig = data.get("sig")
+        if not sig:
+            return None
+        payload = json.dumps(
+            {k: v for k, v in data.items() if k != "sig"},
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        if not hmac.compare_digest(str(sig), _cache_signature(payload, machine_id)):
             return None
         age_days = (time.time() - data.get("timestamp", 0)) / 86400
         if age_days > _GRACE_DAYS:
