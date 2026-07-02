@@ -268,8 +268,6 @@ jobs:
           $assetMap = @(
             @{ Source = "installer\installer\Fretio-Setup-$ver.exe"; RepoName = "Fretio-Setup-latest.exe"; ReleaseName = "Fretio-Setup-latest.exe" },
             @{ Source = "installer\installer\Fretio-Update-$ver.zip"; RepoName = "Fretio-Update-latest.zip"; ReleaseName = "Fretio-Update-latest.zip" },
-            @{ Source = "installer\installer\Fretio-Setup-$ver.exe"; RepoName = "FreteBot-Setup-latest.exe"; ReleaseName = "FreteBot-Setup-latest.exe" },
-            @{ Source = "installer\installer\Fretio-Update-$ver.zip"; RepoName = "FreteBot-Update-latest.zip"; ReleaseName = "FreteBot-Update-latest.zip" },
             @{ Source = "installer\installer\Romaneio.exe"; RepoName = "Romaneio.exe"; ReleaseName = "Romaneio.exe" }
           )
           $committedAssets = @()
@@ -305,9 +303,6 @@ jobs:
               "Fretio-Setup-latest.exe",
               "Fretio-Update-latest.zip",
               "Fretio-Update-latest.zip.sig",
-              "FreteBot-Setup-latest.exe",
-              "FreteBot-Update-latest.zip",
-              "FreteBot-Update-latest.zip.sig",
               "Romaneio.exe"
             )
             committed_repo_assets = $committedAssets
@@ -336,9 +331,7 @@ jobs:
           $targets = @(
             "installer\installer\Fretio-Update-$ver.zip",
             "installer\release-assets\Fretio-Update-latest.zip",
-            "installer\release-assets\FreteBot-Update-latest.zip",
-            "installer\repository-assets\Fretio-Update-latest.zip",
-            "installer\repository-assets\FreteBot-Update-latest.zip"
+            "installer\repository-assets\Fretio-Update-latest.zip"
           )
           foreach ($target in $targets) {
             if (Test-Path $target) {
@@ -385,15 +378,9 @@ jobs:
         run: |
           $ver = "${{ steps.meta.outputs.version }}"
           $tag = "v$ver"
-          $zip = "installer/installer/Fretio-Update-$ver.zip"
-          $setup = "installer/installer/Fretio-Setup-$ver.exe"
           $zipLatest = "installer/release-assets/Fretio-Update-latest.zip"
           $zipLatestSig = "installer/release-assets/Fretio-Update-latest.zip.sig"
-          $zipLatestLegacy = "installer/release-assets/FreteBot-Update-latest.zip"
-          $zipLatestLegacySig = "installer/release-assets/FreteBot-Update-latest.zip.sig"
           $setupLatest = "installer/release-assets/Fretio-Setup-latest.exe"
-          $setupLatestLegacy = "installer/release-assets/FreteBot-Setup-latest.exe"
-          $zipSig = "$zip.sig"
           $releaseRepo = $env:RELEASE_REPO
 
           gh release view $tag --repo $releaseRepo 2>$null
@@ -413,14 +400,14 @@ jobs:
           }
 
           $launcher = "installer/installer/Romaneio.exe"
-          $requiredAssets = @($zip, $zipSig, $setup, $launcher, $zipLatest, $zipLatestSig, $zipLatestLegacy, $zipLatestLegacySig, $setupLatest, $setupLatestLegacy)
+          $requiredAssets = @($setupLatest, $zipLatest, $zipLatestSig, $launcher)
           foreach ($assetPath in $requiredAssets) {
             if (!(Test-Path $assetPath)) {
               throw "Artefato obrigatorio ausente; release oficial abortada: $assetPath"
             }
           }
 
-          gh release upload $tag $zip $zipSig $setup $launcher $zipLatest $zipLatestSig $zipLatestLegacy $zipLatestLegacySig $setupLatest $setupLatestLegacy `
+          gh release upload $tag $setupLatest $zipLatest $zipLatestSig $launcher `
             --repo $releaseRepo `
             --clobber
 
