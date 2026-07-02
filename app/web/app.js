@@ -88,6 +88,7 @@ async function toggleTema() {
 /* ── Toast ─────────────────────────────────────────────────────────────── */
 let _toastTimer = null;
 function toast(msg) {
+  if (!msg) return;
   const el = $("#toast");
   el.textContent = msg;
   el.classList.add("show");

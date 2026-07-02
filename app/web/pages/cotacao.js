@@ -22,7 +22,14 @@
     // op presa) apagaria o resultado anterior já concluído nesta sessão.
     const btn = document.getElementById("cotStart");
     btn.disabled = true; btn.classList.add("loading");
-    const res = await (await app.api()).cotacao_iniciar(texto);
+    let res;
+    try {
+      res = await (await app.api()).cotacao_iniciar(texto);
+    } catch (e) {
+      finalizar(app);
+      app.toast("Falha ao iniciar a cotação");
+      return;
+    }
     if (res && res.erro) { app.toast(res.erro); btn.disabled = false; btn.classList.remove("loading"); return; }
     // Backend aceitou: agora sim marca em andamento, vira dono e zera o anterior.
     running = true;

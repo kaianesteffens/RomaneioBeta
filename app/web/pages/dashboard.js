@@ -15,12 +15,13 @@
         ? { label: "Sucesso cotação", bar: "amber", sub: "aguardando retorno" }
         : { label: "Sucesso cotação", value: sucesso + "%", valueClass: "amber", sub: d.sub_sucesso || "" },
     ];
+    const F = window.Fmt;
     return cards.map((c) => `
       <div class="kpi">
         <div class="kpi-label">${c.label}</div>
         ${c.bar ? `<div class="kpi-bar ${c.bar}"></div>`
-                : `<div class="kpi-value ${c.valueClass || ""}">${c.value}</div>`}
-        <div class="kpi-sub">${c.sub}</div>
+                : `<div class="kpi-value ${c.valueClass || ""}">${F.esc(c.value)}</div>`}
+        <div class="kpi-sub">${F.esc(c.sub)}</div>
       </div>`).join("");
   }
 
