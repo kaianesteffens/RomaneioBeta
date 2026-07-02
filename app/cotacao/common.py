@@ -28,54 +28,17 @@ except Exception:
     def report_error_message(*a, **kw): pass
     def report_error_payload(*a, **kw): pass
 
-try:
-    from usage_reporter import (
-        report_carrier_quotation_result,
-        report_quotation_finished,
-        report_quotation_started,
-    )
-except Exception:
-    def report_carrier_quotation_result(*a, **kw): return {"sent": False}
-    def report_quotation_finished(*a, **kw): return {"sent": False}
-    def report_quotation_started(*a, **kw): return {"sent": False}
+from remote_permissions import (
+    CARRIER_DISABLED_MESSAGE,
+    KNOWN_CARRIERS,
+    carrier_enabled_or_message,
+    normalize_carrier_name,
+)
 
-try:
-    from quotation_jobs_client import create_quotation_job, update_quotation_job_result
-except Exception:
-    def create_quotation_job(*a, **kw): return {"created": False, "job_id": None}
-    def update_quotation_job_result(*a, **kw): return {"updated": False}
 
-try:
-    from remote_config import apply_safe_runtime_overrides
-except Exception:
-    def apply_safe_runtime_overrides(config):
-        return dict(config) if isinstance(config, dict) else {}
-
-try:
-    from remote_permissions import (
-        CARRIER_DISABLED_MESSAGE,
-        KNOWN_CARRIERS,
-        carrier_enabled_or_message,
-        normalize_carrier_name,
-    )
-except Exception:
-    CARRIER_DISABLED_MESSAGE = "Esta transportadora foi desabilitada pela configuração da licença."
-    KNOWN_CARRIERS = (
-        "braspress",
-        "trd",
-        "agex",
-        "eucatur",
-        "rodonaves",
-        "alfa",
-        "coopex",
-        "translovato",
-    )
-
-    def carrier_enabled_or_message(carrier):
-        return True, ""
-
-    def normalize_carrier_name(carrier):
-        return str(carrier or "").strip().lower()
+def apply_safe_runtime_overrides(config):
+    # Sem servidor de configuração remota: usa a config local como está.
+    return dict(config) if isinstance(config, dict) else {}
 
 # Inicializar logging dos providers
 try:
@@ -392,7 +355,6 @@ __all__ = [
     "apply_safe_runtime_overrides",
     "carrier_enabled_or_message",
     "carrier_login_indicator_from_progress_payload",
-    "create_quotation_job",
     "get_logger",
     "normalize_carrier_name",
     "normalize_provider_progress_message",
@@ -400,12 +362,8 @@ __all__ = [
     "provider_progress_from_resultado",
     "quote_request_from_legacy_kwargs",
     "quote_response_to_resultado_cotacao",
-    "report_carrier_quotation_result",
     "report_error",
     "report_error_message",
     "report_error_payload",
-    "report_quotation_finished",
-    "report_quotation_started",
     "setup_logging",
-    "update_quotation_job_result",
 ]

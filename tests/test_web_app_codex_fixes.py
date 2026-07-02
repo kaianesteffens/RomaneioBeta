@@ -182,36 +182,6 @@ def test_startup_aplicar_update_no_update_returns_error_without_exit():
     assert r.get("ok") is False
 
 
-# --- Fix [P2]: telemetria restaurada nos fluxos web ----------------------------
-
-def test_coro_rastreio_reports_tracking_usage_events(monkeypatch):
-    import asyncio
-    import rastreamento
-    import extrator_nfe
-    import usage_reporter
-    eventos = []
-
-    async def fake_rastrear(notas, callback=None):
-        return []
-
-    monkeypatch.setattr(rastreamento, "rastrear_multiplas", fake_rastrear)
-    monkeypatch.setattr(extrator_nfe, "identificar_transportadora", lambda nf: "X")
-    monkeypatch.setattr(usage_reporter, "report_tracking_started", lambda metadata=None: eventos.append("started"))
-    monkeypatch.setattr(usage_reporter, "report_tracking_finished", lambda status, **k: eventos.append(("finished", status)))
-
-    api = _api()
-    api._emit = lambda *a, **k: None
-
-    class _NF:
-        numero = "1"
-        emitente_cnpj = "x"
-        chave_acesso = "abc"
-
-    asyncio.run(api._coro_rastreio([_NF()]))
-    assert "started" in eventos
-    assert ("finished", "ok") in eventos
-
-
 # --- Fix [P2]: cards de NF-e sobrevivem à navegação (reload do backend) --------
 
 def test_nfe_cards_rebuilds_from_notas(monkeypatch):

@@ -60,11 +60,6 @@ _GITHUB_REPO_ALIAS_ENV_VARS = (
     "FRETEBOT_GITHUB_REPO_ALIASES",
     "Fretio_GITHUB_REPO_ALIASES",
 )
-_VERSION_API_URL_ENV_VARS = (
-    "FRETIO_VERSION_API_URL",
-    "FRETEBOT_VERSION_API_URL",
-    "Fretio_VERSION_API_URL",
-)
 _GITHUB_REPO_CONFIG_SECTIONS = ("fretio", "fretebot", "romaneio")
 _PREFERRED_UPDATE_ASSET_NAMES = (
     "fretio-update-latest.zip",
@@ -176,17 +171,6 @@ def _github_api(url: str) -> Any:
     _require_web_url(url)
     req = Request(url, headers={
         "Accept": "application/vnd.github+json",
-        "User-Agent": "Fretio-Updater/1.0",
-    })
-    with urlopen(req, timeout=_HTTP_TIMEOUT, context=_ssl_context()) as resp:
-        return json.loads(resp.read())
-
-
-def _version_api(url: str) -> Any:
-    """Faz GET no endpoint publico de versao e retorna JSON."""
-    _require_web_url(url)
-    req = Request(url, headers={
-        "Accept": "application/json",
         "User-Agent": "Fretio-Updater/1.0",
     })
     with urlopen(req, timeout=_HTTP_TIMEOUT, context=_ssl_context()) as resp:
@@ -381,40 +365,6 @@ def get_repo_candidates_from_config() -> list[str]:
     return _dedupe_repos(repos)
 
 
-def get_version_api_url_from_config() -> str:
-    """Le o endpoint publico opcional para descoberta de versao."""
-    for env_name in _VERSION_API_URL_ENV_VARS:
-        value = str(os.environ.get(env_name, "") or "").strip()
-        if value:
-            return value
-
-    try:
-        config_paths: list[Path] = []
-        appdata = os.getenv("APPDATA")
-        if appdata:
-            config_paths.append(Path(appdata) / "Fretio" / "CONFIG.toml")
-            config_paths.append(Path(appdata) / "FreteBot" / "CONFIG.toml")
-        base = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
-        config_paths.append(base / "CONFIG.toml")
-        if base != Path(__file__).parent:
-            config_paths.append(Path(__file__).parent / "CONFIG.toml")
-
-        for cp in config_paths:
-            if not cp.exists():
-                continue
-            cfg = _load_toml_file(cp)
-            for section_name in _GITHUB_REPO_CONFIG_SECTIONS:
-                section = cfg.get(section_name, {})
-                if not isinstance(section, dict):
-                    continue
-                value = str(section.get("version_api_url", "") or "").strip()
-                if value:
-                    return value
-    except Exception:
-        pass
-    return ""
-
-
 def get_repo_from_config() -> str:
     """Lê o primeiro repositório GitHub configurado para auto-update."""
     candidates = get_repo_candidates_from_config()
@@ -429,71 +379,20 @@ def _resolve_repo_candidates(repo: str | Sequence[str] | None) -> list[str]:
     return _dedupe_repos(repos)
 
 
-def _asset_name_from_download_url(download_url: str) -> str:
-    parsed = urlparse(download_url)
-    name = Path(parsed.path).name.strip()
-    return name or "update.zip"
-
-
-def _check_server_version(
-    version_api_url: str,
-    current_version: str,
-) -> Optional[UpdateInfo]:
-    data = _version_api(version_api_url)
-    if not isinstance(data, dict):
-        raise ValueError("Resposta invalida do endpoint de versao.")
-
-    latest_version = str(data.get("latest_version", "") or "").strip()
-    download_url = str(data.get("download_url", "") or "").strip()
-    if not latest_version or not download_url:
-        raise ValueError("Endpoint de versao nao retornou latest_version/download_url.")
-
-    local_ver = _parse_version(current_version)
-    remote_ver = _parse_version(latest_version)
-    if remote_ver <= local_ver:
-        _log("Endpoint de versao sem update: latest=%s", latest_version)
-        return None
-
-    asset_name = _asset_name_from_download_url(download_url)
-    return UpdateInfo(
-        tag=latest_version,
-        version=latest_version.lstrip("vV").strip(),
-        download_url=download_url,
-        asset_name=asset_name,
-        asset_size=int(data.get("asset_size", 0) or 0),
-        release_notes=str(data.get("release_notes", "") or ""),
-        html_url=str(data.get("html_url", "") or ""),
-        source_repo="version_api",
-        mandatory=bool(data.get("mandatory", False)),
-        source="server",
-    )
-
-
 def check_for_update(
     repo: str | Sequence[str] | None,
     current_version: str,
-    version_api_url: str | None = None,
 ) -> Optional[UpdateInfo]:
     """
-    Verifica se há uma versão mais nova no endpoint publico ou no GitHub.
+    Verifica se há uma versão mais nova nas GitHub Releases.
 
     Args:
         repo: "owner/repo" ou lista de aliases para fallback GitHub
         current_version: versão atual (ex: "1.21")
-        version_api_url: endpoint publico opcional para descoberta de versao
 
     Returns:
         UpdateInfo se houver atualização, None caso contrário.
     """
-    resolved_version_api_url = (version_api_url or get_version_api_url_from_config()).strip()
-    if resolved_version_api_url:
-        try:
-            _log("Consultando endpoint publico de versao: %s", resolved_version_api_url)
-            server_info = _check_server_version(resolved_version_api_url, current_version)
-            return server_info
-        except (URLError, OSError, json.JSONDecodeError, ValueError):
-            _log_exception("Falha ao consultar endpoint publico de versao; tentando GitHub Releases")
-
     repo_candidates = _resolve_repo_candidates(repo)
     _log("=" * 60)
     _log("Verificando atualização | versão atual=%s", current_version)

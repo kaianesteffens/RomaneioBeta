@@ -1,11 +1,15 @@
+"""Registro e normalização de transportadoras (sem dependência de servidor).
+
+Antes lia permissões/feature-flags da configuração remota do servidor; sem o
+servidor, tudo fica habilitado. A normalização de nomes de transportadora (com
+aliases) é lógica pura e permanece — vários módulos dependem dela para casar o
+nome do provider com a seção de configuração.
+"""
 from __future__ import annotations
 
-import logging
 import unicodedata
 from collections.abc import Iterable
 from typing import Any
-
-from remote_config import get_effective_remote_config, is_carrier_enabled, is_feature_allowed
 
 
 KNOWN_CARRIERS = (
@@ -19,16 +23,7 @@ KNOWN_CARRIERS = (
     "translovato",
 )
 
-FEATURE_MESSAGES = {
-    "cotacao": "Este módulo foi desabilitado pela configuração da licença.",
-    "rastreio": "Este módulo foi desabilitado pela configuração da licença.",
-    "nfe": "Este módulo foi desabilitado pela configuração da licença.",
-    "romaneio": "Este módulo foi desabilitado pela configuração da licença.",
-}
-
-CARRIER_DISABLED_MESSAGE = "Esta transportadora foi desabilitada pela configuração da licença."
-
-_LOGGER = logging.getLogger("remote_permissions")
+CARRIER_DISABLED_MESSAGE = "Esta transportadora foi desabilitada pela configuração."
 
 
 def _fold(value: Any) -> str:
@@ -73,69 +68,28 @@ def normalize_feature_name(feature: Any) -> str:
 
 
 def feature_allowed_or_default(feature: str) -> bool:
-    feature_name = normalize_feature_name(feature)
-    if not feature_name:
-        return True
-    try:
-        return bool(is_feature_allowed(feature_name))
-    except Exception as exc:
-        _LOGGER.warning("Falha ao ler permissao remota da feature %s: %s", feature_name, exc)
-        return True
+    return True
 
 
 def feature_message(feature: str) -> str:
-    feature_name = normalize_feature_name(feature)
-    return FEATURE_MESSAGES.get(
-        feature_name,
-        "Este módulo foi desabilitado pela configuração da licença.",
-    )
+    return "Este módulo foi desabilitado pela configuração."
 
 
 def ensure_feature_allowed(feature: str, parent=None) -> bool:
-    feature_name = normalize_feature_name(feature)
-    if feature_allowed_or_default(feature_name):
-        return True
-
-    _LOGGER.info("Feature bloqueada por configuracao remota: %s", feature_name)
-    # A UI (web) exibe a mensagem de feature_message(); este helper apenas decide.
-    return False
+    return True
 
 
 def carrier_enabled_or_message(carrier: Any) -> tuple[bool, str]:
-    carrier_name = normalize_carrier_name(carrier)
-    if not carrier_name:
-        return True, ""
-    try:
-        enabled = bool(is_carrier_enabled(carrier_name))
-    except Exception as exc:
-        _LOGGER.warning("Falha ao ler permissao remota da transportadora %s: %s", carrier_name, exc)
-        return True, ""
-    if enabled:
-        return True, ""
-    _LOGGER.info("Transportadora bloqueada por configuracao remota: %s", carrier_name)
-    return False, CARRIER_DISABLED_MESSAGE
+    return True, ""
 
 
 def filter_enabled_carriers(carriers: Iterable[Any]) -> list[Any]:
-    enabled: list[Any] = []
-    for carrier in carriers:
-        allowed, _message = carrier_enabled_or_message(carrier)
-        if allowed:
-            enabled.append(carrier)
-    return enabled
+    return list(carriers)
 
 
 def enabled_carriers_from_config() -> list[str]:
-    config = get_effective_remote_config()
-    carriers = config.get("carriers_enabled", {}) if isinstance(config, dict) else {}
-    if not isinstance(carriers, dict):
-        return list(KNOWN_CARRIERS)
-    return [name for name in KNOWN_CARRIERS if bool(carriers.get(name, True))]
+    return list(KNOWN_CARRIERS)
 
 
 def disabled_carriers_from_config() -> list[str]:
-    config = get_effective_remote_config()
-    carriers = config.get("carriers_enabled", {}) if isinstance(config, dict) else {}
-    if not isinstance(carriers, dict):
-        return []
-    return [name for name in KNOWN_CARRIERS if not bool(carriers.get(name, True))]
+    return []

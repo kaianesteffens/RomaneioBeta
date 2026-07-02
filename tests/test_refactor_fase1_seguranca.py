@@ -19,25 +19,6 @@ def test_config_digits_resolvivel_no_modulo():
     assert config._digits("12.345.678/0001-90") == "12345678000190"
 
 
-def test_jobs_client_count_non_empty_lines_normaliza_br():
-    from cotacao import jobs_client
-    assert hasattr(jobs_client, "_normalizar_romaneio_colado")
-    # <br> deve virar quebra de linha => 3 linhas (antes do fix caía no fallback => 1).
-    assert jobs_client._count_non_empty_lines("a<br>b<br>c") == 3
-
-
-# ── Vazamento ativo: mensagem por transportadora ia crua para o servidor ────
-def test_safe_outbound_message_remove_dados_sensiveis():
-    from cotacao import jobs_client
-    bruto = "ENTREGA cnpj 12.345.678/0001-90 contato joao@example.com <b>RUA X</b>"
-    limpo = jobs_client._safe_outbound_message(bruto)
-    assert "12.345.678/0001-90" not in limpo
-    assert "joao@example.com" not in limpo
-    assert "<b>" not in limpo and "</b>" not in limpo
-    assert isinstance(limpo, str)
-
-
-# ── Sanitizadores reforçados ────────────────────────────────────────────────
 def test_error_reporter_redige_chave_nfe_44_digitos():
     from error_reporter import sanitize_error_payload
     chave = "1" * 44

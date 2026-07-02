@@ -2,44 +2,28 @@
 
 Checklist operacional para publicar uma versão liberável sem quebrar instalações antigas.
 
-## Escopo da versão 2.32
+## Escopo
 
-- Desktop usa server quando `license_api_url`, `license_config_api_url`, `version_api_url`, `error_api_url`, `usage_api_url` e endpoints de cotação estiverem configurados.
-- Desktop antigo ou instalação sem server continua validando pelo Gist legado via `license_url`.
-- Server offline não bloqueia uso quando existe cache de licença válido dentro do período de graça.
-- Configuração remota ausente, inválida ou offline não quebra a inicialização nem a cotação local.
+- O app é standalone: não há servidor, licenciamento nem configuração remota.
+- Versão/update é descoberta 100% via GitHub Releases do próprio repositório.
+- Configuração é sempre local (`CONFIG.toml`); a inicialização e a cotação local não dependem de rede além dos portais das transportadoras.
 
 ## Pré-release
 
-- Server: confirmar `alembic upgrade head` em banco limpo e banco com versão anterior.
-- Server: confirmar que `start.sh` está executável e roda `alembic upgrade head` antes do Uvicorn.
-- Server: revisar `README.md`, `docs/DEPLOY_COOLIFY.md`, `docs/BACKUP.md` e `.env.example`.
-- Server: criar backup PostgreSQL antes de aplicar migrations em produção.
-- Desktop: confirmar `app/version.txt` com a versão da release.
-- Desktop: atualizar `CHANGELOG.md`.
-- Desktop: confirmar que `CONFIG.toml`, `.env`, tokens, dumps e backups não aparecem no diff.
-- Desktop: confirmar que exemplos e testes usam documentos fictícios ou sanitizados.
+- Confirmar `app/version.txt` com a versão da release.
+- Atualizar `CHANGELOG.md`.
+- Confirmar que `CONFIG.toml`, `.env`, tokens, dumps e backups não aparecem no diff.
+- Confirmar que exemplos e testes usam documentos fictícios ou sanitizados.
 
 ## Validações locais
 
 ```bash
-cd RomaneioBeta-server
-env ADMIN_TOKEN=test-admin-token DATABASE_URL=sqlite+pysqlite:////tmp/romaneio-release-server.db PYTHONPATH=. pytest
-alembic upgrade head
-sh -n start.sh
-
-cd ../RomaneioBeta
+cd RomaneioBeta
 python -m pytest
 python installer/validate_update_zip.py installer/installer/Fretio-Update-2.32.zip
 ```
 
 O `validate_update_zip.py` só se aplica depois que o workflow ou build Windows gerar o ZIP.
-
-Se testes baseados em `fastapi.testclient.TestClient` travarem no ambiente local, confirme com
-um `GET /health` mínimo antes de tratar como regressão de `usage_events`. Em 2026-05-31, o
-travamento reproduziu no primeiro request do `TestClient`, sem falha de assert e sem entrar
-na lógica específica de eventos de uso; as validações de migrations e os testes unitários sem
-`TestClient` continuaram executando normalmente.
 
 ## Build Windows
 
@@ -71,36 +55,22 @@ O workflow deve gerar, para a versão informada:
 
 ## Publicação
 
-- Conferir que a GitHub Release `v2.32` existe em `kaianesteffens/RomaneioBeta`.
+- Conferir que a GitHub Release `v2.32` existe em `kaianesteffens/RomaneioBeta` e está marcada como `latest`.
 - Conferir anexos: instalador, ZIP de update, assinatura do ZIP, launcher e aliases `latest`.
 - Conferir que `latest.json`, se versionado/gerado, aponta para `2.32` e para `kaianesteffens/RomaneioBeta`.
-- No server, cadastrar ou ativar `/api/admin/versions` com:
-  - `version`: `2.32`
-  - `download_url`: URL do asset `Fretio-Update-2.32.zip` ou `Fretio-Update-latest.zip`
-  - `mandatory`: `false` inicialmente
-  - `active`: `true`
-  - `release_notes`: resumo do changelog
 
 ## Testes pós-release
 
 - Instalação nova em Windows limpo.
-- Atualização a partir da versão anterior instalada.
-- Validação de licença via server.
-- Validação de licença via Gist em instalação sem `license_api_url`.
-- Inicialização com server offline e cache válido.
-- Inicialização com config remota ausente.
+- Atualização a partir da versão anterior instalada (updater descobre a nova versão via GitHub Releases).
+- App abre livre, sem tela de ativação ou licença.
 - Cotação com pelo menos uma transportadora habilitada.
-- Envio de erro fake para `/api/errors`.
-- Evento de uso best-effort para `/api/usage/events`.
-- Painel admin: login por `ADMIN_TOKEN`, dashboard, licenças, erros, jobs e versões.
 
 ## Rollback
 
-1. Desativar a versão problemática em `/api/admin/versions` ou marcar a versão anterior como ativa.
-2. Se necessário, editar a release anterior no GitHub como `latest`.
-3. Reverter os assets `*-latest.*` no repositório de releases para os artefatos da versão anterior.
-4. Manter `mandatory=false` até validar que clientes conseguem voltar ou permanecer na versão anterior.
-5. Se o problema veio de migration, restaurar backup PostgreSQL em banco separado, validar dados e só então trocar `DATABASE_URL`/serviço.
-6. Rotacionar `ADMIN_TOKEN`, tokens GitHub e chaves se qualquer segredo tiver sido exposto.
+1. Editar a release anterior no GitHub e marcá-la como `latest`, ou despublicar a release problemática.
+2. Reverter os assets `*-latest.*` no repositório de releases para os artefatos da versão anterior.
+3. Confirmar que o updater passa a descobrir a versão anterior como mais recente.
+4. Rotacionar tokens GitHub e chaves de assinatura se qualquer segredo tiver sido exposto.
 
 Não apagar a release problemática até coletar logs e confirmar que nenhum cliente ainda depende dos assets dela.

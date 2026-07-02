@@ -81,7 +81,6 @@ Classificacoes importantes:
 6. Checa cobertura por UF.
 7. Executa providers.
 8. Emite progresso para UI.
-9. Envia telemetria e jobs em modo best-effort.
 
 ## Prompt recomendado
 

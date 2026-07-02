@@ -28,35 +28,7 @@ window.onBackendEvent = function (evt) {
 async function boot() {
   const params = new URLSearchParams(location.search);
   if (params.get("fase") === "empresa") { renderEmpresas(); return; }
-  const a = await apiBridge();
-  const lic = await a.startup_licenca_estado();
-  if (lic.fase === "ok") { posLicenca(); return; }
-  renderLicenca(lic.fase === "revogada" ? (lic.msg || "Sua licença foi revogada. Informe uma nova chave.") : "");
-}
-
-function renderLicenca(aviso) {
-  card().innerHTML = `
-    <h1 class="su-title">Ativação</h1>
-    <p class="su-sub">Informe sua chave de licença para usar o Fretio.</p>
-    ${aviso ? `<div class="su-warn">${window.Fmt.esc(aviso)}</div>` : ""}
-    <label class="field"><span class="field-label">Chave de licença</span>
-      <input class="field-input mono" id="suKey" placeholder="FBOT-XXXX-XXXX-XXXX-XXXX" autocomplete="off"/></label>
-    <button class="btn btn-primary su-full" id="suAtivar" type="button">Ativar</button>`;
-  const key = $("#suKey");
-  key.addEventListener("keydown", (e) => { if (e.key === "Enter") $("#suAtivar").click(); });
-  key.focus();
-  $("#suAtivar").addEventListener("click", async () => {
-    const btn = $("#suAtivar"); btn.disabled = true;
-    try {
-      const r = await (await apiBridge()).startup_ativar_licenca(key.value);
-      if (r && r.ok) posLicenca();
-      else renderLicenca(r ? r.msg : "Falha na ativação");
-    } catch (e) {
-      toast("Falha na ativação");
-    } finally {
-      btn.disabled = false;
-    }
-  });
+  posLicenca();
 }
 
 async function posLicenca() {

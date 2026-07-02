@@ -326,48 +326,12 @@ class StartupMixin:
     Delegate de domínio do god-object Api. Opera sobre o estado do Api (self) —
     superfície pública pywebview inalterada (test_char_web_app_api_surface.py)."""
 
-    def startup_licenca_estado(self) -> dict:
-        from license import get_saved_license, get_machine_id, validate_license
-        key = get_saved_license()
-        machine = get_machine_id()
-        if not key:
-            return {"fase": "pedir_chave", "msg": ""}
-        status = validate_license(key, machine)
-        if status.valid:
-            try:
-                from usage_reporter import report_license_validated
-                report_license_validated("ok")
-            except Exception:
-                pass
-            return {"fase": "ok", "msg": ""}
-        return {"fase": "revogada", "msg": status.message or "Sua licença não é mais válida."}
-
-    def startup_ativar_licenca(self, key: str) -> dict:
-        from license import get_machine_id, validate_license, save_license
-        key = str(key or "").strip().upper()
-        if not key:
-            return {"ok": False, "msg": "Informe a chave de licença."}
-        status = validate_license(key, get_machine_id())
-        if status.valid:
-            save_license(key)
-            try:
-                from usage_reporter import report_license_validated
-                report_license_validated("ok")
-            except Exception:
-                pass
-            return {"ok": True, "msg": ""}
-        return {"ok": False, "msg": status.message or "Chave não reconhecida."}
-
     def startup_pos_licenca(self) -> dict:
-        from startup import _fetch_remote_config_sync, _carregar_versao_app
-        from version_policy import evaluate_minimum_version
+        from startup import _carregar_versao_app
         from updater import get_repo_from_config, check_for_update
 
         cur = _carregar_versao_app()
         repo = get_repo_from_config()
-        payload = _fetch_remote_config_sync()
-        policy = evaluate_minimum_version((payload or {}).get("config", {}), cur)
-
         info = None
         try:
             info = check_for_update(repo, cur) if repo else None
@@ -381,13 +345,7 @@ class StartupMixin:
                 "notes": str(getattr(info, "release_notes", "") or "")[:1500],
                 "mandatory": bool(getattr(info, "mandatory", False)),
             }
-
-        bloqueado = bool(policy.is_outdated and policy.should_block)
-        msg = ""
-        if bloqueado:
-            msg = (f"Sua versão (v{policy.current_version}) não é compatível com o servidor.\n"
-                   f"Versão mínima: v{policy.min_app_version or 'desconhecida'}. Atualize para continuar.")
-        return {"bloqueado": bloqueado, "msg": msg, "update": upd}
+        return {"bloqueado": False, "msg": "", "update": upd}
 
     def startup_aplicar_update(self) -> dict:
         info = self._update_info
@@ -581,38 +539,16 @@ class RastreioMixin:
             })
 
         try:
-            from usage_reporter import report_tracking_started, report_tracking_finished
-        except Exception:
-            def report_tracking_started(*a, **k):
-                pass
-
-            def report_tracking_finished(*a, **k):
-                pass
-
-        try:
-            report_tracking_started(metadata={"total": len(notas_track)})
-        except Exception:
-            pass
-
-        try:
             resultados = await rastrear_multiplas(notas_track, callback=_cb)
             entregues = sum(1 for r in resultados if getattr(r, "entregue", False))
             com_ss = sum(1 for r in resultados if getattr(r, "screenshot_path", ""))
             self._emit("rastreio_finished", {
                 "total": len(resultados), "entregues": entregues, "screenshots": com_ss,
             })
-            try:
-                report_tracking_finished("ok", metadata={"total": len(resultados), "entregues": entregues})
-            except Exception:
-                pass
         except Exception as exc:
             self._emit("rastreio_finished", {
                 "total": 0, "entregues": 0, "screenshots": 0, "erro": str(exc),
             })
-            try:
-                report_tracking_finished("error", metadata={"erro": type(exc).__name__})
-            except Exception:
-                pass
         finally:
             self._rastreando = False
 
@@ -791,11 +727,6 @@ class RomaneioMixin:
             "volumes": len(pedidos),
         })
         self._romaneio_texto = texto
-        try:
-            from usage_reporter import report_romaneio_processed
-            report_romaneio_processed("ok", metadata={"pedidos": len(pedidos)})
-        except Exception:
-            pass
         return {
             "ok": True, "texto": texto, "arquivo": Path(arq).name,
             "pedidos": len(pedidos), "destino": destino,
@@ -969,12 +900,6 @@ class Api(ConfigMixin, StartupMixin, RastreioMixin, CotacaoMixin, RomaneioMixin)
         base = len(self._notas)
         self._notas.extend(novas)
         cards = [nota_card(base + i + 1, nf) for i, nf in enumerate(novas)]
-        if novas:
-            try:
-                from usage_reporter import report_nfe_imported
-                report_nfe_imported("ok", metadata={"quantidade": len(novas)})
-            except Exception:
-                pass
         return {"cards": cards, "erros": erros, "total_notas": len(self._notas)}
 
     def nfe_cards(self) -> dict:
@@ -1206,11 +1131,6 @@ def _run_producao() -> None:
     cont, _logger = run_process_startup()
     if not cont:
         return
-    try:
-        from usage_reporter import report_app_started
-        report_app_started()
-    except Exception:
-        pass
 
     # Cliente que atualizou in-app (Qt->WebView2) sem o runtime WebView2: abrir a
     # janela daria tela em branco. Avisa com instruções e não inicia, em vez de

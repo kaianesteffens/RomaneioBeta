@@ -11,10 +11,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from remote_config import fetch_remote_config, get_last_fetch_status
-from usage_reporter import report_remote_config_fetched
-from version_policy import parse_semantic_version
-
 
 class MandatoryUpdateDeclined(RuntimeError):
     pass
@@ -27,27 +23,6 @@ def _resource_path(relative_path: str) -> Path:
     return Path(__file__).resolve().parent / relative_path
 
 
-def _fetch_remote_config_sync(startup_logger=None) -> dict[str, Any]:
-    status = "error"
-    payload: dict[str, Any] = {}
-    try:
-        fetched = fetch_remote_config(wait=True)
-        status = get_last_fetch_status() or "default"
-        if isinstance(fetched, dict):
-            payload = fetched
-        if startup_logger is not None:
-            startup_logger.info("Configuracao remota carregada com status=%s", status)
-    except Exception as exc:
-        if startup_logger is not None:
-            startup_logger.warning("Falha ao buscar configuracao remota: %s", exc)
-        status = "error"
-    try:
-        report_remote_config_fetched(status=status)
-    except Exception:
-        pass
-    return payload
-
-
 def _carregar_versao_app() -> str:
     candidatos = [
         _resource_path("version.txt"),
@@ -57,7 +32,6 @@ def _carregar_versao_app() -> str:
         try:
             if caminho.exists():
                 versao = caminho.read_text(encoding="utf-8").strip()
-                parse_semantic_version(versao)
                 return versao
         except Exception:
             pass
@@ -137,14 +111,6 @@ def _migrate_appdata_fretebot_to_fretio() -> None:
             src_fb = src_data.get("fretio", {}) if isinstance(src_data.get("fretio", {}), dict) else {}
             for key in (
                 "github_repo",
-                "license_api_url",
-                "license_config_api_url",
-                "version_api_url",
-                "license_url",
-                "error_api_url",
-                "usage_api_url",
-                "quotation_jobs_api_url",
-                "quotation_normalization_api_url",
             ):
                 src_val = str(src_fb.get(key, "") or "").strip()
                 dst_val = str(dst_fb.get(key, "") or "").strip()
