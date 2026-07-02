@@ -91,7 +91,7 @@ except Exception:  # pragma: no cover
     tomllib = None
 
 
-from fretio.config_manager import ConfigManager
+from fretio.config_manager import CONFIG_FALLBACK, ConfigManager
 from fretio.providers.factory import ProviderFactory
 from fretio.quotation_contract import (
     QuoteResponse,
@@ -104,85 +104,9 @@ from . import deps
 
 CEP_ORIGEM_PADRAO = "99740000"
 MODO_FOCO_TRANSPORTADORA = ""  # Vazio = sem foco; cota todas as transportadoras habilitadas.
-_CONFIG_FALLBACK = """[fretio]
-fator_cubagem = 6000
-cache_dir = "cache"
-
-[romaneio]
-cep_origem = "99740000"
-cnpj_pagador_padrao = ""
-
-[transportadoras.braspress]
-habilitado = true
-cnpj = ""
-senha = ""
-ufs_atendidas = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
-
-[transportadoras.trd]
-habilitado = true
-email = ""
-senha = ""
-headless = true
-volumes = 1
-altura = 0.1
-largura = 0.1
-comprimento = 0.1
-ufs_atendidas = ["RS", "SC", "PR", "SP", "MG", "ES", "RJ"]
-
-[transportadoras.agex]
-habilitado = false
-email = ""
-senha = ""
-cnpj_remetente = ""
-cnpj_destinatario = ""
-ufs_atendidas = ["PR", "SP", "GO", "DF", "TO", "PA", "MT", "MS"]
-
-[transportadoras.eucatur]
-habilitado = false
-dominio = ""
-usuario = ""
-senha = ""
-ufs_atendidas = ["RR", "AM", "AC", "RO", "MT", "MS"]
-
-[transportadoras.rodonaves]
-habilitado = false
-dominio = "RTE"
-usuario = ""
-senha = ""
-cnpj_pagador = ""
-login_url = "https://cliente.rte.com.br/?showLogin=true"
-cotacao_url = "https://sistema.rte.com.br/bin/ssw1608"
-headless = false
-ufs_atendidas = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
-
-[transportadoras.alfa]
-habilitado = false
-login = ""
-senha = ""
-cnpj_remetente = ""
-login_url = "https://arearestrita.alfatransportes.com.br/login/"
-cotacao_url = "https://arearestrita.alfatransportes.com.br/cotacao/api/"
-headless = false
-ufs_atendidas = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
-
-[transportadoras.coopex]
-habilitado = false
-dominio = ""
-usuario = ""
-senha = ""
-ufs_atendidas = []
-
-[transportadoras.translovato]
-habilitado = false
-cnpj = ""
-usuario = ""
-senha = ""
-cnpj_remetente = ""
-produto = "CONFECCAO"
-headless = true
-cotacao_url = "https://www.translovato.com.br/fale-conosco/solicitacao-de-cotacao#portal-do-cliente"
-ufs_atendidas = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
-"""
+# Fonte única do TOML de fallback vive em fretio.config_manager; reexportado aqui
+# para manter os imports existentes (app/cotacao/config.py) sem duplicar o texto.
+_CONFIG_FALLBACK = CONFIG_FALLBACK
 
 
 @dataclass

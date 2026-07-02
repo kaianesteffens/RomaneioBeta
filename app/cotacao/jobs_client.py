@@ -248,7 +248,7 @@ def _quotation_job_final_status(
         return "cancelled"
     if _quotation_job_has_success(result):
         return "finished"
-    return "error" if general_error or result is not None else "error"
+    return "error"
 
 
 def _mark_quotation_job_running_best_effort(job_id: Any) -> None:

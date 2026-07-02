@@ -31,7 +31,7 @@ class Cotacao:
     prazo_dias: int
     valor_frete: float
     restricoes: Optional[str] = None
-    timestamp: datetime = None
+    timestamp: Optional[datetime] = None
     
     def __post_init__(self) -> None:
         if self.timestamp is None:
