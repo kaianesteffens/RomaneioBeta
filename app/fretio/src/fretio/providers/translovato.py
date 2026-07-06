@@ -868,10 +868,70 @@ class TranslovatoProvider(TranslovatoBrowserMixin, ProviderBase):
         await self._validate_receiver_cnpj(receiver, context="preenchimento final da cotação")
         return detalhes
 
+    async def _ler_sweet_alert(self) -> str:
+        """Retorna título+mensagem de um SweetAlert visível (ex.: 'Oops!'), ou ''."""
+        try:
+            return await self._page.evaluate(
+                """() => {
+                    const el = document.querySelector(
+                        '.sweet-alert.visible, .sweet-alert.showSweetAlert'
+                    );
+                    if (!el) return '';
+                    // SweetAlert usa position:fixed → offsetParent é sempre null
+                    // mesmo visível; use display/visibility computados.
+                    const cs = getComputedStyle(el);
+                    if (cs.display === 'none' || cs.visibility === 'hidden') return '';
+                    const h2 = el.querySelector('h2');
+                    const p = el.querySelector('p');
+                    const titulo = h2 ? (h2.textContent || '').trim() : '';
+                    const msg = p ? (p.textContent || '').trim() : '';
+                    return [titulo, msg].filter(Boolean).join(' - ');
+                }"""
+            )
+        except Exception:
+            return ""
+
+    async def _fechar_sweet_alert(self) -> None:
+        """Fecha o SweetAlert clicando no botão de confirmação/cancelamento."""
+        try:
+            await self._page.evaluate(
+                """() => {
+                    const el = document.querySelector(
+                        '.sweet-alert.visible, .sweet-alert.showSweetAlert'
+                    );
+                    if (!el) return;
+                    const btn = el.querySelector('button.confirm, button.cancel, button');
+                    if (btn) btn.click();
+                }"""
+            )
+            await self._page.wait_for_timeout(300)
+        except Exception:
+            pass
+
     async def _simular_e_extrair(self, detalhes_extra: str = "") -> Cotacao | None:
         started_at = self._start_stage("simulando_cotacao")
         page = self._page
-        await page.get_by_role("button", name=re.compile(r"simular\s+cota[çc][aã]o", re.I)).click(timeout=20000)
+        botao = page.get_by_role("button", name=re.compile(r"simular\s+cota[çc][aã]o", re.I))
+        # Um SweetAlert "Oops!" (erro de validação do portal) sobrepõe o botão e
+        # intercepta o clique — antes isso gerava 20s de retry cego seguidos de
+        # TimeoutError enganoso. Detecta o diálogo e falha rápido com a mensagem
+        # real do portal.
+        alerta = await self._ler_sweet_alert()
+        if alerta:
+            self.last_error = f"Portal exibiu erro na simulação: {alerta}"
+            logger.warning("[TRANSLOVATO] %s", self.last_error)
+            await self._fechar_sweet_alert()
+            return None
+        try:
+            await botao.click(timeout=20000)
+        except PlaywrightTimeoutError:
+            alerta = await self._ler_sweet_alert()
+            if alerta:
+                self.last_error = f"Portal exibiu erro na simulação: {alerta}"
+                logger.warning("[TRANSLOVATO] %s", self.last_error)
+                await self._fechar_sweet_alert()
+                return None
+            raise
         # Espera curta só para a requisição da cotação partir; o resultado em si é
         # detectado por _wait_for_quote_result (poll de valor+prazo). Trackers de
         # terceiros podem impedir o networkidle de disparar, então não bloqueamos
