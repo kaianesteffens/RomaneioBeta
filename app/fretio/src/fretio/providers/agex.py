@@ -467,6 +467,176 @@ class AGEXProvider(AGEXBrowserMixin, AGEXDiagnosticsMixin, ProviderBase):
             await self._set_react_select(page, target)
         await page.wait_for_timeout(200)
 
+    async def _selecionar_tipo_produto_nativo(self, page) -> bool:
+        """Fallback: seleciona tipo de produto num <select> nativo.
+
+        O portal pode ter migrado o combobox Radix (button[role=combobox])
+        para um <select> HTML. Procura, entre os selects visíveis, aquele cujas
+        opções pareçam ser de tipo de produto (e não o de pagador) e escolhe a
+        opção que casa com ``self.tipo_produto`` — ou a primeira não-vazia.
+        """
+        try:
+            selects = await page.evaluate("""() => {
+                return Array.from(document.querySelectorAll('select'))
+                    .filter(s => s.offsetParent !== null)
+                    .map((s, idx) => ({
+                        idx,
+                        options: Array.from(s.options).map(o => ({
+                            value: o.value, text: (o.text || '').trim()
+                        })),
+                    }));
+            }""")
+        except Exception as e:
+            logger.warning(f"[{self.nome}] Falha ao inspecionar <select> tipo produto: {e}")
+            return False
+
+        alvo = (self.tipo_produto or "").lower()
+        pagador_frags = ("remetente", "destinat", "terceiro", "cif", "fob")
+        for sel in selects:
+            opts = sel.get("options") or []
+            textos = " ".join(o.get("text", "").lower() for o in opts)
+            # Ignora o select de pagador
+            if any(frag in textos for frag in pagador_frags):
+                continue
+            matched = next(
+                (o for o in opts if alvo and o.get("text") and alvo in o["text"].lower()),
+                None,
+            ) or next((o for o in opts if o.get("value")), None)
+            if not matched:
+                continue
+            target = matched.get("value") or matched.get("text")
+            # Define pelo índice do select para não colidir com o de pagador
+            ok = await page.evaluate(
+                """([idx, val]) => {
+                    const selects = Array.from(document.querySelectorAll('select'))
+                        .filter(s => s.offsetParent !== null);
+                    const s = selects[idx];
+                    if (!s) return false;
+                    const setter = Object.getOwnPropertyDescriptor(
+                        window.HTMLSelectElement.prototype, 'value'
+                    ).set;
+                    setter.call(s, val);
+                    s.dispatchEvent(new Event('change', { bubbles: true }));
+                    return true;
+                }""",
+                [sel["idx"], target],
+            )
+            if ok:
+                logger.info(f"[{self.nome}] Tipo produto selecionado via <select> nativo: '{target}'")
+                await page.wait_for_timeout(300)
+                return True
+        return False
+
+    async def _selecionar_tipo_produto(self, page) -> bool:
+        """Seleciona o tipo de produto no portal atualizado.
+
+        O controle virou um ``input[role="combobox"]`` aberto por um botão
+        gatilho adjacente; as opções aparecem como ``[role="option"]``. A
+        seleção precisa de cliques reais (Playwright), pois ``.click()`` via
+        ``page.evaluate`` não abre o popover nem confirma a opção.
+        """
+        combo = page.locator('input[role="combobox"]').first
+        if await combo.count() == 0:
+            combo = page.locator('input[placeholder*="produto" i]').first
+        if await combo.count() == 0:
+            return False
+
+        # Abre a lista: o gatilho é o primeiro <button> após o input combobox.
+        trigger = combo.locator("xpath=following::button[1]")
+        try:
+            if await trigger.count() > 0:
+                await trigger.click()
+            else:
+                await combo.click()
+        except Exception:
+            try:
+                await combo.click()
+            except Exception:
+                pass
+        await page.wait_for_timeout(400)
+
+        options = page.get_by_role("option")
+        n = await options.count()
+        if n == 0:
+            # Segunda tentativa: clicar o próprio input
+            try:
+                await combo.click()
+                await page.wait_for_timeout(400)
+                n = await options.count()
+            except Exception:
+                n = 0
+        if n == 0:
+            return False
+
+        textos: list[str] = []
+        for i in range(n):
+            try:
+                textos.append((await options.nth(i).inner_text()).strip())
+            except Exception:
+                textos.append("")
+        logger.info(f"[{self.nome}] Tipo produto options: {textos}")
+
+        alvo = (self.tipo_produto or "").lower()
+        idx = next((i for i, t in enumerate(textos) if alvo and alvo in t.lower()), None)
+        if idx is None:
+            idx = next((i for i, t in enumerate(textos) if t and t.lower() in alvo), None)
+        if idx is None:
+            idx = next((i for i, t in enumerate(textos) if t.strip().lower() == "outros"), None)
+        if idx is None:
+            idx = 0
+
+        try:
+            await options.nth(idx).click()
+            await page.wait_for_timeout(300)
+            logger.info(f"[{self.nome}] Tipo produto selecionado: '{textos[idx]}'")
+            return True
+        except Exception as e:
+            logger.warning(f"[{self.nome}] Falha ao clicar opção de produto: {e}")
+            try:
+                await page.keyboard.press("Escape")
+            except Exception:
+                pass
+            return False
+
+    async def _diagnostico_campos_carga(self, page) -> str:
+        """Lista (sanitizada) os campos visíveis da etapa de carga.
+
+        Serve para revelar, no log do cliente, os identificadores reais dos
+        campos quando o portal AGEX muda o markup — sem despejar HTML/CNPJ.
+        Retorna apenas metadados de campo (placeholder/name/aria-label/tipo de
+        controle), nunca valores digitados.
+        """
+        try:
+            info = await page.evaluate("""() => {
+                const campos = Array.from(document.querySelectorAll('input, textarea'))
+                    .filter(el => el.type !== 'hidden')
+                    .map(el => ({
+                        placeholder: el.getAttribute('placeholder') || '',
+                        name: el.getAttribute('name') || '',
+                        aria: el.getAttribute('aria-label') || '',
+                        visivel: el.offsetParent !== null,
+                    }))
+                    .filter(c => c.visivel && (c.placeholder || c.name || c.aria));
+                const comboboxes = document.querySelectorAll('button[role="combobox"]').length;
+                const selects = Array.from(document.querySelectorAll('select'))
+                    .filter(s => s.offsetParent !== null).length;
+                return { campos, comboboxes, selects };
+            }""")
+        except Exception as e:
+            return f"(diagnóstico indisponível: {e})"
+
+        marcadores = []
+        for c in info.get("campos", []):
+            rot = c.get("placeholder") or c.get("aria") or c.get("name")
+            if rot:
+                marcadores.append(rot.strip()[:40])
+        marcadores = marcadores[:30]
+        return (
+            f"comboboxes_radix={info.get('comboboxes')} "
+            f"selects_nativos={info.get('selects')} "
+            f"campos_visiveis={marcadores}"
+        )
+
     async def _preencher_cotacao(
         self, remetente: str, destinatario: str, peso: float, valor: float,
         tipo_pagador: str = "remetente",
@@ -621,55 +791,16 @@ class AGEXProvider(AGEXBrowserMixin, AGEXDiagnosticsMixin, ProviderBase):
             await nf_loc.press("Tab")
             await page.wait_for_timeout(200)
 
-            # ── Tipo de Produto (Radix Combobox — NÃO é <select> nativo) ────────
+            # ── Tipo de Produto (input[role="combobox"] — portal atualizado) ────
             etapa = "carga_tipo_produto"
             try:
-                # O portal usa button[role="combobox"] do Radix UI, não <select>
-                opened = await page.evaluate(r"""() => {
-                    const btn = Array.from(document.querySelectorAll('button[role="combobox"]'))
-                        .find(b => b.offsetParent !== null);
-                    if (!btn) return false;
-                    btn.click();
-                    return true;
-                }""")
-                if opened:
-                    await page.wait_for_timeout(700)
-                    # As opções aparecem em [role="option"] dentro do popover Radix
-                    tipo_opts = await page.evaluate(r"""() => {
-                        return Array.from(document.querySelectorAll('[role="option"]'))
-                            .map(o => o.textContent.trim())
-                            .filter(t => t.length > 0);
-                    }""")
-                    logger.info(f"[{self.nome}] Tipo produto options (radix): {tipo_opts}")
-
-                    target_text = self.tipo_produto.lower()
-                    matched_tp = next(
-                        (t for t in tipo_opts if target_text in t.lower()),
-                        None,
-                    )
-                    if not matched_tp:
-                        matched_tp = next(
-                            (t for t in tipo_opts if t.lower() in target_text),
-                            None,
+                if not await self._selecionar_tipo_produto(page):
+                    # Fallbacks legados: <select> nativo, depois combobox Radix antigo
+                    if not await self._selecionar_tipo_produto_nativo(page):
+                        logger.warning(
+                            f"[{self.nome}] Tipo de produto não encontrado "
+                            f"(input combobox nem <select> nativo)"
                         )
-                    if not matched_tp and tipo_opts:
-                        matched_tp = tipo_opts[0]  # fallback: primeiro disponível
-
-                    if matched_tp:
-                        await page.evaluate(r"""(text) => {
-                            const opt = Array.from(document.querySelectorAll('[role="option"]'))
-                                .find(o => o.textContent.trim() === text);
-                            if (opt) opt.click();
-                        }""", matched_tp)
-                        await page.wait_for_timeout(400)
-                        logger.info(f"[{self.nome}] Tipo produto selecionado: '{matched_tp}'")
-                    else:
-                        logger.warning(f"[{self.nome}] Tipo produto: nenhuma opção encontrada no combobox")
-                        # Fechar o combobox se ficou aberto
-                        await page.keyboard.press("Escape")
-                        await page.wait_for_timeout(200)
-                else:
-                    logger.warning(f"[{self.nome}] Combobox tipo produto não encontrado na página")
             except Exception as e:
                 logger.warning(f"[{self.nome}] Erro ao selecionar tipo produto: {e}")
 
@@ -680,42 +811,30 @@ class AGEXProvider(AGEXBrowserMixin, AGEXDiagnosticsMixin, ProviderBase):
                 raise Exception("AGEX: nenhuma cubagem informada no romaneio")
             logger.info(f"[{self.nome}] Preenchendo {len(cubagens)} linha(s) de cubagem")
 
+            campos_preenchidos = 0
             for idx, cub in enumerate(cubagens):
                 altura_cm = int(round(float(cub["altura_m"]) * 100))
                 largura_cm = int(round(float(cub["largura_m"]) * 100))
                 comp_cm = int(round(float(cub["comprimento_m"]) * 100))
                 qtd = int(cub.get("quantidade", 1))
-                # Peso por unidade desta linha
-                peso_unit = peso / qtd if qtd > 0 else peso
 
-                # Campos da linha pelo placeholder (novo portal)
+                # Campos da linha por name indexado (portal atualizado):
+                # cubageValues.{idx}.height|width|length|quantity — em centímetros.
+                # NÃO há peso por linha; o peso vai em totalWeight (etapa de totais).
                 campos_cubagem = [
-                    ("Altura",        str(altura_cm)),
-                    ("Largura",       str(largura_cm)),
-                    ("Comp.",         str(comp_cm)),
-                    ("Peso unitário", f"{peso_unit:.2f}"),
-                    ("Quantidade",    str(qtd)),
+                    (f'input[name="cubageValues.{idx}.height"]', str(altura_cm)),
+                    (f'input[name="cubageValues.{idx}.width"]', str(largura_cm)),
+                    (f'input[name="cubageValues.{idx}.length"]', str(comp_cm)),
+                    (f'input[name="cubageValues.{idx}.quantity"]', str(qtd)),
                 ]
-                for ph, val_str in campos_cubagem:
-                    filled = await page.evaluate(
-                        """([ph, val, i]) => {
-                            const inputs = Array.from(
-                                document.querySelectorAll('input[placeholder="' + ph + '"]')
-                            );
-                            const input = inputs[i] !== undefined ? inputs[i] : inputs[0];
-                            if (!input) return false;
-                            const setter = Object.getOwnPropertyDescriptor(
-                                window.HTMLInputElement.prototype, 'value'
-                            ).set;
-                            setter.call(input, val);
-                            input.dispatchEvent(new Event('input', { bubbles: true }));
-                            input.dispatchEvent(new Event('change', { bubbles: true }));
-                            return true;
-                        }""",
-                        [ph, val_str, idx],
-                    )
-                    if not filled:
-                        logger.warning(f"[{self.nome}] Campo '{ph}' não encontrado (linha {idx})")
+                for sel, val_str in campos_cubagem:
+                    if await page.locator(sel).count() == 0:
+                        logger.warning(f"[{self.nome}] Campo '{sel}' não encontrado (linha {idx})")
+                        continue
+                    if await self._set_react_input(page, sel, val_str):
+                        campos_preenchidos += 1
+                    else:
+                        logger.warning(f"[{self.nome}] Campo '{sel}' não preenchido (linha {idx})")
                     await page.wait_for_timeout(80)
 
                 # Adicionar nova linha se ainda há volumes
@@ -739,6 +858,20 @@ class AGEXProvider(AGEXBrowserMixin, AGEXDiagnosticsMixin, ProviderBase):
                     await page.wait_for_timeout(600)
                     if not added:
                         logger.warning(f"[{self.nome}] Botão 'Adicionar' não encontrado para linha {idx+2}")
+
+            # Falha rápida: se NENHUM campo de cubagem foi encontrado, o portal
+            # mudou o markup da etapa de carga. Submeter agora só levaria a um
+            # timeout de 90s com "Resultado não apareceu" (erro enganoso). Aborta
+            # aqui com diagnóstico dos campos reais para permitir corrigir os
+            # seletores sem depender de dump de HTML no cliente.
+            if campos_preenchidos == 0:
+                diag = await self._diagnostico_campos_carga(page)
+                self.last_error = (
+                    "AGEX: etapa de carga mudou — nenhum campo de cubagem encontrado "
+                    "(portal atualizado)"
+                )
+                logger.error(f"[{self.nome}] {self.last_error} | {diag}")
+                raise Exception(self.last_error)
 
             # ── Totais ────────────────────────────────────────────────────────
             etapa = "carga_totais"
