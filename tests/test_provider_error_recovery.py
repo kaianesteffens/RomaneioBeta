@@ -245,6 +245,8 @@ class _FakeProdPage:
         self.selected = None
 
     def locator(self, sel):
+        if "listbox" in sel and "option" in sel:
+            return _FakeOptions(self)
         if "combobox" in sel or "produto" in sel:
             return _FakeLoc(self, "combo")
         return _FakeLoc(self, "none")

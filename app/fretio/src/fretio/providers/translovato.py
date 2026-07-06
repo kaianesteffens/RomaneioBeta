@@ -876,7 +876,11 @@ class TranslovatoProvider(TranslovatoBrowserMixin, ProviderBase):
                     const el = document.querySelector(
                         '.sweet-alert.visible, .sweet-alert.showSweetAlert'
                     );
-                    if (!el || el.offsetParent === null) return '';
+                    if (!el) return '';
+                    // SweetAlert usa position:fixed → offsetParent é sempre null
+                    // mesmo visível; use display/visibility computados.
+                    const cs = getComputedStyle(el);
+                    if (cs.display === 'none' || cs.visibility === 'hidden') return '';
                     const h2 = el.querySelector('h2');
                     const p = el.querySelector('p');
                     const titulo = h2 ? (h2.textContent || '').trim() : '';

@@ -501,7 +501,12 @@ class AGEXProvider(AGEXBrowserMixin, AGEXDiagnosticsMixin, ProviderBase):
             matched = next(
                 (o for o in opts if alvo and o.get("text") and alvo in o["text"].lower()),
                 None,
-            ) or next((o for o in opts if o.get("value")), None)
+            )
+            # Sem casar por texto, só aceita o fallback "primeira opção" se a
+            # lista parecer de produto (longa) — evita setar um <select> alheio
+            # (ex.: UF) e reportar sucesso falso.
+            if not matched and len([o for o in opts if o.get("value")]) > 3:
+                matched = next((o for o in opts if o.get("value")), None)
             if not matched:
                 continue
             target = matched.get("value") or matched.get("text")
@@ -541,30 +546,41 @@ class AGEXProvider(AGEXBrowserMixin, AGEXDiagnosticsMixin, ProviderBase):
         if await combo.count() == 0:
             return False
 
-        # Abre a lista: o gatilho é o primeiro <button> após o input combobox.
-        trigger = combo.locator("xpath=following::button[1]")
+        # Abre a lista: o gatilho é o <button> dentro do mesmo wrapper do input
+        # (não "o próximo button do documento", que poderia ser outro controle).
+        trigger = combo.locator("xpath=ancestor::div[1]//button[1]")
         try:
             if await trigger.count() > 0:
                 await trigger.click()
             else:
                 await combo.click()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[{self.nome}] Gatilho do combobox falhou ({e}); tentando o input")
+            try:
+                await combo.click()
+            except Exception as e2:
+                logger.debug(f"[{self.nome}] Clique no input combobox falhou: {e2}")
+
+        # As opções aparecem em [role="option"] dentro de um [role="listbox"].
+        # Faz POLLING (não re-clica: um 2º clique fecharia o popover já aberto).
+        options = page.locator('[role="listbox"] [role="option"]')
+        n = 0
+        for _ in range(12):  # ~3s
+            n = await options.count()
+            if n > 0:
+                break
+            await page.wait_for_timeout(250)
+        if n == 0:
+            # Popover pode não ter aberto: clica o input UMA vez e refaz o polling.
             try:
                 await combo.click()
             except Exception:
                 pass
-        await page.wait_for_timeout(400)
-
-        options = page.get_by_role("option")
-        n = await options.count()
-        if n == 0:
-            # Segunda tentativa: clicar o próprio input
-            try:
-                await combo.click()
-                await page.wait_for_timeout(400)
+            for _ in range(8):  # ~2s
                 n = await options.count()
-            except Exception:
-                n = 0
+                if n > 0:
+                    break
+                await page.wait_for_timeout(250)
         if n == 0:
             return False
 
@@ -855,20 +871,28 @@ class AGEXProvider(AGEXBrowserMixin, AGEXDiagnosticsMixin, ProviderBase):
                         if (svg) { svg.closest('button').click(); return true; }
                         return false;
                     }""")
-                    await page.wait_for_timeout(600)
                     if not added:
                         logger.warning(f"[{self.nome}] Botão 'Adicionar' não encontrado para linha {idx+2}")
+                    # Aguarda a nova linha montar (evita corrida com sleep fixo:
+                    # se demorar, os campos da próxima linha não existiriam ainda
+                    # e seriam pulados silenciosamente).
+                    prox_sel = f'input[name="cubageValues.{idx + 1}.height"]'
+                    try:
+                        await page.locator(prox_sel).first.wait_for(state="attached", timeout=5000)
+                    except PlaywrightTimeoutError:
+                        logger.warning(f"[{self.nome}] Linha {idx + 2} de cubagem não montou a tempo")
 
-            # Falha rápida: se NENHUM campo de cubagem foi encontrado, o portal
-            # mudou o markup da etapa de carga. Submeter agora só levaria a um
-            # timeout de 90s com "Resultado não apareceu" (erro enganoso). Aborta
-            # aqui com diagnóstico dos campos reais para permitir corrigir os
-            # seletores sem depender de dump de HTML no cliente.
-            if campos_preenchidos == 0:
+            # Falha rápida: submeter um formulário de carga incompleto levaria a um
+            # timeout de 90s com "Resultado não apareceu" (erro enganoso) — ou pior,
+            # a uma cotação com volumes faltando e preço errado. Exige que TODOS os
+            # campos (4 por linha) tenham sido preenchidos; caso contrário aborta
+            # com diagnóstico dos campos reais para corrigir os seletores.
+            esperado = len(cubagens) * 4
+            if campos_preenchidos < esperado:
                 diag = await self._diagnostico_campos_carga(page)
                 self.last_error = (
-                    "AGEX: etapa de carga mudou — nenhum campo de cubagem encontrado "
-                    "(portal atualizado)"
+                    f"AGEX: etapa de carga incompleta — {campos_preenchidos}/{esperado} "
+                    "campos de cubagem preenchidos (portal atualizado)"
                 )
                 logger.error(f"[{self.nome}] {self.last_error} | {diag}")
                 raise Exception(self.last_error)
